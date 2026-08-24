@@ -1,0 +1,17 @@
+# Verified against the ameba pinned in shard.lock (1.7.0-dev). A rule name the installed
+# ameba does not have is a hard error, so add rules here only after running `bin/ameba`.
+#
+# The bans in src/CLAUDE.md (no not_nil!, no bare Time.utc / Random::Secure, no puts, no
+# blanket rescue) are enforced by spec/unit/source_hygiene_spec.cr rather than here, so
+# they hold regardless of the ameba version.
+Excluded:
+  - lib/
+  - bin/
+
+Lint/SpecFilename:
+  # spec/contract holds shared examples that unit and integration specs call into, and
+  # spec/support holds the test doubles. Neither is a runnable spec file: naming them
+  # `_spec.cr` would have `crystal spec` collect a file that defines zero examples.
+  Excluded:
+    - spec/contract/**
+    - spec/support/**

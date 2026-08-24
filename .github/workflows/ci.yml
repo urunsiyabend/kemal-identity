@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Nightly against Kemal master. Its original purpose — noticing the HEAD-filter and
+    # router-filter fixes described in docs/04-kemal-integration.md — was served when 1.13.0
+    # shipped them. It stays, to catch the next regression in that area before a release does.
+    - cron: "0 3 * * *"
+
+# A push that supersedes a running build cancels it. Nothing here is a deployment.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spec:
+    name: Crystal ${{ matrix.crystal }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # The CI main line. The supported floor is deliberately absent: docs/00-scope.md
+        # requires it to be determined empirically before v0.1 is tagged, by lowering the
+        # `crystal:` constraint until the suite fails, and it has not been.
+        #
+        # Kemal's version is not a matrix dimension because nothing here can pin it per job —
+        # shard.lock decides it, and the nightly job below overrides it with a file rather
+        # than with a matrix entry.
+        crystal: ["1.21.0"]
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: kemal_identity
+          POSTGRES_PASSWORD: kemal_identity
+          POSTGRES_DB: kemal_identity_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: ${{ matrix.crystal }}
+
+      # shard.lock is committed, so this resolves exactly what was tested locally — which
+      # matters here because ameba is pinned to a branch rather than a release.
+      - name: Install dependencies
+        run: shards install
+
+      - name: Format
+        run: crystal tool format --check
+
+      # ameba runs from master: no ameba release compiles against Crystal 1.21
+      # (`undefined method 'next_string_array_token' for Crystal::Lexer`). shard.lock pins the
+      # commit, so this is reproducible despite tracking a branch.
+      - name: Lint
+        run: shards build ameba && bin/ameba
+
+      # docs/01-architecture.md: nothing outside src/kemal_identity/kemal may know that
+      # HTTP::Server::Context exists, and that rule is what keeps spec/unit runnable without a
+      # server. A stray reference from the core into the Kemal layer compiles perfectly well
+      # when the whole shard is required, and fails here. It has caught one already —
+      # blueprints/0009-csrf-token-scheme.md.
+      - name: Core compiles without the Kemal adapter
+        run: crystal build --no-codegen src/kemal_identity.cr
+
+      # Every example under spec/unit and spec/security must pass with no DATABASE_URL.
+      # Skipping a security regression because a database is missing defeats the point of
+      # having it, so this step runs deliberately without one.
+      - name: Database-free specs
+        run: crystal spec spec/unit spec/security
+
+      - name: Migrate
+        env:
+          DATABASE_URL: postgres://kemal_identity:kemal_identity@localhost:5432/kemal_identity_test
+        run: shards build migrate && bin/migrate up
+
+      - name: Full suite
+        env:
+          DATABASE_URL: postgres://kemal_identity:kemal_identity@localhost:5432/kemal_identity_test
+        run: crystal spec
+
+      # An example that has drifted from the API is worse than no example, so this failing is
+      # a CI failure rather than a warning.
+      - name: Build the example
+        run: crystal build --no-codegen examples/browser_session/app.cr
+
+      # The benchmarks are not run here — docs/05-testing.md keeps them out of CI, since a
+      # shared runner's numbers mean nothing. Compiling them still catches API drift.
+      - name: Benchmarks compile
+        run: crystal build --no-codegen bench/hashing_latency.cr
+
+  kemal-master:
+    name: Kemal master (nightly)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    # Advisory. Upstream master breaking is upstream's business until it is released; this job
+    # exists to give us warning, not to block anything.
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: "1.21.0"
+
+      # shard.override.yml is how shards repoints a dependency without touching shard.yml, so
+      # the checked-in constraint stays exactly what consumers get.
+      - name: Point Kemal at master
+        run: |
+          cat > shard.override.yml <<'YAML'
+          dependencies:
+            kemal:
+              github: kemalcr/kemal
+              branch: master
+          YAML
+          shards install
+          crystal eval 'require "kemal"; puts "kemal #{Kemal::VERSION}"'
+
+      # No database service here on purpose: these are the specs that would notice an upstream
+      # change to filter or handler dispatch, and none of them needs one. The Kemal
+      # integration specs are the reason this job exists — they are where HEAD and QUERY are
+      # asserted to reach every guard.
+      - name: Specs that would notice an upstream change
+        run: crystal spec spec/unit spec/security spec/integration/kemal_spec.cr

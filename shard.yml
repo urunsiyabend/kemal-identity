@@ -1,0 +1,44 @@
+name: kemal_identity
+version: 0.1.0
+
+authors:
+  - Siyabend Urun <siyabend.urun@kron.com.tr>
+
+license: MIT
+
+description: |
+  Authentication for Crystal web applications — Kemal integration included.
+  Server-side opaque sessions, password credentials, revocation.
+
+# NOTE: this is the CI main line, not the supported floor. docs/00-scope.md requires the
+# floor to be determined empirically (lower this until the suite fails, then set it one
+# minor above) before v0.1 is tagged. Do not guess it.
+crystal: ">= 1.21.0"
+
+dependencies:
+  kemal:
+    github: kemalcr/kemal
+    version: ">= 1.10.0, < 2.0"
+  db:
+    github: crystal-lang/crystal-db
+  pg:
+    github: will/crystal-pg
+
+development_dependencies:
+  ameba:
+    github: crystal-ameba/ameba
+    # No released ameba supports Crystal 1.21: v1.6.4 fails to compile against it
+    # (`undefined method 'next_string_array_token' for Crystal::Lexer`). master builds
+    # clean. shard.lock pins the exact commit. Switch to `version: ~> 1.7` once v1.7.0
+    # ships — v1.7.0-dev is tagged, so that is close.
+    branch: master
+  spec-kemal:
+    github: kemalcr/spec-kemal
+
+targets:
+  ameba:
+    main: lib/ameba/src/cli.cr
+  migrate:
+    # See blueprints/0002-no-micrate-dependency.md — micrate cannot resolve against this
+    # stack, so this repository runs its own migration files.
+    main: tools/migrate.cr

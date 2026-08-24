@@ -1,0 +1,21 @@
+# Dependencies and build output.
+/lib/
+/bin/
+/.shards/
+
+# shard.override.yml repoints a dependency for a local experiment or for the nightly
+# Kemal-master CI job. It must never be committed: it would silently override what every
+# consumer resolves.
+/shard.override.yml
+
+# Crystal build artefacts.
+*.dwarf
+/.crystal/
+
+# Local environment. DATABASE_URL and CSRF_SECRET live here, and neither belongs in git.
+.env
+.env.*
+
+# Editor and OS noise.
+.DS_Store
+*.swp
