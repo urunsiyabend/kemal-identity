@@ -64,6 +64,7 @@ module KemalIdentity::SpecHelper
     tokens : KemalIdentity::Testing::MemoryActionTokenRepository,
     sessions : KemalIdentity::Testing::MemorySessionRepository,
     session_service : KemalIdentity::Sessions::Service,
+    remember_service : KemalIdentity::Sessions::RememberService,
     notifier : KemalIdentity::Testing::RecordingNotifier,
     hasher : KemalIdentity::Testing::FastTestHasher,
     service : KemalIdentity::Accounts::Service
@@ -88,12 +89,19 @@ module KemalIdentity::SpecHelper
       sessions: session_repo, clock: clock, random: random
     )
 
+    remember_service = KemalIdentity::Sessions::RememberService.new(
+      remember: KemalIdentity::Testing::MemoryRememberRepository.new,
+      accounts: account_repo, sessions: session_service,
+      clock: clock, random: random, notifier: notifier
+    )
+
     AccountHarness.new(
       clock: clock,
       accounts: account_repo,
       tokens: token_repo,
       sessions: session_repo,
       session_service: session_service,
+      remember_service: remember_service,
       notifier: notifier,
       hasher: hasher,
       service: KemalIdentity::Accounts::Service.new(
@@ -106,6 +114,7 @@ module KemalIdentity::SpecHelper
         clock: clock,
         random: random,
         rate_limiter: rate_limiter,
+        remember: remember_service,
         reset_ttl: reset_ttl,
       ),
     )

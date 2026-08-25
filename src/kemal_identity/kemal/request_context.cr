@@ -116,10 +116,35 @@ module KemalIdentity::Kemal
       issued.principal
     end
 
+    # Starts remembering this browser, and writes the cookie.
+    #
+    # Call it only after a real authentication — `remember` refuses a restored session by
+    # taking an account rather than a principal, because chaining remembrance off remembrance
+    # would make the thirty days a rolling window that never closes.
+    #
+    # ```
+    # env.auth.start!(result.principal)
+    # env.auth.remember! if env.params.body["remember"]?
+    # ```
+    def remember!(principal : Principal? = nil) : Nil
+      subject = (principal || require!).subject
+      account = @app.accounts.find_by_id(subject)
+
+      raise InfrastructureError.new("account disappeared before it could be remembered") if account.nil?
+
+      write_remember(@app.remember!.remember(account))
+    end
+
     # Ends the current session and clears the cookie. Safe to call when nobody is signed in.
+    #
+    # Also forgets this browser's remember-me family. Skipping that would sign the user out and
+    # then sign them straight back in on their next request, which is not what a logout button
+    # is for.
     def logout! : Bool
       session_id = principal?.try(&.session_id)
       revoked = session_id.nil? ? false : @app.sessions.revoke(session_id)
+
+      forget_remembered_browser
 
       clear_cookie!
       @outcome = Anonymous.new
@@ -127,6 +152,62 @@ module KemalIdentity::Kemal
       Log.info &.emit("session.ended", session: session_id) if session_id
 
       revoked
+    end
+
+    # Attempts to restore a remembered login. Called by `AuthenticationHandler`, and only when
+    # the request presented no session cookie at all.
+    #
+    # Restoring on a *failed* session cookie instead would be worse in two ways: it would widen
+    # the window in which parallel requests both present the remember token — which reads as
+    # theft (`blueprints/0012-remember-me.md`) — and, because logout leaves a revoked session
+    # cookie behind, it would race with logout itself. A request with no session cookie is
+    # unambiguous, and the handler clears a bad one so the next request qualifies.
+    protected def restore_remembered! : Nil
+      service = @app.remember
+      return if service.nil?
+
+      raw = @app.remember_cookie.extract(@env.request.cookies)
+      return if raw.nil?
+
+      case restored = service.restore(raw)
+      in Sessions::NotRemembered
+        # Expired, revoked, or never issued. Stop the browser sending it again.
+        @env.response.cookies << @app.remember_cookie.build_cleared
+      in Sessions::ReplayDetected
+        # The family and every session are already gone. Clear both cookies so the browser
+        # stops presenting credentials that have been deliberately destroyed.
+        @env.response.cookies << @app.remember_cookie.build_cleared
+        clear_cookie!
+        @outcome = Failed.new(FailureReason::ReplayedToken)
+      in Sessions::Restored
+        # Both cookies, always. Writing the session and not the replacement would leave the
+        # browser holding a token the server has already spent, and its next visit would be
+        # reported as a replay because of a bug rather than a thief.
+        @env.response.cookies << @app.cookie.build(restored.session_token)
+        write_remember(restored.remember)
+        @outcome = Authenticated.new(restored.principal)
+      end
+    end
+
+    private def write_remember(issued : Sessions::IssuedRemember) : Nil
+      # `max_age`, unlike the session cookie: a remembered login is supposed to survive the
+      # browser being closed, which is the whole point of it.
+      @env.response.cookies << @app.remember_cookie.build(issued.token, max_age: @app.remember_ttl)
+    end
+
+    private def forget_remembered_browser : Nil
+      service = @app.remember
+      return if service.nil?
+
+      raw = @app.remember_cookie.extract(@env.request.cookies)
+      return if raw.nil?
+
+      # Revoked by digest rather than consumed: spending the token would make this browser's
+      # next visit look like a replay, so pressing "log out" would warn the user that their
+      # cookie may have been stolen.
+      service.forget_by_token(raw)
+
+      @env.response.cookies << @app.remember_cookie.build_cleared
     end
 
     # A CSRF token for this request, minting an anchor if there is not one yet.

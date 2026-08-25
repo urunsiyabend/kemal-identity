@@ -143,6 +143,43 @@ def it_behaves_like_a_remember_repository(&build : Array(KemalIdentity::Sessions
     end
   end
 
+  # What logging out calls. It must not spend the token: a spent token presented again is a
+  # replay, so a user who pressed "log out" would be told their cookie may have been stolen.
+  describe "#revoke_family_by_digest" do
+    it "kills the family the token belongs to" do
+      repo = build.call([
+        token.call("r1", "a1", "f1", "raw-1", 30.days),
+        token.call("r2", "a1", "f1", "raw-2", 30.days),
+      ])
+
+      repo.revoke_family_by_digest(digest.call("raw-1"), now).should eq(2)
+      repo.consume(digest.call("raw-2"), now).should be_a(KemalIdentity::Sessions::RememberUnknown)
+    end
+
+    # The property that makes this method exist at all.
+    it "leaves the token unspent, so returning with it is not read as a replay" do
+      repo = build.call([token.call("r1", "a1", "f1", "raw-1", 30.days)])
+      repo.revoke_family_by_digest(digest.call("raw-1"), now)
+
+      repo.consume(digest.call("raw-1"), now).should be_a(KemalIdentity::Sessions::RememberUnknown)
+    end
+
+    it "leaves other families alone" do
+      repo = build.call([
+        token.call("r1", "a1", "f1", "raw-1", 30.days),
+        token.call("r2", "a1", "f2", "raw-2", 30.days),
+      ])
+
+      repo.revoke_family_by_digest(digest.call("raw-1"), now)
+      repo.consume(digest.call("raw-2"), now).should be_a(KemalIdentity::Sessions::RememberAccepted)
+    end
+
+    it "returns zero for a digest nobody issued" do
+      build.call([] of KemalIdentity::Sessions::RememberToken)
+        .revoke_family_by_digest(digest.call("never-issued"), now).should eq(0)
+    end
+  end
+
   describe "#revoke_all_for_account" do
     it "kills every family the account has" do
       repo = build.call([

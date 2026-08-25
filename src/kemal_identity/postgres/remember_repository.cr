@@ -74,6 +74,22 @@ module KemalIdentity::Postgres
       result.rows_affected.to_i32
     end
 
+    def revoke_family_by_digest(digest : Bytes, at : Time) : Int32
+      # One statement, and pointedly not an UPDATE on the token itself: the row keeps
+      # `used_at IS NULL`, so the same cookie presented later reads as revoked rather than as a
+      # replay. Logging out must not look like theft.
+      result = @db.exec(<<-SQL, at, digest)
+        UPDATE auth_remember_tokens
+           SET revoked_at = $1
+         WHERE revoked_at IS NULL
+           AND family_id = (
+             SELECT family_id FROM auth_remember_tokens WHERE token_digest = $2
+           )
+        SQL
+
+      result.rows_affected.to_i32
+    end
+
     def revoke_all_for_account(account_id : String, at : Time) : Int32
       result = @db.exec(
         "UPDATE auth_remember_tokens SET revoked_at = $1 WHERE account_id = $2 AND revoked_at IS NULL",

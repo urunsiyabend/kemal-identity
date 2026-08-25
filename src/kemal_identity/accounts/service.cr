@@ -60,6 +60,11 @@ module KemalIdentity::Accounts
       @clock : Clock,
       @random : RandomSource,
       @rate_limiter : RateLimiter = NullRateLimiter.new,
+      # Optional, and its absence is a real hole rather than a missing convenience: without it
+      # a password reset revokes sessions but leaves remember-me families alive, so a stolen
+      # remember cookie keeps working after the victim resets their password. See
+      # `#reset_password`.
+      @remember : Sessions::RememberService? = nil,
       @reset_ttl : Time::Span = 1.hour,
       @confirmation_ttl : Time::Span = 1.day,
     )
@@ -159,6 +164,15 @@ module KemalIdentity::Accounts
       # Belt as well as braces: revocation handles the sessions that exist, the version bump
       # handles anything created concurrently with this call.
       @accounts.bump_auth_version(account_id)
+
+      # And every remembered browser.
+      #
+      # Revoking sessions alone would be a hole with an attacker in it: a remember-me cookie
+      # outlives any session, so somebody holding a stolen one would simply be signed back in
+      # on their next request -- after the victim had reset their password specifically to
+      # evict them. Resetting a password is the single strongest "get everyone out" signal an
+      # account holder can send, and it has to mean it.
+      @remember.try(&.forget_all(account_id))
 
       account = @accounts.find_by_id(account_id)
 

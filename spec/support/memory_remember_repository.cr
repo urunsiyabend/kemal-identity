@@ -73,6 +73,15 @@ module KemalIdentity::Testing
       end
     end
 
+    def revoke_family_by_digest(digest : Bytes, at : Time) : Int32
+      family = @mutex.synchronize do
+        id = @by_digest[digest.hexstring]?
+        id.nil? ? nil : @tokens[id]?.try(&.family_id)
+      end
+
+      family.nil? ? 0 : revoke_family(family, at)
+    end
+
     def revoke_all_for_account(account_id : String, at : Time) : Int32
       @mutex.synchronize do
         revoked = 0

@@ -43,6 +43,16 @@ module KemalIdentity::Sessions
     # one machine says nothing about the others.
     abstract def revoke_family(family_id : String, at : Time) : Int32
 
+    # Kills the family that this token belongs to, **without spending the token**, and returns
+    # how many it killed.
+    #
+    # This is what logging out calls. Consuming the token instead would mark it used, and the
+    # browser's next visit with the same cookie would then look like a replay — the user would
+    # be told their cookie may have been stolen because they pressed "log out".
+    #
+    # Returns zero when the digest is unknown.
+    abstract def revoke_family_by_digest(digest : Bytes, at : Time) : Int32
+
     # Kills every token for an account, across all families. "Forget me everywhere", and the
     # right response to a password change.
     abstract def revoke_all_for_account(account_id : String, at : Time) : Int32

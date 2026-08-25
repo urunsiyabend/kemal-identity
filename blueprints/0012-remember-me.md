@@ -102,6 +102,37 @@ the evidence of replay: delete it early and a stolen token coming back looks unk
 than replayed, and nobody is told. There is a contract example asserting a spent token survives
 until it expires.
 
+## A password reset must forget every remembered browser
+
+Found by mutation testing the wiring, and it was a real hole rather than a missing test.
+
+`Accounts::Service#reset_password` revokes every session and bumps `auth_version`. That is not
+enough on its own: a remember-me cookie outlives any session, so somebody holding a stolen one
+would simply be signed back in on their next request — **after** the victim had reset their
+password specifically to evict them. Resetting a password is the strongest "get everyone out"
+signal an account holder can send, and it has to mean it.
+
+So the service takes an optional `RememberService` and calls `forget_all` on reset. The
+tokens are *revoked*, not spent, so nobody is told their cookie may have been stolen because
+they reset their own password.
+
+`Application` wires this automatically when `remember_tokens:` is configured. An application
+that builds `Accounts::Service` by hand and omits it has the hole, which is why the parameter
+is documented as one rather than as a convenience.
+
+## Restoring happens only when there is no session cookie at all
+
+`AuthenticationHandler` attempts a restore when the outcome is `Anonymous` — no session cookie
+was presented. Not when the session cookie was present and *failed*.
+
+Two reasons. It narrows the window in which parallel requests both present the remember token,
+which reads as theft. And it keeps logout unambiguous: logout leaves a cleared session cookie
+behind, and restoring from a failed one would race with it.
+
+The cost is one extra request. A browser holding a stale session cookie and a live remember
+cookie is signed out for that request, the handler clears the bad cookie, and the next request
+— now carrying no session cookie — restores. Self-correcting, and the safe direction.
+
 ## `remember` is only called after a real authentication
 
 Chaining remembrance off a restored session would make the thirty days a rolling window that

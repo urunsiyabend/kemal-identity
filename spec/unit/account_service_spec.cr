@@ -191,6 +191,35 @@ describe KemalIdentity::Accounts::Service do
       end
     end
 
+    # Revoking sessions alone would be a hole with an attacker in it: a remember-me cookie
+    # outlives any session, so somebody holding a stolen one would be signed straight back in
+    # on their next request -- after the victim reset their password specifically to evict
+    # them.
+    it "forgets every remembered browser too" do
+      h = KemalIdentity::SpecHelper.account_harness
+      account = h.accounts.find_by_id("a1").or_fail
+      laptop = h.remember_service.remember(account).token.reveal
+      phone = h.remember_service.remember(account).token.reveal
+
+      h.service.reset_password(request_reset(h), NEW_PASSWORD)
+
+      h.remember_service.restore(laptop).should be_a(KemalIdentity::Sessions::NotRemembered)
+      h.remember_service.restore(phone).should be_a(KemalIdentity::Sessions::NotRemembered)
+    end
+
+    # And is not read as theft: the tokens were revoked, not spent, so nobody is told their
+    # cookie may have been stolen because they reset their own password.
+    it "does not report those forgotten browsers as replays" do
+      h = KemalIdentity::SpecHelper.account_harness
+      laptop = h.remember_service.remember(h.accounts.find_by_id("a1").or_fail).token.reveal
+
+      h.service.reset_password(request_reset(h), NEW_PASSWORD)
+      h.notifier.clear
+      h.remember_service.restore(laptop)
+
+      h.notifier.replays.should be_empty
+    end
+
     # Unsolicited on purpose: it is how somebody learns that an attacker who reached their
     # mailbox has taken the account.
     it "tells the account holder their password changed" do

@@ -111,6 +111,17 @@ module KemalIdentity::Sessions
       @remember.revoke_family(family_id, @clock.now)
     end
 
+    # Stops remembering the browser holding this token, without spending it.
+    #
+    # What logging out calls. Consuming the token would mark it used, and the same cookie
+    # arriving later would read as a replay — so a user who pressed "log out" would be told
+    # their cookie may have been stolen.
+    def forget_by_token(raw_token : String) : Int32
+      return 0 unless OpaqueToken.valid_shape?(raw_token)
+
+      @remember.revoke_family_by_digest(OpaqueToken.digest(Secret.new(raw_token)), @clock.now)
+    end
+
     # Stops remembering every browser. The right response to a password change.
     def forget_all(account_id : String) : Int32
       @remember.revoke_all_for_account(account_id, @clock.now)

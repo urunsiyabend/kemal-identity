@@ -22,7 +22,11 @@ ACCOUNTS = KemalIdentity::Testing::MemoryAccountRepository.new([
     password_digest: TEST_HASHER.hash_secret(KemalIdentity::Secret.new(PASSWORD))
   ),
 ])
-SESSIONS = KemalIdentity::Testing::MemorySessionRepository.new(ACCOUNTS)
+SESSIONS        = KemalIdentity::Testing::MemorySessionRepository.new(ACCOUNTS)
+ACTION_TOKENS   = KemalIdentity::Testing::MemoryActionTokenRepository.new
+REMEMBER        = KemalIdentity::Testing::MemoryRememberRepository.new
+NOTIFIER        = KemalIdentity::Testing::RecordingNotifier.new
+REMEMBER_COOKIE = "kemal_identity_remember"
 
 KemalIdentity.configure(
   accounts: ACCOUNTS,
@@ -35,6 +39,12 @@ KemalIdentity.configure(
   # specs in spec/security/cookie_policy_spec.cr and spec/unit/csrf_spec.cr.
   cookie: KemalIdentity::Sessions::CookieConfig.new(
     name: "kemal_identity", secure: false, allow_insecure: true
+  ),
+  action_tokens: ACTION_TOKENS,
+  remember_tokens: REMEMBER,
+  notifier: NOTIFIER,
+  remember_cookie: KemalIdentity::Sessions::CookieConfig.new(
+    name: REMEMBER_COOKIE, secure: false, allow_insecure: true
   ),
   csrf: KemalIdentity::CSRFConfig.new(
     secret: "test-signing-key-of-at-least-32-bytes",
@@ -101,6 +111,22 @@ post "/login" do |env|
     "logged in"
   in KemalIdentity::Failed, KemalIdentity::Anonymous
     # One message for every reason. Branching here is the account oracle.
+    env.status(401).text("Invalid email or password")
+  end
+end
+
+post "/login-remembered" do |env|
+  result = KemalIdentity.app.passwords.authenticate(
+    login: env.params.body["email"], password: env.params.body["password"]
+  )
+
+  case result
+  in KemalIdentity::Authenticated
+    env.auth.start!(result.principal)
+    # Only ever after a real authentication.
+    env.auth.remember!
+    "remembered"
+  in KemalIdentity::Failed, KemalIdentity::Anonymous
     env.status(401).text("Invalid email or password")
   end
 end
@@ -571,5 +597,180 @@ describe "ErrorHandler" do
     body.should_not contain("ada@example.com")
     body.should_not contain("Revoked")
     body.should_not contain("InvalidCredential")
+  end
+end
+
+# Remember-me, end to end through the handler chain. The interesting part is that
+# AuthenticationHandler restores the login on a request carrying no session cookie at all, so
+# none of this needs an explicit call from a route.
+private def remembered_cookie(response : HTTP::Client::Response) : String?
+  cookie_of(response, REMEMBER_COOKIE)
+end
+
+private def log_in_remembered : String
+  csrf = fetch_csrf
+
+  post "/login-remembered",
+    body: "email=ada@example.com&password=#{PASSWORD}&_csrf=#{csrf.token}",
+    headers: form(csrf)
+
+  remembered_cookie(response).or_fail("login did not set a remember cookie")
+end
+
+# Logs out a browser holding both cookies.
+#
+# The CSRF token goes in the header rather than the body. An earlier version of the two logout
+# examples posted it as a form field *without* a Content-Type, so the body never parsed, the
+# request was refused as a forgery, and the route under test never ran -- the examples passed
+# while asserting nothing. Hence the explicit status assertion.
+private def log_out_remembered(remember : String) : Nil
+  session = cookie_of(response, "kemal_identity").or_fail
+  csrf = fetch_csrf(session)
+
+  headers = cookies("kemal_identity=#{session}", "#{REMEMBER_COOKIE}=#{remember}")
+  headers["X-CSRF-Token"] = csrf.token
+
+  request("POST", "/logout", headers).status_code.should eq(200)
+end
+
+describe "remember-me over HTTP" do
+  it "sets a remember cookie alongside the session" do
+    token = log_in_remembered
+    token.should_not be_empty
+    response.body.should eq("remembered")
+  end
+
+  it "gives the remember cookie a max-age, so it survives the browser closing" do
+    log_in_remembered
+    header = response.headers.get("Set-Cookie").find(&.starts_with?(REMEMBER_COOKIE)).or_fail
+    header.should contain("max-age=")
+  end
+
+  # The session cookie is deliberately *not* persistent: the server-side row decides when a
+  # session ends, and only the remember cookie is meant to outlive the browser.
+  it "leaves the session cookie non-persistent" do
+    log_in_remembered
+    session = response.headers.get("Set-Cookie").find(&.starts_with?("kemal_identity=")).or_fail
+    session.should_not contain("max-age=")
+  end
+
+  it "restores the login on a request carrying only the remember cookie" do
+    remember = log_in_remembered
+
+    get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{remember}")
+    response.body.should eq("a1")
+  end
+
+  it "issues a fresh session cookie while restoring" do
+    remember = log_in_remembered
+
+    get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{remember}")
+    cookie_of(response, "kemal_identity").should_not be_nil
+  end
+
+  # Rotation: the browser must be handed the successor in the same response, or its next visit
+  # presents a token the server has already spent and is reported as a replay.
+  it "rotates the remember cookie on every restore" do
+    first = log_in_remembered
+
+    get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{first}")
+    second = remembered_cookie(response).or_fail
+
+    second.should_not eq(first)
+
+    get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{second}")
+    response.body.should eq("a1")
+  end
+
+  # A restored session is weaker than a password login, and the step-up guard enforces it.
+  it "restores at Remembered assurance, which no step-up route accepts" do
+    remember = log_in_remembered
+
+    get "/step-up/email", headers: cookies("#{REMEMBER_COOKIE}=#{remember}")
+    response.status_code.should eq(403)
+  end
+
+  it "still satisfies an ordinary guard" do
+    remember = log_in_remembered
+
+    get "/guarded-route", headers: cookies("#{REMEMBER_COOKIE}=#{remember}")
+    response.status_code.should eq(200)
+    response.body.should eq("hello a1")
+  end
+
+  describe "when a spent cookie comes back" do
+    it "signs the browser out rather than restoring it" do
+      first = log_in_remembered
+
+      get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{first}")
+      response.body.should eq("a1")
+
+      # The stolen copy: the same token, presented after it was already spent.
+      get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{first}")
+      response.body.should eq("nobody")
+    end
+
+    it "clears both cookies" do
+      first = log_in_remembered
+      get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{first}")
+
+      NOTIFIER.clear
+      get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{first}")
+
+      response.headers.get("Set-Cookie").count(&.includes?("max-age=0")).should be >= 1
+    end
+
+    it "tells the account holder" do
+      first = log_in_remembered
+      get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{first}")
+
+      NOTIFIER.clear
+      get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{first}")
+
+      NOTIFIER.replays.size.should eq(1)
+    end
+  end
+
+  # Pressing "log out" must not look like theft.
+  describe "logging out" do
+    it "clears the remember cookie" do
+      remember = log_in_remembered
+      log_out_remembered(remember)
+
+      get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{remember}")
+      response.body.should eq("nobody")
+    end
+
+    it "does not report the logged-out cookie as a replay" do
+      remember = log_in_remembered
+      log_out_remembered(remember)
+
+      NOTIFIER.clear
+      get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{remember}")
+
+      # Revoked, not spent. Telling somebody their cookie may have been stolen because they
+      # pressed "log out" would train them to ignore the warning that matters.
+      NOTIFIER.replays.should be_empty
+    end
+  end
+
+  it "ignores a garbage remember cookie without raising" do
+    get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=garbage")
+    response.status_code.should eq(200)
+    response.body.should eq("nobody")
+  end
+
+  # A live session takes precedence: restoring only from a request with no session cookie is
+  # what keeps logout unambiguous and narrows the parallel-request window.
+  it "does not restore when a valid session cookie is already present" do
+    remember = log_in_remembered
+    session = cookie_of(response, "kemal_identity").or_fail
+
+    get "/whoami", headers: cookies("kemal_identity=#{session}", "#{REMEMBER_COOKIE}=#{remember}")
+    response.body.should eq("a1")
+
+    # The remember token was not spent, so it still works on its own.
+    get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{remember}")
+    response.body.should eq("a1")
   end
 end

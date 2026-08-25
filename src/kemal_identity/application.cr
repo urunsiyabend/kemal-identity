@@ -25,6 +25,27 @@ module KemalIdentity
     getter clock : Clock
     getter random : RandomSource
 
+    # The account lifecycle service: password reset and email confirmation.
+    #
+    # `nil` unless the application supplied both an `ActionTokenRepository` and a `Notifier` —
+    # neither has a sensible default. A reset flow with nowhere to store its tokens, or with
+    # nobody to send the link, would be a flow that silently never works.
+    getter accounts_service : Accounts::Service?
+
+    # Remember-me, or `nil` unless a `RememberRepository` was supplied.
+    getter remember : Sessions::RememberService?
+
+    # The cookie remember-me tokens ride in. Separate from the session cookie: different name,
+    # different lifetime, and it carries a `max-age` because it is meant to outlive the browser
+    # being closed, which is the entire point of it.
+    getter remember_cookie : Sessions::CookieConfig
+
+    getter remember_ttl : Time::Span
+
+    # What counts as an acceptable password when one is being *set*. Defaults to a length floor
+    # whose ceiling comes from this application's hasher.
+    getter password_policy : Passwords::Policy
+
     # CSRF configuration, or `nil` when the application has not set one up.
     #
     # Nilable rather than defaulted: a default signing key would be shared by every deployment
@@ -46,6 +67,16 @@ module KemalIdentity
       session_config : Sessions::Config = Sessions::Config.new,
       @cookie : Sessions::CookieConfig = Sessions::CookieConfig.new,
       @csrf : CSRFConfig? = nil,
+      action_tokens : Accounts::ActionTokenRepository? = nil,
+      remember_tokens : Sessions::RememberRepository? = nil,
+      notifier : Accounts::Notifier? = nil,
+      password_policy : Passwords::Policy? = nil,
+      @remember_cookie : Sessions::CookieConfig = Sessions::CookieConfig.new(
+        name: "__Host-kemal_identity_remember"
+      ),
+      @remember_ttl : Time::Span = 30.days,
+      reset_ttl : Time::Span = 1.hour,
+      confirmation_ttl : Time::Span = 1.day,
     )
       @session_repository = sessions
 
@@ -55,6 +86,60 @@ module KemalIdentity
 
       @passwords = Passwords::Authenticator.new(
         accounts: @accounts, hasher: @hasher, clock: @clock, rate_limiter: @rate_limiter
+      )
+
+      @password_policy = password_policy || Passwords::LengthPolicy.for(@hasher)
+
+      if remember_tokens
+        @remember = Sessions::RememberService.new(
+          remember: remember_tokens,
+          accounts: @accounts,
+          sessions: @sessions,
+          clock: @clock,
+          random: @random,
+          notifier: notifier,
+          ttl: @remember_ttl,
+        )
+      end
+
+      # Built only when everything they need is present. Half a reset flow is worse than none:
+      # it would accept a request and quietly drop it.
+      if action_tokens && notifier
+        @accounts_service = Accounts::Service.new(
+          accounts: @accounts,
+          tokens: action_tokens,
+          notifier: notifier,
+          sessions: @sessions,
+          hasher: @hasher,
+          policy: @password_policy,
+          clock: @clock,
+          random: @random,
+          rate_limiter: @rate_limiter,
+          remember: @remember,
+          reset_ttl: reset_ttl,
+          confirmation_ttl: confirmation_ttl,
+        )
+      end
+    end
+
+    # The account lifecycle service, or a clear error rather than a nil.
+    def accounts_service! : Accounts::Service
+      service = @accounts_service
+      return service if service
+
+      raise ConfigurationError.new(
+        "password reset and email confirmation are not configured. Pass action_tokens: and " \
+        "notifier: to KemalIdentity.configure."
+      )
+    end
+
+    # Remember-me, or a clear error rather than a nil.
+    def remember! : Sessions::RememberService
+      service = @remember
+      return service if service
+
+      raise ConfigurationError.new(
+        "remember-me is not configured. Pass remember_tokens: to KemalIdentity.configure."
       )
     end
 
@@ -86,6 +171,16 @@ module KemalIdentity
     session_config : Sessions::Config = Sessions::Config.new,
     cookie : Sessions::CookieConfig = Sessions::CookieConfig.new,
     csrf : CSRFConfig? = nil,
+    action_tokens : Accounts::ActionTokenRepository? = nil,
+    remember_tokens : Sessions::RememberRepository? = nil,
+    notifier : Accounts::Notifier? = nil,
+    password_policy : Passwords::Policy? = nil,
+    remember_cookie : Sessions::CookieConfig = Sessions::CookieConfig.new(
+      name: "__Host-kemal_identity_remember"
+    ),
+    remember_ttl : Time::Span = 30.days,
+    reset_ttl : Time::Span = 1.hour,
+    confirmation_ttl : Time::Span = 1.day,
   ) : Application
     self.app = Application.new(
       accounts: accounts,
@@ -97,6 +192,14 @@ module KemalIdentity
       session_config: session_config,
       cookie: cookie,
       csrf: csrf,
+      action_tokens: action_tokens,
+      remember_tokens: remember_tokens,
+      notifier: notifier,
+      password_policy: password_policy,
+      remember_cookie: remember_cookie,
+      remember_ttl: remember_ttl,
+      reset_ttl: reset_ttl,
+      confirmation_ttl: confirmation_ttl,
     )
   end
 

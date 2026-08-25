@@ -46,9 +46,18 @@ module KemalIdentity::Kemal
       # A cookie that was presented and did not resolve gets cleared, so the browser stops
       # sending a value that will never work again. `Anonymous` — no cookie at all — needs no
       # response action, which is exactly why the two are distinct outcomes.
-      if outcome.is_a?(Failed)
+      case outcome
+      when Failed
+        # A cookie that was presented and did not resolve gets cleared, so the browser stops
+        # sending a value that will never work again.
         Log.debug &.emit("session.rejected", reason: outcome.reason.to_s)
         env.auth.clear_cookie!
+      when Anonymous
+        # No session cookie at all: the only state from which a remembered login is restored.
+        # Doing it here rather than on a *failed* cookie keeps logout unambiguous and narrows
+        # the window in which parallel requests both present the remember token — which reads
+        # as theft. See `blueprints/0012-remember-me.md`.
+        env.auth.restore_remembered!
       end
 
       call_next(env)
