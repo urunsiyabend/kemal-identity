@@ -33,6 +33,14 @@ where nearly all the difficulty is.
 Password reset, email confirmation, remember-me with rotating single-use tokens and family
 revocation, `Notifier` events. Everything digest-only, single-use, atomically consumed.
 
+| Deliverable | State |
+|---|---|
+| `ActionToken` + repository, atomically consumed | **done** — `blueprints/0011-action-token-atomicity.md` |
+| `Notifier` contract and events | **done** |
+| Password reset, with enumeration and flood protection | **done** |
+| Email confirmation | **done** |
+| Remember-me, rotating with family revocation | not started |
+
 Enumeration behaviour on the reset endpoint is the thing to get right: identical response
 and identical timing whether or not the address exists, plus per-account rate limiting so
 the endpoint cannot be used to flood someone's inbox.

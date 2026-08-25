@@ -62,6 +62,16 @@ module KemalIdentity::Testing
       end
     end
 
+    def mark_email_verified(id : String, at : Time) : Bool
+      @mutex.synchronize do
+        existing = @accounts[id]?
+        return false if existing.nil?
+
+        @accounts[id] = replace(existing, email_verified_at: at, updated_at: at)
+        true
+      end
+    end
+
     def bump_auth_version(id : String) : Int32?
       @mutex.synchronize do
         existing = @accounts[id]?
@@ -97,6 +107,7 @@ module KemalIdentity::Testing
       password_digest : String? = nil,
       password_scheme : String? = nil,
       disabled_at : Time? = nil,
+      email_verified_at : Time? = nil,
       updated_at : Time? = nil,
     ) : KemalIdentity::Accounts::Account
       KemalIdentity::Accounts::Account.new(
@@ -106,7 +117,7 @@ module KemalIdentity::Testing
         auth_version: auth_version || account.auth_version,
         password_digest: password_digest || account.password_digest,
         password_scheme: password_scheme || account.password_scheme,
-        email_verified_at: account.email_verified_at,
+        email_verified_at: email_verified_at || account.email_verified_at,
         disabled_at: disabled_at || account.disabled_at,
         created_at: account.created_at,
         updated_at: updated_at || account.updated_at,

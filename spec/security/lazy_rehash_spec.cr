@@ -136,6 +136,10 @@ class FailingWriteAccountRepository < KemalIdentity::Accounts::Repository
     raise KemalIdentity::InfrastructureError.new("write failed")
   end
 
+  def mark_email_verified(id : String, at : Time) : Bool
+    @inner.mark_email_verified(id, at)
+  end
+
   def bump_auth_version(id : String) : Int32?
     @inner.bump_auth_version(id)
   end

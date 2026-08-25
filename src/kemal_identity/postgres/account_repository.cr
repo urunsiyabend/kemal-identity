@@ -57,6 +57,14 @@ module KemalIdentity::Postgres
       result.rows_affected == 1
     end
 
+    def mark_email_verified(id : String, at : Time) : Bool
+      result = @db.exec(
+        "UPDATE auth_accounts SET email_verified_at = $1, updated_at = $1 WHERE id = $2", at, id
+      )
+
+      result.rows_affected == 1
+    end
+
     def bump_auth_version(id : String) : Int32?
       # One statement, `RETURNING` the new value: a read-then-write would let two concurrent
       # password changes both read the same version and both write the same increment, so one

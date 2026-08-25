@@ -49,6 +49,13 @@ module KemalIdentity::Accounts
     # of the application that just upgraded its cost.
     abstract def update_password_digest(id : String, digest : String, scheme : String, at : Time) : Bool
 
+    # Records that this account's address has been proved, and returns false if no such account
+    # exists.
+    #
+    # Idempotent: confirming twice is not an error, and the second call moves the timestamp
+    # forward rather than refusing. A user who clicks a link twice has not done anything wrong.
+    abstract def mark_email_verified(id : String, at : Time) : Bool
+
     # Increments `auth_version` and returns the new value, or `nil` if no such account
     # exists.
     #

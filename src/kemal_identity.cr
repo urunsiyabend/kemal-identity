@@ -23,6 +23,7 @@ require "./kemal_identity/accounts/account"
 require "./kemal_identity/accounts/repository"
 require "./kemal_identity/accounts/action_token"
 require "./kemal_identity/accounts/action_token_repository"
+require "./kemal_identity/accounts/notifier"
 
 require "./kemal_identity/sessions/record"
 require "./kemal_identity/sessions/lookup"
@@ -34,6 +35,7 @@ require "./kemal_identity/sessions/service"
 
 require "./kemal_identity/passwords/policy"
 require "./kemal_identity/passwords/authenticator"
+require "./kemal_identity/accounts/service"
 
 require "./kemal_identity/rate_limiter"
 require "./kemal_identity/csrf"

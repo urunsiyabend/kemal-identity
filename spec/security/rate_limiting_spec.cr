@@ -293,6 +293,10 @@ class CountingAccountRepository < KemalIdentity::Accounts::Repository
     @inner.update_password_digest(id, digest, scheme, at)
   end
 
+  def mark_email_verified(id : String, at : Time) : Bool
+    @inner.mark_email_verified(id, at)
+  end
+
   def bump_auth_version(id : String) : Int32?
     @inner.bump_auth_version(id)
   end

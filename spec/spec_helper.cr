@@ -10,6 +10,7 @@ require "./support/fast_test_hasher"
 require "./support/memory_account_repository"
 require "./support/memory_session_repository"
 require "./support/memory_action_token_repository"
+require "./support/recording_notifier"
 
 require "./contract/clock_contract"
 require "./contract/random_source_contract"
@@ -50,6 +51,60 @@ module KemalIdentity::SpecHelper
       sessions: session_repo,
       service: KemalIdentity::Sessions::Service.new(
         sessions: session_repo, clock: clock, random: random, config: config
+      ),
+    )
+  end
+
+  # A fully wired account service, on doubles throughout.
+  record AccountHarness,
+    clock : KemalIdentity::Testing::TestClock,
+    accounts : KemalIdentity::Testing::MemoryAccountRepository,
+    tokens : KemalIdentity::Testing::MemoryActionTokenRepository,
+    sessions : KemalIdentity::Testing::MemorySessionRepository,
+    session_service : KemalIdentity::Sessions::Service,
+    notifier : KemalIdentity::Testing::RecordingNotifier,
+    hasher : KemalIdentity::Testing::FastTestHasher,
+    service : KemalIdentity::Accounts::Service
+
+  def self.account_harness(
+    accounts : Array(KemalIdentity::Accounts::Account)? = nil,
+    rate_limiter : KemalIdentity::RateLimiter = KemalIdentity::NullRateLimiter.new,
+    reset_ttl : Time::Span = 1.hour,
+    now : Time = FIXED_NOW,
+    seed : Int32 = 1,
+  ) : AccountHarness
+    clock = KemalIdentity::Testing::TestClock.new(now)
+    random = KemalIdentity::Testing::DeterministicRandom.new(seed: seed)
+    hasher = KemalIdentity::Testing::FastTestHasher.new
+    notifier = KemalIdentity::Testing::RecordingNotifier.new
+
+    account_repo = KemalIdentity::Testing::MemoryAccountRepository.new(accounts || [account])
+    token_repo = KemalIdentity::Testing::MemoryActionTokenRepository.new
+    session_repo = KemalIdentity::Testing::MemorySessionRepository.new(account_repo)
+
+    session_service = KemalIdentity::Sessions::Service.new(
+      sessions: session_repo, clock: clock, random: random
+    )
+
+    AccountHarness.new(
+      clock: clock,
+      accounts: account_repo,
+      tokens: token_repo,
+      sessions: session_repo,
+      session_service: session_service,
+      notifier: notifier,
+      hasher: hasher,
+      service: KemalIdentity::Accounts::Service.new(
+        accounts: account_repo,
+        tokens: token_repo,
+        notifier: notifier,
+        sessions: session_service,
+        hasher: hasher,
+        policy: KemalIdentity::Passwords::LengthPolicy.for(hasher),
+        clock: clock,
+        random: random,
+        rate_limiter: rate_limiter,
+        reset_ttl: reset_ttl,
       ),
     )
   end

@@ -132,6 +132,51 @@ def it_behaves_like_an_account_repository(&build : Array(KemalIdentity::Accounts
     end
   end
 
+  describe "#mark_email_verified" do
+    it "records when the address was proved" do
+      repo = build.call([account.call("a1", "ada@example.com", nil)])
+      repo.mark_email_verified("a1", now + 1.hour).should be_true
+
+      updated = repo.find_by_id("a1").or_fail
+      updated.email_verified_at.should eq(now + 1.hour)
+      updated.email_verified?.should be_true
+    end
+
+    it "starts out unverified" do
+      build.call([account.call("a1", "ada@example.com", nil)])
+        .find_by_id("a1").or_fail.email_verified?.should be_false
+    end
+
+    # Clicking a confirmation link twice is not an error.
+    it "is idempotent, moving the timestamp forward" do
+      repo = build.call([account.call("a1", "ada@example.com", nil)])
+      repo.mark_email_verified("a1", now).should be_true
+      repo.mark_email_verified("a1", now + 1.hour).should be_true
+
+      repo.find_by_id("a1").or_fail.email_verified_at.should eq(now + 1.hour)
+    end
+
+    it "returns false for an unknown account" do
+      build.call([] of KemalIdentity::Accounts::Account)
+        .mark_email_verified("nope", now).should be_false
+    end
+
+    it "affects only the named account" do
+      repo = build.call([
+        account.call("a1", "ada@example.com", nil),
+        account.call("a2", "bob@example.com", nil),
+      ])
+      repo.mark_email_verified("a1", now)
+      repo.find_by_id("a2").or_fail.email_verified?.should be_false
+    end
+
+    it "does not disturb the password credential" do
+      repo = build.call([account.call("a1", "ada@example.com", nil)])
+      repo.mark_email_verified("a1", now)
+      repo.find_by_id("a1").or_fail.password_digest.should eq("digest-for-a1")
+    end
+  end
+
   describe "#bump_auth_version" do
     it "increments and returns the new version" do
       repo = build.call([account.call("a1", "ada@example.com", nil)])
