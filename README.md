@@ -372,6 +372,26 @@ bin/migrate up
 crystal run examples/browser_session/app.cr
 ```
 
+## Remember-me
+
+Not a long-lived session. Every token is single-use and rotates on presentation, and every
+token descended from one login shares a family.
+
+That is what makes theft **detectable**: after a thief uses a stolen cookie the token is spent,
+so the real user's next visit is a replay — and the reverse if the user gets there first.
+Either way somebody presents a spent token, the whole family dies, every session for the
+account ends, and the account holder is told.
+
+A restored session sits at `AssuranceLevel::Remembered`, below `Password`, and is **never**
+fresh however recently it was restored. Anything sensitive calls `require_fresh!` and gets a
+real re-authentication — possession of a cookie is not the presence of the account holder.
+
+**Known trade-off:** two requests presenting the same remember cookie at the same instant are
+indistinguishable from a theft, so a parallel prefetch against a cold session can sign a user
+out and email them a warning. Restore only when there is no live session, which narrows the
+window to a cold start. See `blueprints/0012-remember-me.md` for why the strict behaviour was
+kept and what a grace window would cost.
+
 ## Design decisions
 
 `docs/` describes the intended design. `blueprints/` records the ten places the implementation
@@ -390,6 +410,8 @@ reconstructed afterwards:
 | [0008](blueprints/0008-kemal-layer-owns-the-http-seam.md) | `start!` lives on `env.auth`, not on the session service |
 | [0009](blueprints/0009-csrf-token-scheme.md) | The CSRF token scheme |
 | [0010](blueprints/0010-rate-limiting.md) | Rate limiting: consume before verifying, and key on two things |
+| [0011](blueprints/0011-action-token-atomicity.md) | Action token atomicity, and a concurrency spec that did not test it |
+| [0012](blueprints/0012-remember-me.md) | Remember-me: rotation, families, and what a replay costs |
 
 ## License
 

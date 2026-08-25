@@ -50,12 +50,32 @@ module KemalIdentity::Accounts
     end
   end
 
+  # An already-spent remember-me token was presented again, and the family it belonged to has
+  # been revoked.
+  #
+  # The most important message here, and the only one that reports a suspicion rather than an
+  # action the user took. A remember-me token is single-use, so a second presentation means two
+  # parties held it — which is what a stolen cookie looks like from the server's side. Which
+  # party was the thief is unknowable, so both were signed out.
+  #
+  # Send it. It may be the only way somebody learns their laptop cookie was copied.
+  struct RememberTokenReplayed
+    getter account_id : String
+    getter login : String
+    getter family_id : String
+    getter at : Time
+
+    def initialize(@account_id : String, @login : String, @family_id : String, @at : Time)
+    end
+  end
+
   # Anything the application may need to tell an account holder about.
   #
   # A union rather than a base class with subclasses, for the same reason `Outcome` is one: a
   # `case ... in` over it is exhaustive, so adding a notification in v0.3 becomes a compile
   # error in every `Notifier` rather than a message that silently never sends.
-  alias Notification = PasswordResetRequested | EmailConfirmationRequested | PasswordChanged
+  alias Notification = PasswordResetRequested | EmailConfirmationRequested | PasswordChanged |
+                       RememberTokenReplayed
 
   # Delivery. The shard decides *what* to say and the application decides *how* to say it.
   #

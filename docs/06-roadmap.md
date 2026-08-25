@@ -39,7 +39,7 @@ revocation, `Notifier` events. Everything digest-only, single-use, atomically co
 | `Notifier` contract and events | **done** |
 | Password reset, with enumeration and flood protection | **done** |
 | Email confirmation | **done** |
-| Remember-me, rotating with family revocation | not started |
+| Remember-me, rotating with family revocation | **done** — `blueprints/0012-remember-me.md` |
 
 Enumeration behaviour on the reset endpoint is the thing to get right: identical response
 and identical timing whether or not the address exists, plus per-account rate limiting so

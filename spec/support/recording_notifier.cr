@@ -28,6 +28,10 @@ module KemalIdentity::Testing
       @mutex.synchronize { @delivered.select(KemalIdentity::Accounts::EmailConfirmationRequested) }
     end
 
+    def replays : Array(KemalIdentity::Accounts::RememberTokenReplayed)
+      @mutex.synchronize { @delivered.select(KemalIdentity::Accounts::RememberTokenReplayed) }
+    end
+
     def password_changes : Array(KemalIdentity::Accounts::PasswordChanged)
       @mutex.synchronize { @delivered.select(KemalIdentity::Accounts::PasswordChanged) }
     end
