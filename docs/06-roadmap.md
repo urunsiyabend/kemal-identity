@@ -5,6 +5,10 @@ than none, because people deploy it. Every milestone below is shippable on its o
 
 ## v0.1 — Secure core
 
+**Released as part of `v0.2.0` on 2026-08-25.** Every step below is done and every release
+blocker in `docs/05-testing.md` has a named spec. The Crystal and Kemal floors were the last
+outstanding item and are now measured rather than guessed — see `docs/00-scope.md`.
+
 The whole of v0.1 is: password login, a revocable session, and a cookie.
 
 | Order | Deliverable | Done when |
@@ -29,6 +33,10 @@ Realistically this is several weeks of focused work, not a weekend. Steps 4 thro
 where nearly all the difficulty is.
 
 ## v0.2 — Account lifecycle
+
+**Released as `v0.2.0` on 2026-08-25**, in the same tag as v0.1: the two milestones were
+finished back to back and never had a release between them, so publishing a `v0.1.0`
+containing v0.2 features would have misrepresented both.
 
 Password reset, email confirmation, remember-me with rotating single-use tokens and family
 revocation, `Notifier` events. Everything digest-only, single-use, atomically consumed.

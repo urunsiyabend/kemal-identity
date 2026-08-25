@@ -6,17 +6,14 @@ Server-side opaque sessions, password credentials, and revocation that actually 
 It answers *who is making this request*, gives the application a typed answer, and stops
 there.
 
-> **Status: pre-v0.1, under construction.** In place: the core contracts, bcrypt hashing with
-> timing equalisation and lazy rehash, the account and session repository contracts with
-> in-memory adapters, the session lifecycle, the Kemal handlers (`env.auth`, `require!`,
-> **Status: v0.1 feature-complete, not yet released.** Password login, revocable server-side
-> sessions, cookie policy, Kemal guards, CSRF including the login form, rate limiting,
-> PostgreSQL adapters, and a dedicated execution context for hashing. Every release blocker in
-> `docs/05-testing.md` has a named spec.
+> **Released: `v0.2.0`.** Password login, revocable server-side sessions, cookie policy, Kemal
+> guards, CSRF including the login form, rate limiting, PostgreSQL adapters, a dedicated
+> execution context for hashing, password reset, email confirmation, and remember-me with
+> theft detection. Every release blocker in `docs/05-testing.md` has a named spec.
 >
-> Not yet: remember-me, password reset and email confirmation (v0.2), a SQLite adapter and the
-> session sweeper (v0.3), API tokens (v0.4). The supported-Crystal floor has not been
-> determined empirically yet, and the API is not frozen until v1.0.
+> This single tag covers both the v0.1 and v0.2 milestones of `docs/06-roadmap.md` — they were
+> finished back to back with no release between them. Not yet: a SQLite adapter and the session
+> sweeper (v0.3), API tokens (v0.4). **The API is not frozen until v1.0.**
 
 ## What it is not
 
@@ -31,6 +28,7 @@ already answered there.
 dependencies:
   kemal_identity:
     github: urunsiyabend/kemal-identity
+    version: ~> 0.2.0
 ```
 
 Requires **Crystal 1.21.0** or later and **Kemal 1.10.0** or later. Both floors are measured
