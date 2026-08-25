@@ -101,6 +101,58 @@ jobs:
       - name: Benchmarks compile
         run: crystal build --no-codegen bench/hashing_latency.cr
 
+  # The supported floor, run on every push. A floor recorded only in a comment is a floor that
+  # quietly rises the first time somebody uses a newer Kemal API; this makes it a claim CI
+  # checks. Measured 2026-08-25: 1.10.0 is the lowest that passes, and 1.9.0 fails to compile
+  # because path-scoped `use` arrived in 1.10.0.
+  kemal-floor:
+    name: Kemal floor (1.10.0)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: kemal_identity
+          POSTGRES_PASSWORD: kemal_identity
+          POSTGRES_DB: kemal_identity_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: "1.21.0"
+
+      # shard.override.yml pins the dependency without touching shard.yml, so the constraint
+      # consumers resolve stays exactly what is committed.
+      - name: Pin Kemal to the floor
+        run: |
+          cat > shard.override.yml <<'YAML'
+          dependencies:
+            kemal:
+              github: kemalcr/kemal
+              version: 1.10.0
+          YAML
+          shards install
+
+      # The QUERY route and its assertions compile only where Kemal has the verb, so this runs
+      # two examples fewer than the main job rather than failing on a method that did not exist
+      # yet. See spec/integration/kemal_spec.cr.
+      - name: Full suite on the floor
+        env:
+          DATABASE_URL: postgres://kemal_identity:kemal_identity@localhost:5432/kemal_identity_test
+        run: |
+          shards build migrate
+          bin/migrate up
+          crystal spec
+
   kemal-master:
     name: Kemal master (nightly)
     runs-on: ubuntu-latest

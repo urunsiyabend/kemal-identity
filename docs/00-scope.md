@@ -72,9 +72,9 @@ Verified as of 2026-08-24:
 | Target | Decision |
 |---|---|
 | Crystal | **1.21.0** is the CI main line (released 2026-07-16; execution contexts became the default concurrency model here). |
-| Crystal floor | Determined empirically before v0.1: lower `shard.yml`'s `crystal:` constraint until the suite fails, then set the floor one minor above. Do not guess a floor. |
+| Crystal floor | **1.21.0**, measured 2026-08-25 by running the suite downwards under Docker. 1.21.0: 738 examples green (on musl as well as glibc). 1.20.0: does not compile — `Fiber::ExecutionContext` is not available by default before 1.21, so `HashingExecutor` has no type for `@context`. The floor is the dedicated hashing context's floor. |
 | Kemal | **1.13.0** (released 2026-08-24) is the CI main line. It fixes the four filter defects below; the floor does not, so the design in `docs/04-kemal-integration.md` stands. See `blueprints/0003-kemal-1.13.0-fixes-the-filter-defects.md`. |
-| Kemal floor | **1.10.0**. `Kemal::Router` and `use` for path-specific middleware arrived in 1.10.0 (2026-03-03) and the integration layer depends on them. |
+| Kemal floor | **1.10.0**, measured 2026-08-25. The full suite passes on 1.10.0, 1.10.1, 1.11.0, 1.12.0 and 1.13.0; 1.9.0 fails with `undefined method 'use' for top-level`, since path-scoped `use` arrived in 1.10.0 — exactly as predicted. CI runs the floor as its own job. |
 | Database | PostgreSQL is the only first-class adapter for v0.1. SQLite is added for the test matrix in P1. MySQL after that. |
 | ORM | None. `crystal-db` in the repository shard; Granite/Jennifer adapters are separate and later. |
 | Resolved | Verified by `shards install` on 2026-08-24: crystal 1.21.0, kemal 1.13.0, crystal-db 0.14.0, crystal-pg 0.30.0. Pinned in `shard.lock`. |

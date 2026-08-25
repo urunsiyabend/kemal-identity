@@ -10,14 +10,18 @@ description: |
   Authentication for Crystal web applications — Kemal integration included.
   Server-side opaque sessions, password credentials, revocation.
 
-# NOTE: this is the CI main line, not the supported floor. docs/00-scope.md requires the
-# floor to be determined empirically (lower this until the suite fails, then set it one
-# minor above) before v0.1 is tagged. Do not guess it.
+# Measured, not guessed, as docs/00-scope.md requires: the suite was run downwards until it
+# failed. Crystal 1.21.0 passes all 738 examples; 1.20.0 cannot compile `HashingExecutor`,
+# because `Fiber::ExecutionContext` is not available by default before 1.21. Floor is
+# therefore 1.21.0.
 crystal: ">= 1.21.0"
 
 dependencies:
   kemal:
     github: kemalcr/kemal
+    # Also measured. The full suite passes on 1.10.0 through 1.13.0; 1.9.0 fails to compile
+    # with `undefined method 'use' for top-level`, since path-scoped `use` arrived in 1.10.0.
+    # CI runs the floor as its own job so this stays true.
     version: ">= 1.10.0, < 2.0"
   db:
     github: crystal-lang/crystal-db

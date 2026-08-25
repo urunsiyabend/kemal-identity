@@ -33,8 +33,13 @@ dependencies:
     github: urunsiyabend/kemal-identity
 ```
 
-Requires Crystal 1.21.0 and Kemal 1.10.0 or later. Kemal 1.13.0 is recommended — see
-warning 2.
+Requires **Crystal 1.21.0** or later and **Kemal 1.10.0** or later. Both floors are measured
+rather than guessed — the suite is run downwards until it fails — and CI runs the Kemal floor
+as its own job. Kemal 1.13.0 is recommended; see warning 2.
+
+Crystal 1.21.0 is the floor because `HashingExecutor` needs `Fiber::ExecutionContext`, which
+is not available by default before it. That is the one feature the library cannot do without,
+and it is the one that keeps a burst of logins from slowing everything else down.
 
 ## Three warnings you have to read before using this
 

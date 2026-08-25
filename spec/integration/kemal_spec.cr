@@ -72,12 +72,33 @@ Kemal.config.setup
 # Every verb Kemal has a DSL for. There is deliberately **no** `head` route: Kemal has no
 # `head` DSL because a HEAD request is served by the GET route, and that is exactly the
 # arrangement the regression below is about.
-{% for verb in %w[get post put patch delete options query] %}
+#
+# `query` arrived in Kemal 1.13.0 and the supported floor is lower, so the QUERY routes and the
+# QUERY assertions are compiled only where the method exists. Pinning the floor to 1.13 for the
+# sake of a test would be a floor invented by the test suite rather than measured from the
+# library.
+#
+# The check asks Kemal's own `HTTP_METHODS` whether it has the verb, rather than comparing
+# version strings: it is the feature that matters, and `Kemal::VERSION` is a macro expression
+# that `compare_versions` cannot read at this point anyway.
+KEMAL_HAS_QUERY = {{ HTTP_METHODS.includes?("query") }}
+
+{% for verb in %w[get post put patch delete options] %}
   {{ verb.id }} "/public" do |env|
     env.auth.authenticated? ? "signed in as #{env.auth.require!.subject}" : "anonymous"
   end
 
   {{ verb.id }} "/admin/users" do |env|
+    "admin ok"
+  end
+{% end %}
+
+{% if HTTP_METHODS.includes?("query") %}
+  query "/public" do |env|
+    env.auth.authenticated? ? "signed in as #{env.auth.require!.subject}" : "anonymous"
+  end
+
+  query "/admin/users" do |env|
     "admin ok"
   end
 {% end %}
@@ -342,7 +363,9 @@ end
 # QUERY is in the set because Kemal 1.13.0 added it: a guard with a method allowlist would have
 # silently not covered a method that did not exist when it was written.
 describe "PathGuard runs for every method" do
-  %w[GET HEAD OPTIONS QUERY].each do |method|
+  safe_methods = KEMAL_HAS_QUERY ? %w[GET HEAD OPTIONS QUERY] : %w[GET HEAD OPTIONS]
+
+  safe_methods.each do |method|
     it "rejects an unauthenticated #{method}" do
       request(method, "/admin/users").status_code.should eq(302)
     end
@@ -471,6 +494,8 @@ describe "CSRF protection" do
   # RFC 10008 defines QUERY as safe and idempotent. Its request body makes it look like a
   # mutation; it is not one, and treating it as one would break a legitimate read.
   it "does not treat a QUERY body as a mutation" do
+    next unless KEMAL_HAS_QUERY
+
     token = log_in
     request("QUERY", "/public", cookies("kemal_identity=#{token}")).status_code.should eq(200)
   end
