@@ -3,6 +3,7 @@ require "../kemal_identity"
 
 require "./postgres/account_repository"
 require "./postgres/session_repository"
+require "./postgres/action_token_repository"
 
 # The PostgreSQL adapters.
 #
