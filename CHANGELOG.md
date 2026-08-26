@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.3.0 — 2026-08-26
+
+Compatibility release. No behaviour changes, no API removals.
+
+- **The Crystal floor drops from 1.21.0 to 1.4.0.** `HashingExecutor` is now compiled
+  conditionally: where `Fiber::ExecutionContext` is unavailable it refuses to be built rather
+  than silently hashing on the request fiber, unless the application passes `allow_inline:
+  true`. Crystal 1.21 is still recommended — the executor is the one thing worth upgrading
+  for. See `blueprints/0013-execution-contexts-are-optional.md`.
+- CI now runs Crystal 1.21.0, 1.14.0 and 1.4.0, plus the Kemal floor, so both floors are
+  tested claims rather than comments.
+- Specs no longer use `WaitGroup` (Crystal 1.13+) or Kemal's `query` DSL (Kemal 1.13+)
+  unconditionally. Both were test conveniences that had quietly set the supported floor for
+  the whole library.
+
 ## v0.2.0 — 2026-08-25
 
 First release. It contains both the v0.1 and v0.2 milestones of `docs/06-roadmap.md`: the two

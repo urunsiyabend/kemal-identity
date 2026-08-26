@@ -202,17 +202,10 @@ def it_behaves_like_an_action_token_repository(&build : Array(KemalIdentity::Acc
         repo = build.call([token.call("t#{round}", "a1", "contested-#{round}", reset, 1.hour)])
 
         winners = Atomic(Int32).new(0)
-        group = WaitGroup.new(fibers)
 
-        fibers.times do
-          spawn do
-            winners.add(1) if repo.consume(digest.call("contested-#{round}"), reset, now)
-          ensure
-            group.done
-          end
+        join_fibers(fibers) do
+          winners.add(1) if repo.consume(digest.call("contested-#{round}"), reset, now)
         end
-
-        group.wait
 
         # Two winners means one password reset link setting two passwords.
         winners.get.should eq(1)

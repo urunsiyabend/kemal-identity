@@ -23,14 +23,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The CI main line. The supported floor is deliberately absent: docs/00-scope.md
-        # requires it to be determined empirically before v0.1 is tagged, by lowering the
-        # `crystal:` constraint until the suite fails, and it has not been.
+        # The main line, plus the measured floor and a point in between. Below 1.21 the
+        # hashing executor cannot dispatch, so those jobs exercise the `allow_inline` branch —
+        # which is most of the reason to run them at all.
         #
-        # Kemal's version is not a matrix dimension because nothing here can pin it per job —
-        # shard.lock decides it, and the nightly job below overrides it with a file rather
-        # than with a matrix entry.
-        crystal: ["1.21.0"]
+        # Kemal's version is not a matrix dimension because nothing here can pin it per job:
+        # shard.lock decides it, and the two jobs below override it with a file instead.
+        crystal: ["1.21.0", "1.14.0", "1.4.0"]
 
     services:
       postgres:
@@ -58,13 +57,18 @@ jobs:
       - name: Install dependencies
         run: shards install
 
+      # Formatting and linting run on the main line only. `crystal tool format` changes its
+      # output between releases, so checking it on an old compiler tests the compiler rather
+      # than the code, and ameba needs a recent Crystal to build at all.
       - name: Format
+        if: matrix.crystal == '1.21.0'
         run: crystal tool format --check
 
       # ameba runs from master: no ameba release compiles against Crystal 1.21
       # (`undefined method 'next_string_array_token' for Crystal::Lexer`). shard.lock pins the
       # commit, so this is reproducible despite tracking a branch.
       - name: Lint
+        if: matrix.crystal == '1.21.0'
         run: shards build ameba && bin/ameba
 
       # docs/01-architecture.md: nothing outside src/kemal_identity/kemal may know that

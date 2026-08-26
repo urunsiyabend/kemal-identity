@@ -1,7 +1,7 @@
 require "spec"
-require "wait_group"
 require "../src/kemal_identity"
 
+require "./support/fiber_join"
 require "./support/or_fail"
 require "./support/outcome_matchers"
 require "./support/test_clock"

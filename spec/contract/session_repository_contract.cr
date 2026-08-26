@@ -312,19 +312,12 @@ def it_behaves_like_a_session_repository(&build : Array(KemalIdentity::Accounts:
     it "lets exactly one of two simultaneous creates win the same digest" do
       repo = build.call(one_account)
       failures = Atomic(Int32).new(0)
-      group = WaitGroup.new(2)
 
-      2.times do |index|
-        spawn do
-          repo.create(session.call("s#{index}", "a1", "contested-token", 1))
-        rescue KemalIdentity::InfrastructureError
-          failures.add(1)
-        ensure
-          group.done
-        end
+      join_fibers(2) do |index|
+        repo.create(session.call("s#{index}", "a1", "contested-token", 1))
+      rescue KemalIdentity::InfrastructureError
+        failures.add(1)
       end
-
-      group.wait
 
       # One winner, one loser. Two winners would mean two sessions sharing a token.
       failures.get.should eq(1)
@@ -333,17 +326,10 @@ def it_behaves_like_a_session_repository(&build : Array(KemalIdentity::Accounts:
 
     it "keeps simultaneous logins for one account distinct" do
       repo = build.call(one_account)
-      group = WaitGroup.new(8)
 
-      8.times do |index|
-        spawn do
-          repo.create(session.call("s#{index}", "a1", "token-#{index}", 1))
-        ensure
-          group.done
-        end
+      join_fibers(8) do |index|
+        repo.create(session.call("s#{index}", "a1", "token-#{index}", 1))
       end
-
-      group.wait
 
       8.times do |index|
         found = repo.find_by_digest(digest.call("token-#{index}"))

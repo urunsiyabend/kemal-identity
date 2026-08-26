@@ -72,7 +72,8 @@ Verified as of 2026-08-24:
 | Target | Decision |
 |---|---|
 | Crystal | **1.21.0** is the CI main line (released 2026-07-16; execution contexts became the default concurrency model here). |
-| Crystal floor | **1.21.0**, measured 2026-08-25 by running the suite downwards under Docker. 1.21.0: 738 examples green (on musl as well as glibc). 1.20.0: does not compile — `Fiber::ExecutionContext` is not available by default before 1.21, so `HashingExecutor` has no type for `@context`. The floor is the dedicated hashing context's floor. |
+| Crystal floor | **1.4.0**, measured 2026-08-25 by running the suite downwards under Docker. Green on 1.4, 1.6, 1.8, 1.10, 1.12, 1.13, 1.14, 1.16, 1.18, 1.20 and 1.21 (musl as well as glibc). 1.3.0 fails inside Kemal's own `ParamParser`, not in this shard. |
+| Crystal, recommended | **1.21.0**. `HashingExecutor` needs `Fiber::ExecutionContext`, which arrived as the default in 1.21. Below that it refuses to be built unless the application passes `allow_inline: true` and accepts that a burst of logins will slow unrelated requests — a loud absence rather than a silent one. See `blueprints/0013-execution-contexts-are-optional.md`. |
 | Kemal | **1.13.0** (released 2026-08-24) is the CI main line. It fixes the four filter defects below; the floor does not, so the design in `docs/04-kemal-integration.md` stands. See `blueprints/0003-kemal-1.13.0-fixes-the-filter-defects.md`. |
 | Kemal floor | **1.10.0**, measured 2026-08-25. The full suite passes on 1.10.0, 1.10.1, 1.11.0, 1.12.0 and 1.13.0; 1.9.0 fails with `undefined method 'use' for top-level`, since path-scoped `use` arrived in 1.10.0 — exactly as predicted. CI runs the floor as its own job. |
 | Database | PostgreSQL is the only first-class adapter for v0.1. SQLite is added for the test matrix in P1. MySQL after that. |

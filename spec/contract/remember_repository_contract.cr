@@ -247,21 +247,14 @@ def it_behaves_like_a_remember_repository(&build : Array(KemalIdentity::Sessions
 
         accepted = Atomic(Int32).new(0)
         replayed = Atomic(Int32).new(0)
-        group = WaitGroup.new(fibers)
 
-        fibers.times do
-          spawn do
-            case repo.consume(digest.call("contested-#{round}"), now)
-            in KemalIdentity::Sessions::RememberAccepted then accepted.add(1)
-            in KemalIdentity::Sessions::RememberReplayed then replayed.add(1)
-            in KemalIdentity::Sessions::RememberUnknown  then nil
-            end
-          ensure
-            group.done
+        join_fibers(fibers) do
+          case repo.consume(digest.call("contested-#{round}"), now)
+          in KemalIdentity::Sessions::RememberAccepted then accepted.add(1)
+          in KemalIdentity::Sessions::RememberReplayed then replayed.add(1)
+          in KemalIdentity::Sessions::RememberUnknown  then nil
           end
         end
-
-        group.wait
 
         # Two acceptances would mean one stolen cookie silently working twice.
         accepted.get.should eq(1)

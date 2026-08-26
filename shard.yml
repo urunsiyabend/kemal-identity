@@ -1,5 +1,5 @@
 name: kemal_identity
-version: 0.2.0
+version: 0.3.0
 
 authors:
   - Siyabend Urun <siyabend.urun@kron.com.tr>
@@ -10,11 +10,14 @@ description: |
   Authentication for Crystal web applications — Kemal integration included.
   Server-side opaque sessions, password credentials, revocation.
 
-# Measured, not guessed, as docs/00-scope.md requires: the suite was run downwards until it
-# failed. Crystal 1.21.0 passes all 738 examples; 1.20.0 cannot compile `HashingExecutor`,
-# because `Fiber::ExecutionContext` is not available by default before 1.21. Floor is
-# therefore 1.21.0.
-crystal: ">= 1.21.0"
+# Measured, not guessed, as docs/00-scope.md requires: the suite was run downwards under Docker
+# until it failed. It passes on every release from 1.4.0 to 1.21.0; 1.3.0 fails inside Kemal's
+# own `ParamParser`, not in this shard.
+#
+# Crystal 1.21 is still what you want if you can have it — `HashingExecutor` needs execution
+# contexts, and below 1.21 it refuses to be built without an explicit `allow_inline: true`.
+# That is a loud absence rather than a silent one; see blueprints/0013.
+crystal: ">= 1.4.0"
 
 dependencies:
   kemal:

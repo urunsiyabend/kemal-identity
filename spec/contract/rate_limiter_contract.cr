@@ -102,17 +102,10 @@ def it_behaves_like_a_rate_limiter(
     it "counts every attempt exactly once" do
       limiter, _ = build.call
       allowed = Atomic(Int32).new(0)
-      group = WaitGroup.new(limit * 2)
 
-      (limit * 2).times do
-        spawn do
-          allowed.add(1) if limiter.consume("contested").allowed?
-        ensure
-          group.done
-        end
+      join_fibers(limit * 2) do
+        allowed.add(1) if limiter.consume("contested").allowed?
       end
-
-      group.wait
 
       # Exactly `limit` may pass. More would mean a lost update; fewer, a double count.
       allowed.get.should eq(limit)

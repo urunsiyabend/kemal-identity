@@ -28,9 +28,20 @@ KemalIdentity.configure(
   # Dispatched to a small dedicated context: bcrypt is tens of milliseconds of pure CPU, and
   # run on the request fiber a burst of logins queues every unrelated request behind it. Two
   # threads is a ceiling on how much of the machine logins may take, not a throughput target.
-  hasher: KemalIdentity::Passwords::HashingExecutor.new(
-    KemalIdentity::Passwords::BcryptHasher.new(cost: 12), size: 2
-  ),
+  #
+  # Execution contexts arrived in Crystal 1.21, and this shard supports older ones. There, the
+  # executor refuses to be built unless `allow_inline: true` is passed, because a security
+  # property that vanishes silently on an older compiler is worse than one that is absent
+  # loudly. An application pinned below 1.21 makes that trade explicitly, exactly like this.
+  hasher: {% if Fiber.has_constant?("ExecutionContext") %}
+    KemalIdentity::Passwords::HashingExecutor.new(
+      KemalIdentity::Passwords::BcryptHasher.new(cost: 12), size: 2
+    )
+  {% else %}
+    KemalIdentity::Passwords::HashingExecutor.new(
+      KemalIdentity::Passwords::BcryptHasher.new(cost: 12), allow_inline: true
+    )
+  {% end %},
 
   # Off by default. Nothing throttles the login endpoint until an application says so.
   rate_limiter: KemalIdentity::FixedWindowRateLimiter.new(limit: 10, window: 5.minutes),
