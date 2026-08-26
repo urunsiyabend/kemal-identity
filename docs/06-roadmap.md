@@ -65,7 +65,26 @@ SQLite adapter (which also makes CI cheaper), the sweeper, structured audit even
 | Compatibility matrix | **done** — floors measured and CI-tested, `blueprints/0013` |
 | Structured audit events | partial — every service logs through `KemalIdentity::Log`; no dedicated event contract yet |
 | SQLite adapter | **done** — all four repositories, 111 contract examples, no server needed. `blueprints/0014-sqlite-adapter.md` |
-| `kemal_identity_argon2` | not started |
+| `kemal_identity_argon2` | **done** — separate shard, `urunsiyabend/kemal-identity-argon2`. Runs this project's own `Hasher` contract, required straight out of the dependency rather than copied. |
+| Split the driver dependencies | **not started** — see below |
+
+### Known issue: `pg` and `sqlite3` are hard dependencies
+
+`shard.yml` declares `db`, `pg` and `sqlite3` under `dependencies`, so **every** consumer
+installs both database drivers whether or not it uses either. Building
+`kemal_identity_argon2` — a shard whose only job is to hash passwords — pulls in PostgreSQL and
+SQLite, which is how this was noticed.
+
+Nothing in `src/kemal_identity.cr` requires them. Only `kemal_identity/postgres.cr` and
+`kemal_identity/sqlite.cr` do, and those are opt-in requires.
+
+The fix is to move `pg` and `sqlite3` to `development_dependencies` and document that an
+application using an adapter adds the matching driver to its own `shard.yml` — which it needs
+anyway, since `DB.open("postgres://…")` resolves the driver in the application's own build.
+`db` stays, because the adapters' types reference it.
+
+Deferred rather than done: it changes what consumers resolve, so it belongs in a release where
+that is the headline rather than a side effect.
 
 ## v0.4 — API authentication
 
