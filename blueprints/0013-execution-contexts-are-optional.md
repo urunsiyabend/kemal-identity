@@ -81,11 +81,11 @@ below, `Kemal.run` fails with `undefined method 'on_terminate' for Process.class
 So on 1.4 through 1.11 the suite is green and **no actual application compiles**. The floor is
 where a real application works, not where the tests happen to.
 
-This was published as `v0.3.0` claiming 1.4 before CI caught it, because the local measurement
-ran only `crystal spec`. CI ran the example build too and failed on exactly that step. The
-correction shipped as `v0.3.1`. CI now builds the example and the benchmarks on **every** matrix
-entry, so a floor can no longer be established by the test suite alone — which is the third
-time in this project that a test convenience tried to set the supported floor.
+The local measurement ran only `crystal spec`, so it reported 1.4 and the tag was cut on that
+basis. CI ran the example build as well and failed on exactly that step, before the release was
+final; the tag was withdrawn and re-cut at 1.12. CI now builds the example and the benchmarks on
+**every** matrix entry, so a floor can no longer be established by the test suite alone — which
+is the third time in this project that a test convenience tried to set the supported floor.
 
 `docs/00-scope.md`'s rule is "lower until the suite fails, then set the floor one minor above".
 Read literally against `crystal spec` it gives 1.4; read against what an application needs it
