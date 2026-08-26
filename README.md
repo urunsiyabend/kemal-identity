@@ -6,14 +6,14 @@ Server-side opaque sessions, password credentials, and revocation that actually 
 It answers *who is making this request*, gives the application a typed answer, and stops
 there.
 
-> **Released: `v0.3.0`.** Password login, revocable server-side sessions, cookie policy, Kemal
+> **Released: `v0.3.1`.** Password login, revocable server-side sessions, cookie policy, Kemal
 > guards, CSRF including the login form, rate limiting, PostgreSQL adapters, a dedicated
 > execution context for hashing, password reset, email confirmation, and remember-me with
 > theft detection. Every release blocker in `docs/05-testing.md` has a named spec.
 >
 > `v0.2.0` covered both the v0.1 and v0.2 milestones of `docs/06-roadmap.md`, which were
-> finished back to back with no release between them; `v0.3.0` widens compatibility down to
-> Crystal 1.4. Not yet: a SQLite adapter and the session
+> finished back to back with no release between them; `v0.3.1` widens compatibility down to
+> Crystal 1.12. Not yet: a SQLite adapter and the session
 > sweeper (v0.3), API tokens (v0.4). **The API is not frozen until v1.0.**
 
 ## What it is not
@@ -29,16 +29,16 @@ already answered there.
 dependencies:
   kemal_identity:
     github: urunsiyabend/kemal-identity
-    version: ~> 0.3.0
+    version: ~> 0.3.1
 ```
 
-Requires **Crystal 1.4.0** or later and **Kemal 1.10.0** or later. Both floors are measured
+Requires **Crystal 1.12.0** or later and **Kemal 1.10.0** or later. Both floors are measured
 rather than guessed — the suite is run downwards until it fails — and CI runs both floors as
 their own jobs.
 
 **Crystal 1.21 is recommended, and it is the one thing worth upgrading for.**
 `HashingExecutor` needs `Fiber::ExecutionContext`, which arrived as the default in 1.21.
-Everything else works on 1.4 onwards; below 1.21 the executor refuses to be built unless you
+Everything else works on 1.12 onwards; below 1.21 the executor refuses to be built unless you
 pass `allow_inline: true`, which hashes on the request fiber and accepts that a burst of logins
 will slow unrelated requests. It refuses rather than degrading quietly, because a security
 property that disappears silently on an older compiler is worse than one that is absent
@@ -422,7 +422,7 @@ reconstructed afterwards:
 | [0010](blueprints/0010-rate-limiting.md) | Rate limiting: consume before verifying, and key on two things |
 | [0011](blueprints/0011-action-token-atomicity.md) | Action token atomicity, and a concurrency spec that did not test it |
 | [0012](blueprints/0012-remember-me.md) | Remember-me: rotation, families, and what a replay costs |
-| [0013](blueprints/0013-execution-contexts-are-optional.md) | Execution contexts are optional, and the Crystal floor is 1.4 |
+| [0013](blueprints/0013-execution-contexts-are-optional.md) | Execution contexts are optional, and the Crystal floor is 1.12 |
 
 ## License
 

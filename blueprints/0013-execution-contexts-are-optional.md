@@ -1,4 +1,4 @@
-# 0013 — Execution contexts are optional, and the Crystal floor is 1.4
+# 0013 — Execution contexts are optional, and the Crystal floor is 1.12
 
 ## Status
 
@@ -65,13 +65,32 @@ With the executor guarded, the suite was run downwards under Docker against real
 | 1.20, 1.18, 1.16, 1.14, 1.13, 1.12, 1.10, 1.8, 1.6, 1.4 | 740 examples green |
 | 1.3.0 | fails — `can't infer the type of instance variable '@limit' of Kemal::ParamParser::LimitedBodyIO` |
 
-Two things worth noting. The failure at 1.3.0 is **inside Kemal**, not this shard, so 1.4.0 is
-where a dependency stops us rather than where our own code does. And the example count differs
-by one because the executor's spec asserts different things in each mode — dispatching on 1.21,
-refusing-without-opt-out below it.
+The example count differs by one because the executor's spec asserts different things in each
+mode: dispatching on 1.21, refusing-without-opt-out below it.
 
-`docs/00-scope.md`'s rule is "lower until the suite fails, then set the floor one minor above",
-which gives **1.4.0**. CI runs 1.21.0, 1.14.0 and 1.4.0, so the floor is a tested claim.
+### A green suite was not the floor, and CI caught it
+
+That table says 1.4. The floor is **1.12**, and the gap between the two is the useful part of
+this record.
+
+`crystal spec` never compiles `Kemal.run` — the spec application drives Kemal's handler chain
+in memory through spec-kemal and never starts a server. The example does. On Crystal 1.11 and
+below, `Kemal.run` fails with `undefined method 'on_terminate' for Process.class`:
+`Process.on_terminate` arrived in Crystal 1.12, and Kemal 1.13 uses it.
+
+So on 1.4 through 1.11 the suite is green and **no actual application compiles**. The floor is
+where a real application works, not where the tests happen to.
+
+This was published as `v0.3.0` claiming 1.4 before CI caught it, because the local measurement
+ran only `crystal spec`. CI ran the example build too and failed on exactly that step. The
+correction shipped as `v0.3.1`. CI now builds the example and the benchmarks on **every** matrix
+entry, so a floor can no longer be established by the test suite alone — which is the third
+time in this project that a test convenience tried to set the supported floor.
+
+`docs/00-scope.md`'s rule is "lower until the suite fails, then set the floor one minor above".
+Read literally against `crystal spec` it gives 1.4; read against what an application needs it
+gives **1.12**. The second reading is the one that means anything. CI runs 1.21.0, 1.14.0 and
+1.12.0.
 
 Formatting and linting run on the main line only: `crystal tool format` changes its output
 between releases, so checking it on an old compiler tests the compiler rather than the code.
@@ -80,7 +99,8 @@ between releases, so checking it on an old compiler tests the compiler rather th
 
 Both were cases of a test convenience deciding what the library supports.
 
-**`WaitGroup`** arrived in Crystal 1.13 and was used by five concurrency specs. It set the floor
+**`WaitGroup`** arrived in Crystal 1.13 and was used by five concurrency specs and the
+benchmark. It set the floor
 at 1.13 while the library itself needed nothing of the sort. Replaced with
 `spec/support/fiber_join.cr`, a buffered-channel barrier that works on every supported version.
 The concurrency specs were re-verified afterwards against the read-then-write mutation from
@@ -95,8 +115,9 @@ test failed.** Twice out of three times here, it was the test.
 
 ## Consequences
 
-- The floor drops from 1.21.0 to 1.4.0, and every release in between is tested.
+- The floor drops from 1.21.0 to 1.12.0, and 1.21.0, 1.14.0 and 1.12.0 are tested on every push.
 - Applications below 1.21 get all the authentication behaviour and must decide explicitly about
   the hashing executor. The README says so under Requirements rather than in a footnote.
+- CI builds the example and the benchmarks on every matrix entry, not only on the main line.
 - `examples/browser_session/app.cr` shows the conditional wiring, so the trade-off appears in
   the code somebody copies.

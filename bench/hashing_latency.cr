@@ -14,12 +14,12 @@
 #   3. the overhead an authenticated request adds over an anonymous one
 #   4. the write amplification `touch_interval` avoids
 
-require "wait_group"
 require "../src/kemal_identity"
 
 # The in-memory repositories live in spec/support, not src -- `src/CLAUDE.md` bans them from
 # the shipped code. They pass the same contract specs as the PostgreSQL adapters, so measuring
 # against them isolates the shard's own overhead from the database's.
+require "../spec/support/fiber_join"
 require "../spec/support/test_clock"
 require "../spec/support/memory_account_repository"
 require "../spec/support/memory_session_repository"
@@ -100,13 +100,15 @@ def probe_latency(hasher : KemalIdentity::Passwords::Hasher, concurrency : Int32
   secret = KemalIdentity::Secret.new("correct horse battery staple")
   digest = hasher.hash_secret(secret)
 
-  logins = WaitGroup.new(concurrency)
+  # The probe has to run *while* the logins are in flight, so the fibers are started here and
+  # joined after the samples are taken rather than through `join_fibers`.
+  done = Channel(Nil).new(concurrency)
 
   concurrency.times do
     spawn do
       hasher.verify(secret, digest)
     ensure
-      logins.done
+      done.send(nil)
     end
   end
 
@@ -114,7 +116,7 @@ def probe_latency(hasher : KemalIdentity::Passwords::Hasher, concurrency : Int32
   # samples say so — which is the finding, not a failure of the measurement.
   samples = Array.new(PROBE_SAMPLES) { Time.measure { sleep PROBE_INTERVAL } }
 
-  logins.wait
+  concurrency.times { done.receive }
   samples.sort!
 end
 
