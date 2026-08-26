@@ -40,11 +40,22 @@ module KemalIdentity::Sessions
     ) : Issued
       raise ArgumentError.new("cannot start a session for a disabled account") if account.disabled?
 
-      issue(
+      issued = issue(
         account: account,
         assurance: assurance,
         mfa_verified_at: mfa_verified_at,
       )
+
+      # Emitted here rather than in the Kemal layer, so an application driving the service
+      # directly gets the same trail as one going through `env.auth`. Rotation has its own
+      # event and does not also emit this one: it did not start a session so much as replace
+      # one, and an investigator wants those distinguishable.
+      Log.info &.emit(
+        "session.started",
+        subject: account.id, session: issued.record.id, assurance: assurance.to_s
+      )
+
+      issued
     end
 
     # Resolves a raw cookie value.
@@ -111,17 +122,42 @@ module KemalIdentity::Sessions
       # crash logs the user out instead of leaving them where they were.
       @sessions.revoke(record.id, @clock.now)
 
+      # `docs/02-security-model.md` names session rotation among the events that must reach the
+      # audit trail: it is how an investigator sees that a login replaced an identifier a client
+      # was already holding, which is the session fixation defence actually firing.
+      Log.info &.emit(
+        "session.rotated",
+        subject: account.id, from: record.id, to: issued.record.id,
+        assurance: issued.record.assurance.to_s
+      )
+
       issued
     end
 
     # Ends one session. Returns false if it did not exist or was already revoked.
     def revoke(session_id : String) : Bool
-      @sessions.revoke(session_id, @clock.now)
+      revoked = @sessions.revoke(session_id, @clock.now)
+
+      # Only when something changed. Revoking an already-revoked session is not an event, and
+      # logging it would put a line in the trail for every double-submitted logout.
+      Log.info &.emit("session.revoked", session: session_id) if revoked
+
+      revoked
     end
 
     # Ends every session for an account, returning how many it ended.
     def revoke_all(account_id : String, except_id : String? = nil) : Int32
-      @sessions.revoke_all_for_account(account_id, @clock.now, except_id: except_id)
+      revoked = @sessions.revoke_all_for_account(account_id, @clock.now, except_id: except_id)
+
+      # Bulk revocation is on `docs/02-security-model.md`'s list of events that must be
+      # recorded, and the count is the part that matters: "revoked 4 sessions" tells an
+      # investigator four people were signed out, which is why the repository contract insists
+      # the number counts only sessions actually ended.
+      Log.info &.emit(
+        "session.revoked_all", subject: account_id, count: revoked, spared: except_id
+      ) if revoked > 0
+
+      revoked
     end
 
     # Ends the sessions that a password change or MFA recovery must invalidate.

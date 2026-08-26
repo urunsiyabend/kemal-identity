@@ -111,7 +111,8 @@ module KemalIdentity::Kemal
       @env.response.cookies << @app.cookie.build(issued.token)
       @outcome = Authenticated.new(issued.principal)
 
-      Log.info &.emit("session.started", subject: account.id, session: issued.record.id)
+      # `Sessions::Service#start` already emitted `session.started`; logging again here would
+      # double every login in the trail.
 
       issued.principal
     end

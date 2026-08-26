@@ -326,6 +326,46 @@ KemalIdentity::Postgres::SessionRepository.new(db, accounts_table: "users")
 Both classes run the same contract specs as the in-memory doubles. That is the only thing that
 makes the doubles trustworthy.
 
+## The audit trail
+
+Every security event goes through one named `Log` source, so an application routes the whole
+trail with a single binding:
+
+```crystal
+Log.setup do |c|
+  c.bind "kemal_identity.*", :info, Log::IOBackend.new(File.new("audit.log", "a"))
+end
+```
+
+| Event | Emitted when |
+|---|---|
+| `authentication.succeeded` | a password verified |
+| `authentication.failed` | it did not — carries `reason`, including `RateLimited` |
+| `password.rehashed` | a correct password was re-hashed at current parameters |
+| `session.started` | a session was created |
+| `session.rotated` | a login replaced the session a client already held — the fixation defence firing |
+| `session.revoked` | one session ended |
+| `session.revoked_all` | bulk revocation — carries `count` |
+| `session.ended` | logout |
+| `session.rejected` | a presented cookie did not resolve — carries `reason` |
+| `remember.restored` | a remembered login was restored |
+| `remember.replay_detected` | **warning** — a spent remember-me token came back |
+| `csrf.rejected` | an unsafe request carried no valid token |
+| `password_reset.requested` | carries `known`, which the HTTP response deliberately does not |
+| `password_reset.throttled` | a reset request was rate limited |
+| `password_reset.completed` | carries `revoked_sessions` |
+| `email_confirmation.requested` / `.completed` | |
+| `sweeper.swept` / `.failed` | |
+
+Events identify an account by its **id**, never by the login that was typed: an address in a log
+line outlives the request and is read by people who never authenticated to anything. Passwords,
+tokens, cookies and digests never appear —
+`spec/security/audit_log_spec.cr` asserts it, and fails if a capture is empty rather than
+passing vacuously.
+
+`remember.replay_detected` is the one worth alerting on. It reports a suspicion rather than an
+action somebody took.
+
 ## Sweeping
 
 Expired rows are rejected on read, always — a sweeper that never runs costs you storage and

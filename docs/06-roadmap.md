@@ -63,7 +63,7 @@ SQLite adapter (which also makes CI cheaper), the sweeper, structured audit even
 |---|---|
 | The sweeper | **done** — `KemalIdentity::Sweeper`, opt-in, across all four tables |
 | Compatibility matrix | **done** — floors measured and CI-tested, `blueprints/0013` |
-| Structured audit events | partial — every service logs through `KemalIdentity::Log`; no dedicated event contract yet |
+| Structured audit events | **done** — one named `Log` source, catalogue documented in the README, and `spec/security/audit_trail_spec.cr` asserts the events `docs/02-security-model.md` requires are actually emitted. Writing that spec is what found session rotation and bulk revocation missing entirely. |
 | SQLite adapter | **done** — all four repositories, 111 contract examples, no server needed. `blueprints/0014-sqlite-adapter.md` |
 | `kemal_identity_argon2` | **done** — separate shard, `urunsiyabend/kemal-identity-argon2`. Runs this project's own `Hasher` contract, required straight out of the dependency rather than copied. |
 | Split the driver dependencies | **not started** — see below |
