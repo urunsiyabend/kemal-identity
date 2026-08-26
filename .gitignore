@@ -12,6 +12,11 @@
 *.dwarf
 /.crystal/
 
+# The example creates its own SQLite database next to itself when run from the repository.
+/kemal_identity_example.db
+/kemal_identity_example.db-wal
+/kemal_identity_example.db-shm
+
 # Local environment. DATABASE_URL and CSRF_SECRET live here, and neither belongs in git.
 .env
 .env.*

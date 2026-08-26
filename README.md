@@ -414,60 +414,23 @@ Design documents are in `docs/`. Feature blueprints and decision records are in
 
 ## Example
 
-`examples/browser_session/` is a complete first-party browser application — log in, stay
-logged in, step up, log out — wired with every handler in the right order. CI compiles it on
-every push, because an example that has drifted from the API is worse than no example.
+`examples/browser_session/` is a complete first-party browser application — log in, be
+remembered, step up, reset a forgotten password, confirm an address, log out — wired with every
+handler in the right order. CI compiles it on every matrix entry, because an example that has
+drifted from the API is worse than no example.
+
+It uses SQLite and creates its own schema, so it runs with no setup at all:
 
 ```bash
-createdb kemal_identity_example
-export DATABASE_URL=postgres://localhost/kemal_identity_example
-export CSRF_SECRET=$(head -c 32 /dev/urandom | base64)
-bin/migrate up
 crystal run examples/browser_session/app.cr
+# seeded ada@example.com / correct horse battery
+# listening on http://localhost:3000 — emails are printed here
 ```
 
-## Remember-me
-
-Not a long-lived session. Every token is single-use and rotates on presentation, and every
-token descended from one login shares a family.
-
-That is what makes theft **detectable**: after a thief uses a stolen cookie the token is spent,
-so the real user's next visit is a replay — and the reverse if the user gets there first.
-Either way somebody presents a spent token, the whole family dies, every session for the
-account ends, and the account holder is told.
-
-A restored session sits at `AssuranceLevel::Remembered`, below `Password`, and is **never**
-fresh however recently it was restored. Anything sensitive calls `require_fresh!` and gets a
-real re-authentication — possession of a cookie is not the presence of the account holder.
-
-**Known trade-off:** two requests presenting the same remember cookie at the same instant are
-indistinguishable from a theft, so a parallel prefetch against a cold session can sign a user
-out and email them a warning. Restore only when there is no live session, which narrows the
-window to a cold start. See `blueprints/0012-remember-me.md` for why the strict behaviour was
-kept and what a grace window would cost.
-
-## Design decisions
-
-`docs/` describes the intended design. `blueprints/` records the ten places the implementation
-had to diverge from it, and why — each one written when the divergence was made, not
-reconstructed afterwards:
-
-| | |
-|---|---|
-| [0001](blueprints/0001-single-outcome-union.md) | One three-variant outcome union |
-| [0002](blueprints/0002-no-micrate-dependency.md) | No micrate dependency — neither published version resolves on this stack |
-| [0003](blueprints/0003-kemal-1.13.0-fixes-the-filter-defects.md) | Kemal 1.13.0 fixes the filter defects; the design does not change |
-| [0004](blueprints/0004-hasher-over-length-behaviour.md) | An over-length secret raises when hashing, returns false when verifying |
-| [0005](blueprints/0005-one-account-identifier.md) | One account identifier |
-| [0006](blueprints/0006-session-cookie-and-expiry-boundaries.md) | Insecure-cookie opt-in, expiry boundary, what rotation restarts |
-| [0007](blueprints/0007-audit-events-omit-the-login.md) | Audit events omit the login |
-| [0008](blueprints/0008-kemal-layer-owns-the-http-seam.md) | `start!` lives on `env.auth`, not on the session service |
-| [0009](blueprints/0009-csrf-token-scheme.md) | The CSRF token scheme |
-| [0010](blueprints/0010-rate-limiting.md) | Rate limiting: consume before verifying, and key on two things |
-| [0011](blueprints/0011-action-token-atomicity.md) | Action token atomicity, and a concurrency spec that did not test it |
-| [0012](blueprints/0012-remember-me.md) | Remember-me: rotation, families, and what a replay costs |
-| [0013](blueprints/0013-execution-contexts-are-optional.md) | Execution contexts are optional, and the Crystal floor is 1.12 |
-| [0014](blueprints/0014-sqlite-adapter.md) | The SQLite adapter, and what its concurrency specs do not prove |
+The `Notifier` prints reset and confirmation links to stdout instead of sending them, which is
+the whole of what a notifier does: the shard decides *what* to say, the application decides
+*how*. Swapping the four repositories to PostgreSQL is a marked block near the top and changes
+nothing else — that is what the shared contract specs are for.
 
 ## License
 
