@@ -64,7 +64,7 @@ SQLite adapter (which also makes CI cheaper), the sweeper, structured audit even
 | The sweeper | **done** — `KemalIdentity::Sweeper`, opt-in, across all four tables |
 | Compatibility matrix | **done** — floors measured and CI-tested, `blueprints/0013` |
 | Structured audit events | partial — every service logs through `KemalIdentity::Log`; no dedicated event contract yet |
-| SQLite adapter | not started |
+| SQLite adapter | **done** — all four repositories, 111 contract examples, no server needed. `blueprints/0014-sqlite-adapter.md` |
 | `kemal_identity_argon2` | not started |
 
 ## v0.4 — API authentication

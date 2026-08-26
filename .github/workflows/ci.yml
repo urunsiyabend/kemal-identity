@@ -82,8 +82,10 @@ jobs:
       # Every example under spec/unit and spec/security must pass with no DATABASE_URL.
       # Skipping a security regression because a database is missing defeats the point of
       # having it, so this step runs deliberately without one.
-      - name: Database-free specs
-        run: crystal spec spec/unit spec/security
+      # SQLite joins these: it needs no server, so it runs on every matrix entry rather than
+      # only where a PostgreSQL service exists.
+      - name: Specs that need no server
+        run: crystal spec spec/unit spec/security spec/integration/sqlite_spec.cr
 
       - name: Migrate
         env:
@@ -190,4 +192,4 @@ jobs:
       # integration specs are the reason this job exists — they are where HEAD and QUERY are
       # asserted to reach every guard.
       - name: Specs that would notice an upstream change
-        run: crystal spec spec/unit spec/security spec/integration/kemal_spec.cr
+        run: crystal spec spec/unit spec/security spec/integration/kemal_spec.cr spec/integration/sqlite_spec.cr

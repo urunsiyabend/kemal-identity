@@ -31,6 +31,8 @@ dependencies:
     github: crystal-lang/crystal-db
   pg:
     github: will/crystal-pg
+  sqlite3:
+    github: crystal-lang/crystal-sqlite3
 
 development_dependencies:
   ameba:

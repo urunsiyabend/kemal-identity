@@ -347,6 +347,29 @@ remember-me tokens. It never removes a spent remember-me token before it expires
 the evidence of a replay, and deleting it early would make a stolen cookie look unknown rather
 than stolen.
 
+## SQLite
+
+```crystal
+require "kemal_identity/sqlite"
+
+db = DB.open("sqlite3://./identity.db?journal_mode=wal&busy_timeout=5000")
+
+KemalIdentity.configure(
+  accounts: KemalIdentity::SQLite::AccountRepository.new(db),
+  sessions: KemalIdentity::SQLite::SessionRepository.new(db),
+)
+```
+
+All four repositories, running the same contract specs as PostgreSQL and the in-memory doubles.
+Migrations live in `migrations/sqlite/` — a sibling of the PostgreSQL set, not a shared file:
+`BYTEA` versus `BLOB` and `TIMESTAMPTZ` versus `TEXT` are real differences.
+
+Use `journal_mode=wal` and a `busy_timeout`. SQLite serialises writers across the whole file,
+and without those, ordinary contention surfaces as `database is locked` rather than queueing.
+
+For a busy application behind several processes, use PostgreSQL. One writer at a time across an
+entire file is the constraint SQLite cannot be configured out of.
+
 ## Migrations
 
 Published as files you copy in, not run automatically. An auth library that mutates your
@@ -444,6 +467,7 @@ reconstructed afterwards:
 | [0011](blueprints/0011-action-token-atomicity.md) | Action token atomicity, and a concurrency spec that did not test it |
 | [0012](blueprints/0012-remember-me.md) | Remember-me: rotation, families, and what a replay costs |
 | [0013](blueprints/0013-execution-contexts-are-optional.md) | Execution contexts are optional, and the Crystal floor is 1.12 |
+| [0014](blueprints/0014-sqlite-adapter.md) | The SQLite adapter, and what its concurrency specs do not prove |
 
 ## License
 
