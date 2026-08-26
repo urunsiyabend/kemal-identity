@@ -37,5 +37,17 @@ module KemalIdentity
     # the whole token family, because either the thief or the legitimate holder is
     # replaying it.
     ReplayedToken
+
+    # A token verified cryptographically, and then a claim inside it did not hold: the
+    # wrong `iss`, an `aud` naming somebody else, a missing `exp`, a purpose that belongs
+    # to a different flow.
+    #
+    # Kept apart from `InvalidCredential` because the two mean opposite things to whoever
+    # reads the audit log. `InvalidCredential` is noise — a stale token, a typo, a scanner.
+    # This one says a *validly signed* token was presented to the wrong verifier, which is
+    # either a misconfigured client or a genuine attempt to replay a token across a trust
+    # boundary. Both are worth an alert; neither is visible in the response, which is
+    # identical for every reason.
+    InvalidClaim
   end
 end

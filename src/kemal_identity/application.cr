@@ -62,6 +62,22 @@ module KemalIdentity
     # theirs to sweep.
     getter action_tokens : Accounts::ActionTokenRepository?
     getter remember_tokens : Sessions::RememberRepository?
+    getter api_tokens : ApiTokens::Repository?
+
+    # Opaque personal access tokens, or `nil` unless an `ApiTokens::Repository` was supplied.
+    getter api : ApiTokens::Service?
+
+    # JWT validation, or `nil` — which it is unless an application passed a `JWT::Validator`.
+    # Off by default on purpose: a JWT cannot be revoked before its `exp`, and
+    # `JWT::RevocationStore` sets out what that costs.
+    getter jwt : JWT::Validator?
+
+    # What resolves an `Authorization: Bearer` header, whichever kind of token it holds.
+    #
+    # One authenticator when only one is configured, and an `AuthenticatorChain` when both are:
+    # the header does not say which kind it carries, so they are tried in turn on shape. Nil
+    # when the application accepts no bearer credential at all.
+    getter bearer : RequestAuthenticator?
 
     def initialize(
       @accounts : Accounts::Repository,
@@ -75,6 +91,9 @@ module KemalIdentity
       @csrf : CSRFConfig? = nil,
       @action_tokens : Accounts::ActionTokenRepository? = nil,
       @remember_tokens : Sessions::RememberRepository? = nil,
+      @api_tokens : ApiTokens::Repository? = nil,
+      api_token_prefix : String = ApiTokens::Service::DEFAULT_PREFIX,
+      @jwt : JWT::Validator? = nil,
       notifier : Accounts::Notifier? = nil,
       password_policy : Passwords::Policy? = nil,
       @remember_cookie : Sessions::CookieConfig = Sessions::CookieConfig.new(
@@ -95,6 +114,23 @@ module KemalIdentity
       )
 
       @password_policy = password_policy || Passwords::LengthPolicy.for(@hasher)
+
+      if api_tokens = @api_tokens
+        @api = ApiTokens::Service.new(
+          tokens: api_tokens, clock: @clock, random: @random, prefix: api_token_prefix
+        )
+      end
+
+      # Opaque tokens first: they are the credential this shard recommends, and their shape
+      # check is exact rather than a bound, so the fall-through to JWT costs a comparison.
+      candidates = [@api, @jwt].compact.map(&.as(RequestAuthenticator))
+
+      @bearer =
+        case candidates.size
+        when 0 then nil
+        when 1 then candidates.first
+        else        AuthenticatorChain.new(candidates)
+        end
 
       if remember_tokens
         @remember = Sessions::RememberService.new(
@@ -139,6 +175,16 @@ module KemalIdentity
       )
     end
 
+    # Opaque personal access tokens, or a clear error rather than a nil.
+    def api! : ApiTokens::Service
+      service = @api
+      return service if service
+
+      raise ConfigurationError.new(
+        "API tokens are not configured. Pass api_tokens: to KemalIdentity.configure."
+      )
+    end
+
     # Remember-me, or a clear error rather than a nil.
     def remember! : Sessions::RememberService
       service = @remember
@@ -179,6 +225,9 @@ module KemalIdentity
     csrf : CSRFConfig? = nil,
     action_tokens : Accounts::ActionTokenRepository? = nil,
     remember_tokens : Sessions::RememberRepository? = nil,
+    api_tokens : ApiTokens::Repository? = nil,
+    api_token_prefix : String = ApiTokens::Service::DEFAULT_PREFIX,
+    jwt : JWT::Validator? = nil,
     notifier : Accounts::Notifier? = nil,
     password_policy : Passwords::Policy? = nil,
     remember_cookie : Sessions::CookieConfig = Sessions::CookieConfig.new(
@@ -200,6 +249,9 @@ module KemalIdentity
       csrf: csrf,
       action_tokens: action_tokens,
       remember_tokens: remember_tokens,
+      api_tokens: api_tokens,
+      jwt: jwt,
+      api_token_prefix: api_token_prefix,
       notifier: notifier,
       password_policy: password_policy,
       remember_cookie: remember_cookie,

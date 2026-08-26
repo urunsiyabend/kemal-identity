@@ -30,6 +30,7 @@ module KemalIdentity::Kemal
 
       return call_next(env) unless config.protects?(env.request.method)
       return call_next(env) if config.exempt?(env.request.path)
+      return call_next(env) if bearer_only?(env, config)
 
       unless valid?(env, config)
         Log.info &.emit("csrf.rejected", path: env.request.path, method: env.request.method)
@@ -37,6 +38,33 @@ module KemalIdentity::Kemal
       end
 
       call_next(env)
+    end
+
+    # Whether this request is authenticated by a bearer token **and nothing else**.
+    #
+    # This is the exemption `docs/02-security-model.md` reserves for v0.4, stated exactly as it
+    # is written there: "the exemption applies only to endpoints that accept *nothing but* an
+    # `Authorization` header."
+    #
+    # CSRF exists because a browser attaches cookies to cross-site requests on its own. It does
+    # not attach an `Authorization` header on its own — an attacker's page cannot make the
+    # victim's browser send one — so a request carrying only a token is not forgeable in that
+    # way.
+    #
+    # The `and nothing else` is the load-bearing half. A request presenting **both** a session
+    # cookie and a token is still protected: the cookie alone would authenticate it, so an
+    # attacker who can trigger the request cross-site does not need the token at all. Content
+    # type is not a defence either, and neither is calling the endpoint an API.
+    private def bearer_only?(env : HTTP::Server::Context, config : CSRFConfig) : Bool
+      return false unless @app.try(&.bearer) || KemalIdentity.app.bearer
+
+      return false if env.request.headers["Authorization"]?.nil?
+
+      # The session cookie as *presented*, not the resolved outcome: a request carrying an
+      # expired cookie still carries a cookie, and exempting it would let one expire its way out
+      # of CSRF protection.
+      session_cookie = (@app || KemalIdentity.app).cookie
+      session_cookie.extract(env.request.cookies).nil?
     end
 
     private def valid?(env : HTTP::Server::Context, config : CSRFConfig) : Bool

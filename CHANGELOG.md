@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.4.0 — 2026-08-26
+
+API authentication: bearer tokens as a `RequestAuthenticator`, in the order
+`docs/06-roadmap.md` set out — opaque personal access tokens first, JWT second and off by
+default. Additive; nothing was removed or changed in behaviour.
+
+### Personal access tokens
+
+- `ApiTokens::Service`, with digest-only storage, revocation that takes effect on the very next
+  request, an optional expiry (`nil` really does mean never, and the sweeper never touches
+  one), and a `last_used_at` throttled to one write per five minutes.
+- A fixed, searchable `ki_` prefix, configurable per application, so a secret scanner can
+  recognise a leaked credential in a commit or a paste and say whose it is.
+- `ApiTokens::Repository` with PostgreSQL and SQLite adapters and an in-memory double, all
+  running the same 28-example contract. New table `auth_api_tokens` in both dialects.
+
+### JWT validation
+
+- `JWT::Validator`, off unless an application passes one. HS256/HS384/HS512, an algorithm
+  allow-list, `kid` rotation, and required `iss`, `aud`, `exp` and `purpose`.
+- `alg: none` is unrepresentable: no `Algorithm` can express it, the allow-list refuses the
+  string at boot, and the header's `alg` is compared against the *key's* algorithm — which is
+  also what defeats algorithm confusion, since the key names the algorithm and the token
+  selects nothing.
+- An unknown `kid` is rejected rather than retried against the ring, so a compromised key can
+  actually be withdrawn. A token naming no `kid` resolves only when the ring holds one key.
+- Clock skew is bounded at five minutes, and `max_lifetime` (one hour by default) rejects a
+  token claiming to be valid for longer.
+- **The revocation trade-off is documented rather than hidden.** A stateless JWT cannot be
+  revoked before its `exp`; the two honest answers are a very short lifetime or a `jti`
+  denylist that costs the statelessness. `JWT::RevocationStore` says so in full, and the
+  optional `accounts:` argument is the same admission about disabled accounts.
+
+### Everything else
+
+- `AssuranceLevel::ApiToken = 15`, between `Remembered` and `Password`. Never fresh, so
+  `require_fresh!` refuses a token-bearing request outright — an automated client cannot
+  re-authenticate interactively. No persisted enum value was renumbered.
+- `AuthenticatorChain` resolves one `Authorization: Bearer` header against several
+  authenticators, routing on shape and stopping at any credential that was recognised and then
+  failed on its merits.
+- Neither bearer credential compares `auth_version`: a password change must not silently break
+  a deploy key whose holder is a machine with no way to notice.
+- The CSRF bearer exemption keys on the session cookie **as presented**, so a request carrying
+  an expired or garbage cookie cannot expire its way out of CSRF protection.
+- New `FailureReason::InvalidClaim`, for a token that verified cryptographically and then
+  failed on a claim — a signal worth alerting on, and kept out of the response like every other
+  reason.
+- `Sweeper` now also drops expired API tokens and spent `jti` entries.
+- `blueprints/0015-bearer-credentials.md` records the decisions, including why there are no
+  scopes and which JWT defences are deliberately redundant.
+
 ## v0.3.0 — 2026-08-26
 
 Compatibility release. No behaviour changes, no API removals.

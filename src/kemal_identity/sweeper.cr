@@ -5,17 +5,22 @@ module KemalIdentity
     getter revoked_sessions : Int32
     getter action_tokens : Int32
     getter remember_tokens : Int32
+    getter api_tokens : Int32
+    getter jwt_revocations : Int32
 
     def initialize(
       @expired_sessions : Int32 = 0,
       @revoked_sessions : Int32 = 0,
       @action_tokens : Int32 = 0,
       @remember_tokens : Int32 = 0,
+      @api_tokens : Int32 = 0,
+      @jwt_revocations : Int32 = 0,
     )
     end
 
     def total : Int32
-      @expired_sessions + @revoked_sessions + @action_tokens + @remember_tokens
+      @expired_sessions + @revoked_sessions + @action_tokens + @remember_tokens +
+        @api_tokens + @jwt_revocations
     end
 
     def empty? : Bool
@@ -99,6 +104,8 @@ module KemalIdentity
         revoked_sessions: @app.session_repository.delete_revoked_before(now - @revoked_retention),
         action_tokens: sweep_action_tokens(now),
         remember_tokens: sweep_remember_tokens(now),
+        api_tokens: sweep_api_tokens(now),
+        jwt_revocations: sweep_jwt_revocations(now),
       )
 
       unless result.empty?
@@ -107,7 +114,9 @@ module KemalIdentity
           expired_sessions: result.expired_sessions,
           revoked_sessions: result.revoked_sessions,
           action_tokens: result.action_tokens,
-          remember_tokens: result.remember_tokens
+          remember_tokens: result.remember_tokens,
+          api_tokens: result.api_tokens,
+          jwt_revocations: result.jwt_revocations
         )
       end
 
@@ -162,6 +171,21 @@ module KemalIdentity
     private def sweep_remember_tokens(now : Time) : Int32
       tokens = @app.remember_tokens
       tokens.nil? ? 0 : tokens.delete_expired(now)
+    end
+
+    # A token issued without an expiry is never swept — the repository refuses to touch one, so
+    # a deploy key survives every sweep.
+    private def sweep_api_tokens(now : Time) : Int32
+      tokens = @app.api_tokens
+      tokens.nil? ? 0 : tokens.delete_expired(now)
+    end
+
+    # A revoked `jti` only has to be remembered until the token carrying it expires: past that
+    # the signature fails on `exp` anyway, so the entry proves nothing. This is what keeps the
+    # denylist bounded by tokens revoked within one lifetime rather than by tokens ever issued.
+    private def sweep_jwt_revocations(now : Time) : Int32
+      store = @app.jwt.try(&.revocations)
+      store.nil? ? 0 : store.delete_expired(now)
     end
   end
 end

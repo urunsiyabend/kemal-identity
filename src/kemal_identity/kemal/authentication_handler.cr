@@ -53,11 +53,15 @@ module KemalIdentity::Kemal
         Log.debug &.emit("session.rejected", reason: outcome.reason.to_s)
         env.auth.clear_cookie!
       when Anonymous
-        # No session cookie at all: the only state from which a remembered login is restored.
-        # Doing it here rather than on a *failed* cookie keeps logout unambiguous and narrows
-        # the window in which parallel requests both present the remember token — which reads
-        # as theft. See `blueprints/0012-remember-me.md`.
-        env.auth.restore_remembered!
+        # No session cookie at all. Two credentials can still identify this request, and the
+        # order matters: a client presenting `Authorization` is an API client and has no
+        # remember-me cookie to restore, while a browser has the reverse.
+        unless env.auth.authenticate_bearer!
+          # Restoring a remembered login happens here rather than on a *failed* cookie: it keeps
+          # logout unambiguous and narrows the window in which parallel requests both present
+          # the remember token, which reads as theft. See `blueprints/0012-remember-me.md`.
+          env.auth.restore_remembered!
+        end
       end
 
       call_next(env)

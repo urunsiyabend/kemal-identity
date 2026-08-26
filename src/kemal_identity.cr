@@ -13,6 +13,8 @@ require "./kemal_identity/core/secret"
 require "./kemal_identity/core/opaque_token"
 require "./kemal_identity/core/principal"
 require "./kemal_identity/core/outcome"
+require "./kemal_identity/core/request_authenticator"
+require "./kemal_identity/core/authenticator_chain"
 
 require "./kemal_identity/passwords/hasher"
 require "./kemal_identity/passwords/bcrypt_hasher"
@@ -38,6 +40,15 @@ require "./kemal_identity/sessions/remember_service"
 
 require "./kemal_identity/passwords/policy"
 require "./kemal_identity/passwords/authenticator"
+require "./kemal_identity/api_tokens/token"
+require "./kemal_identity/api_tokens/repository"
+require "./kemal_identity/api_tokens/service"
+
+require "./kemal_identity/jwt/algorithm"
+require "./kemal_identity/jwt/key"
+require "./kemal_identity/jwt/revocation_store"
+require "./kemal_identity/jwt/validator"
+
 require "./kemal_identity/accounts/service"
 
 require "./kemal_identity/rate_limiter"

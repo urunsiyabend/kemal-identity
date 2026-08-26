@@ -35,21 +35,32 @@ Spec.after_suite do
   ["-wal", "-shm", ""].each { |suffix| FileUtils.rm_rf("#{SQLITE_PATH}#{suffix}") }
 end
 
+# Splits a migration's Up section into statements.
+#
+# Comments are stripped **before** splitting on `;`, because a semicolon inside a comment
+# otherwise cuts a statement in half — which it did, producing `incomplete input` from SQLite
+# for a `CREATE TABLE` whose column comment happened to contain one. Stripping is line-based
+# and would also cut a `--` inside a string literal; no migration here has one, and a real
+# application should use its own migration tool rather than this.
+private def up_statements(path : String) : Array(String)
+  body = File.read(path).split("-- +micrate Down").first.split("-- +micrate Up").last
+
+  body
+    .lines
+    .map(&.sub(/--.*$/, ""))
+    .join('\n')
+    .split(';')
+    .reject(&.strip.empty?)
+end
+
 private def migrate! : Nil
   Dir.glob(File.join(__DIR__, "..", "..", "migrations", "sqlite", "*.sql")).sort.each do |path|
-    # Plain string splits: Crystal's `m` regex flag means "`.` matches newline", not "`^`
-    # matches line starts", so an anchored pattern would not do what it looks like it does.
-    up = File.read(path).split("-- +micrate Down").first.split("-- +micrate Up").last
-
-    up.split(';').each do |statement|
-      next if statement.strip.empty?
-      DATABASE.exec(statement)
-    end
+    up_statements(path).each { |statement| DATABASE.exec(statement) }
   end
 end
 
 private def reset_schema! : Nil
-  %w[auth_sessions auth_action_tokens auth_remember_tokens auth_accounts].each do |table|
+  %w[auth_sessions auth_action_tokens auth_remember_tokens auth_api_tokens auth_accounts].each do |table|
     DATABASE.exec("DELETE FROM #{table}")
   end
 end
@@ -78,6 +89,14 @@ describe KemalIdentity::SQLite::AccountRepository do
     reset_schema!
     accounts.each { |account| insert(account) }
     KemalIdentity::SQLite::AccountRepository.new(DATABASE)
+  end
+end
+
+describe KemalIdentity::SQLite::ApiTokenRepository do
+  it_behaves_like_an_api_token_repository do |accounts|
+    reset_schema!
+    accounts.each { |account| insert(account) }
+    KemalIdentity::SQLite::ApiTokenRepository.new(DATABASE)
   end
 end
 

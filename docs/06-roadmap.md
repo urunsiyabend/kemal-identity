@@ -88,17 +88,46 @@ that is the headline rather than a side effect.
 
 ## v0.4 — API authentication
 
-Bearer tokens as a `RequestAuthenticator`. Opaque personal access tokens first, since they
-reuse the existing digest-and-revoke machinery and carry none of JWT's revocation problem.
+**Released as `v0.4.0` on 2026-08-26.** Bearer tokens as a `RequestAuthenticator`, in the
+order this section originally set out: opaque personal access tokens first, JWT second and
+off by default. `blueprints/0015-bearer-credentials.md` records the decisions.
 
-JWT validation second, off by default, with a strict configuration: an algorithm
-allow-list, `none` never accepted, required and verified `iss` and `aud`, mandatory `exp`,
-bounded clock skew, key rotation via `kid`, and token-purpose separation.
+| Deliverable | State |
+|---|---|
+| `RequestAuthenticator` contract, `AssuranceLevel::ApiToken` | **done** — 15, between `Remembered` and `Password`, and never fresh, so `require_fresh!` refuses a token-bearing request outright |
+| Opaque personal access tokens | **done** — `ApiTokens::Service`, digest-only storage, revocable on the next request, throttled `last_used_at`, `ki_` scanner prefix. PostgreSQL and SQLite adapters, both running the same 28-example contract |
+| JWT validation | **done** — `JWT::Validator`, off unless an application passes one. HS256/384/512, algorithm allow-list, `none` unrepresentable, `kid` rotation, required `iss`/`aud`/`exp`/`purpose`, bounded skew, a lifetime ceiling |
+| One header, two credentials | **done** — `AuthenticatorChain` routes on shape and stops at any credential that was recognised and then failed |
+| CSRF exemption for bearer-only requests | **done** — keyed on the session cookie *as presented*, so an expired cookie cannot expire its way out of CSRF protection |
+| The revocation trade-off, documented | **done** — `JWT::RevocationStore` |
 
-The revocation trade-off gets documented rather than hidden. A stateless JWT cannot be
-revoked before `exp` without server-side state; the two honest options are a very short TTL
-or a `jti` revocation store, and the second one means it is not stateless any more. Say so
-in the API docs.
+Scopes are deliberately absent: a token authenticates, it does not authorize. That belongs
+with the roles and permissions in v0.6, and `auth_api_tokens` has no scope column to
+half-enforce in the meantime.
+
+### The JWT revocation trade-off
+
+Stated here as well as in the API docs, because it is the reason JWT is second and off.
+
+**A stateless JWT cannot be revoked before its `exp`.** The signature is the entire proof, the
+server keeps nothing, and there is therefore nothing to change when someone clicks "sign out
+everywhere" or an employee leaves. There are exactly two honest answers:
+
+1. **A very short lifetime.** Keep `exp` minutes away and accept that a stolen token works
+   until then. `Validator#max_lifetime` enforces this and defaults to one hour. The property
+   you get is bounded exposure, not revocation.
+2. **A `jti` denylist.** `JWT::RevocationStore` records the id of every token that must stop
+   working, and the validator checks it on every request. That is a read from shared storage
+   on the hot path — precisely the thing a JWT was chosen to avoid. It buys real revocation
+   and it costs the statelessness. Do not go on calling the result stateless.
+
+If you are reaching for option 2, compare it against `ApiTokens::Service` first: that already
+reads from storage on every request and gives revocation, an expiry you can extend, and a
+`last_used_at` — for the same single lookup. A JWT plus a revocation store is usually the
+worse half of both designs.
+
+The optional `accounts:` argument is the same admission in miniature: without it, a disabled
+account keeps authenticating until `exp`.
 
 ## v0.5 — Federated identity and MFA
 

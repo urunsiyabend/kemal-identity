@@ -5,6 +5,7 @@ require "./postgres/account_repository"
 require "./postgres/session_repository"
 require "./postgres/action_token_repository"
 require "./postgres/remember_repository"
+require "./postgres/api_token_repository"
 
 # The PostgreSQL adapters.
 #

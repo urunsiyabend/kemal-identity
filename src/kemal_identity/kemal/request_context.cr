@@ -155,6 +155,39 @@ module KemalIdentity::Kemal
       revoked
     end
 
+    # Whether this request presented a bearer token that resolved.
+    #
+    # Returns false when there is no `Authorization: Bearer` header at all, so the caller can go
+    # on to try another credential — and **true** when there was one that failed, because a
+    # client that sent a token is asking to be authenticated by it. Falling through to a cookie
+    # after a rejected token would let a stale credential mask a revoked one.
+    protected def authenticate_bearer! : Bool
+      service = @app.bearer
+      return false if service.nil?
+
+      credential = bearer_credential
+      return false if credential.nil?
+
+      @outcome = service.authenticate(credential)
+      true
+    end
+
+    # The value after the `Bearer` scheme, or nil.
+    #
+    # The scheme name is matched case-insensitively, as RFC 7235 requires — `bearer`, `Bearer`
+    # and `BEARER` are the same scheme, and a client that picks the wrong case is not an
+    # attacker.
+    private def bearer_credential : String?
+      header = @env.request.headers["Authorization"]?
+      return if header.nil?
+
+      scheme, _, credential = header.partition(' ')
+      return unless scheme.compare("Bearer", case_insensitive: true).zero?
+
+      credential = credential.strip
+      credential.empty? ? nil : credential
+    end
+
     # Attempts to restore a remembered login. Called by `AuthenticationHandler`, and only when
     # the request presented no session cookie at all.
     #

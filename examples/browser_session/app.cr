@@ -28,12 +28,20 @@ database = DB.open("sqlite3://#{DB_PATH}?journal_mode=wal&busy_timeout=5000")
 # that will mutate it at the wrong moment. An example gets to be its own migration tool; a real
 # application should not copy this part.
 Dir.glob(File.join(__DIR__, "..", "..", "migrations", "sqlite", "*.sql")).sort.each do |path|
-  up = File.read(path).split("-- +micrate Down").first.split("-- +micrate Up").last
+  body = File.read(path).split("-- +micrate Down").first.split("-- +micrate Up").last
 
-  up.split(';').each do |statement|
-    next if statement.strip.empty?
-    database.exec(statement) rescue nil # already applied
-  end
+  # Comments are stripped before splitting on `;`. A semicolon inside a comment otherwise cuts a
+  # statement in half, which SQLite reports as `incomplete input` — a confusing way to discover
+  # that a column comment contained one.
+  body
+    .lines
+    .map(&.sub(/--.*$/, ""))
+    .join('\n')
+    .split(';')
+    .each do |statement|
+      next if statement.strip.empty?
+      database.exec(statement) rescue nil # already applied
+    end
 end
 
 # ---------------------------------------------------------------------------------------

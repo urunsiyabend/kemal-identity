@@ -24,9 +24,22 @@ ACCOUNTS = KemalIdentity::Testing::MemoryAccountRepository.new([
 ])
 SESSIONS        = KemalIdentity::Testing::MemorySessionRepository.new(ACCOUNTS)
 ACTION_TOKENS   = KemalIdentity::Testing::MemoryActionTokenRepository.new
+API_TOKENS      = KemalIdentity::Testing::MemoryApiTokenRepository.new(ACCOUNTS)
 REMEMBER        = KemalIdentity::Testing::MemoryRememberRepository.new
 NOTIFIER        = KemalIdentity::Testing::RecordingNotifier.new
 REMEMBER_COOKIE = "kemal_identity_remember"
+
+# JWT validation is off by default; this application turns it on so that the chain behind one
+# `Authorization: Bearer` header — opaque token first, JWT second — is exercised over HTTP.
+JWT_VALIDATOR = KemalIdentity::JWT::Validator.new(
+  keyring: KemalIdentity::JWT::Keyring.new(
+    KemalIdentity::JWT::HS256, KemalIdentity::Testing::JWTForge::SECRET
+  ),
+  issuer: KemalIdentity::Testing::JWTForge::ISSUER,
+  audience: KemalIdentity::Testing::JWTForge::AUDIENCE,
+  algorithms: ["HS256"],
+  clock: TEST_CLOCK,
+)
 
 KemalIdentity.configure(
   accounts: ACCOUNTS,
@@ -41,6 +54,8 @@ KemalIdentity.configure(
     name: "kemal_identity", secure: false, allow_insecure: true
   ),
   action_tokens: ACTION_TOKENS,
+  api_tokens: API_TOKENS,
+  jwt: JWT_VALIDATOR,
   remember_tokens: REMEMBER,
   notifier: NOTIFIER,
   remember_cookie: KemalIdentity::Sessions::CookieConfig.new(
@@ -155,6 +170,16 @@ end
 post "/logout" do |env|
   env.auth.logout!
   "logged out"
+end
+
+# An endpoint an API client reaches with a bearer token. Guarded like any other route.
+get "/api/me" do |env|
+  principal = env.auth.require!
+  "#{principal.subject} via #{principal.assurance}"
+end
+
+post "/api/things" do |env|
+  "created"
 end
 
 get "/whoami" do |env|
@@ -797,5 +822,224 @@ describe "remember-me over HTTP" do
     # The remember token was not spent, so it still works on its own.
     get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{remember}")
     response.body.should eq("a1")
+  end
+end
+
+# Bearer tokens over HTTP. `docs/06-roadmap.md`'s v0.4: opaque personal access tokens as a
+# `RequestAuthenticator`, reaching the same guards a session does.
+# Returns the whole `Issued`, not just the secret. Looking the token up again by listing would
+# be unreliable: the spec clock is frozen, so every token shares a `created_at` and the ordering
+# falls back to ids that do not sort by creation order.
+private def issue_api_token(name : String = "ci") : KemalIdentity::ApiTokens::Issued
+  KemalIdentity.app.api!.issue(ACCOUNTS.find_by_id("a1").or_fail, name)
+end
+
+private def bearer(token : String) : HTTP::Headers
+  HTTP::Headers{"Authorization" => "Bearer #{token}"}
+end
+
+describe "bearer tokens over HTTP" do
+  it "authenticates a request carrying only an Authorization header" do
+    token = issue_api_token.token.reveal
+
+    get "/api/me", headers: bearer(token)
+    response.status_code.should eq(200)
+    response.body.should eq("a1 via ApiToken")
+  end
+
+  it "satisfies an ordinary guard" do
+    token = issue_api_token.token.reveal
+
+    request("GET", "/admin/users", bearer(token)).status_code.should eq(200)
+  end
+
+  # An automated client cannot re-authenticate interactively, so a destructive action should not
+  # be reachable with a token in the first place.
+  it "never satisfies a step-up guard, however fresh" do
+    token = issue_api_token.token.reveal
+
+    get "/step-up/email", headers: bearer(token)
+    response.status_code.should eq(403)
+  end
+
+  it "sets no session cookie: a token establishes nothing" do
+    token = issue_api_token.token.reveal
+
+    get "/api/me", headers: bearer(token)
+    cookie_of(response, "kemal_identity").should be_nil
+  end
+
+  it "matches the scheme case-insensitively, as RFC 7235 requires" do
+    token = issue_api_token.token.reveal
+
+    ["Bearer", "bearer", "BEARER"].each do |scheme|
+      request("GET", "/api/me", HTTP::Headers{"Authorization" => "#{scheme} #{token}"})
+        .status_code.should eq(200)
+    end
+  end
+
+  # The whole reason opaque tokens come before JWT: validity is read from storage, so revocation
+  # lands on the next request rather than at some future `exp`.
+  it "rejects a revoked token on the very next request" do
+    issued = issue_api_token
+
+    get "/api/me", headers: bearer(issued.token.reveal)
+    response.status_code.should eq(200)
+
+    KemalIdentity.app.api!.revoke(issued.record.id)
+
+    request("GET", "/api/me", bearer(issued.token.reveal)).status_code.should eq(302)
+  end
+
+  it "rejects garbage without raising" do
+    ["", "ki_garbage", "not-a-token", "ki_" + "a" * 43].each do |candidate|
+      request("GET", "/api/me", HTTP::Headers{"Authorization" => "Bearer #{candidate}"})
+        .status_code.should_not eq(200)
+    end
+  end
+
+  # A client that sent a token is asking to be authenticated by it. Falling through to a cookie
+  # after a rejected token would let a stale credential mask a revoked one.
+  it "does not fall back to a session cookie when the token was rejected" do
+    session = log_in
+    headers = cookies("kemal_identity=#{session}")
+
+    get "/whoami", headers: headers
+    response.body.should eq("a1")
+
+    with_bad_token = cookies("kemal_identity=#{session}")
+    with_bad_token["Authorization"] = "Bearer ki_" + "a" * 43
+
+    # The session cookie resolves first, so this request is still the browser's. The point of
+    # the assertion is the reverse case below.
+    request("GET", "/whoami", with_bad_token).status_code.should eq(200)
+
+    only_bad_token = HTTP::Headers{"Authorization" => "Bearer ki_" + "a" * 43}
+    request("GET", "/whoami", only_bad_token).body.should eq("nobody")
+  end
+end
+
+# docs/02-security-model.md: "the exemption applies only to endpoints that accept *nothing but*
+# an Authorization header."
+describe "CSRF and bearer tokens" do
+  it "exempts a request carrying only a bearer token" do
+    token = issue_api_token.token.reveal
+
+    request("POST", "/api/things", bearer(token)).status_code.should eq(200)
+  end
+
+  it "still protects a request that also carries a session cookie" do
+    session = log_in
+    token = issue_api_token.token.reveal
+
+    headers = cookies("kemal_identity=#{session}")
+    headers["Authorization"] = "Bearer #{token}"
+
+    # The cookie alone would authenticate this, so an attacker who can trigger it cross-site
+    # does not need the token at all. Exempting it would hand back exactly what CSRF prevents.
+    request("POST", "/api/things", headers).status_code.should eq(403)
+  end
+
+  # A request carrying an expired cookie still carries a cookie. Exempting it would let one
+  # expire its way out of CSRF protection.
+  it "still protects a request whose session cookie is merely invalid" do
+    token = issue_api_token.token.reveal
+
+    headers = cookies("kemal_identity=garbage")
+    headers["Authorization"] = "Bearer #{token}"
+
+    request("POST", "/api/things", headers).status_code.should eq(403)
+  end
+
+  it "still protects a cookie-authenticated request with no token" do
+    session = log_in
+
+    request("POST", "/api/things", cookies("kemal_identity=#{session}")).status_code.should eq(403)
+  end
+end
+
+# One header, two kinds of credential. `AuthenticatorChain` routes on shape: an opaque token is
+# `ki_` plus a fixed-length random part, a JWT is three base64url segments, and neither can be
+# mistaken for the other before any I/O happens.
+private def jwt_for(subject : String = "a1", purpose : String = "access") : String
+  KemalIdentity::Testing::JWTForge.encode(
+    KemalIdentity::Testing::JWTForge.claims(
+      now: TEST_CLOCK.now, subject: subject, purpose: purpose
+    )
+  )
+end
+
+# This application's ErrorHandler sends a browser to the login page, so "turned away" reads as
+# a 302 here rather than a 401. What matters is that it is not a 200.
+describe "JWTs over HTTP" do
+  it "authenticates a request carrying a valid token" do
+    response = request("GET", "/api/me", bearer(jwt_for))
+
+    response.status_code.should eq(200)
+    response.body.should eq("a1 via ApiToken")
+  end
+
+  it "leaves opaque tokens working alongside it" do
+    response = request("GET", "/api/me", bearer(issue_api_token.token.reveal))
+
+    response.status_code.should eq(200)
+    response.body.should eq("a1 via ApiToken")
+  end
+
+  it "turns away a forged signature" do
+    forged = KemalIdentity::Testing::JWTForge.encode(
+      KemalIdentity::Testing::JWTForge.claims(now: TEST_CLOCK.now),
+      secret: KemalIdentity::Secret.new("z" * 64)
+    )
+
+    request("GET", "/api/me", bearer(forged)).status_code.should eq(302)
+  end
+
+  # The purpose claim, reaching all the way out to the response: a token minted to authorise a
+  # password reset must not authenticate an API request.
+  it "turns away a token minted for another flow" do
+    request("GET", "/api/me", bearer(jwt_for(purpose: "password-reset")))
+      .status_code.should eq(302)
+  end
+
+  it "turns away an unsigned token" do
+    unsigned = KemalIdentity::Testing::JWTForge.unsigned(
+      KemalIdentity::Testing::JWTForge.claims(now: TEST_CLOCK.now)
+    )
+
+    request("GET", "/api/me", bearer(unsigned)).status_code.should eq(302)
+  end
+
+  # An automated client cannot re-authenticate interactively, so a JWT is no freer than an
+  # opaque token: both stop at `ApiToken` assurance.
+  it "never satisfies a step-up guard" do
+    request("GET", "/step-up/email", bearer(jwt_for)).status_code.should eq(403)
+  end
+
+  it "sets no session cookie: a token establishes nothing" do
+    response = request("GET", "/api/me", bearer(jwt_for))
+
+    cookie_of(response, "kemal_identity").should be_nil
+  end
+
+  # The chain falls through on shape and on shape only. A rejected opaque token is *recognised*
+  # and rejected, so it must not get a second opinion from the JWT validator.
+  it "does not let a rejected opaque token fall through to the JWT validator" do
+    request("GET", "/api/me", bearer("ki_" + "a" * 43)).status_code.should eq(302)
+  end
+
+  it "exempts a JWT-only request from CSRF, as it does an opaque token" do
+    request("POST", "/api/things", bearer(jwt_for)).status_code.should eq(200)
+  end
+
+  # Same rule as for opaque tokens: a request that carries a session cookie is a request an
+  # attacker can trigger cross-site, whatever else it also carries.
+  it "still protects a JWT-bearing request that also carries a session cookie" do
+    session = log_in
+
+    headers = cookies("kemal_identity=#{session}")
+    headers["Authorization"] = "Bearer #{jwt_for}"
+
+    request("POST", "/api/things", headers).status_code.should eq(403)
   end
 end

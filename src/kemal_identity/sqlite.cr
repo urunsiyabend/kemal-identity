@@ -5,6 +5,7 @@ require "./sqlite/account_repository"
 require "./sqlite/session_repository"
 require "./sqlite/action_token_repository"
 require "./sqlite/remember_repository"
+require "./sqlite/api_token_repository"
 
 # The SQLite adapters.
 #

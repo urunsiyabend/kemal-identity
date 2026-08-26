@@ -296,6 +296,150 @@ Three things worth knowing:
   in a multipart form requires parsing the body, and on those versions cleanup only ran if the
   request reached the route handler. The header path avoids it; upgrading fixes it.
 
+## API authentication
+
+Two bearer credentials, one `Authorization` header. Both are `RequestAuthenticator`s, so
+`env.auth.require!`, `PathGuard` and `require_assurance!` work unchanged — the whole point of
+the `Outcome` union is that the credential type stops mattering once it has been resolved.
+
+Both authenticate at `AssuranceLevel::ApiToken`, which is **never fresh**. `require_fresh!`
+therefore refuses a token-bearing request outright, at any age. That is the intended answer: an
+automated client cannot re-authenticate interactively, so a destructive account action should
+not be reachable with a token in the first place.
+
+Neither compares `auth_version`, unlike a session. A password change must not silently break a
+deploy key whose holder is a machine with no way to notice. Revoking is explicit.
+
+### Personal access tokens
+
+The credential this shard recommends. Digest-only storage, revocable on the very next request,
+and no revocation problem to document.
+
+```crystal
+KemalIdentity.configure(
+  accounts:   accounts,
+  sessions:   sessions,
+  api_tokens: KemalIdentity::Postgres::ApiTokenRepository.new(db),
+  api_token_prefix: "acme_",   # your own, so a scanner can tell whose token it found
+)
+
+issued = KemalIdentity.app.api!.issue(account, "ci deploy key", expires_at: 90.days.from_now)
+issued.token.reveal   # shown once, never again — only the SHA-256 digest is stored
+```
+
+```crystal
+get "/api/me" do |env|
+  env.auth.require!.subject
+end
+```
+
+- The `acme_` prefix is not decoration. A fixed, searchable prefix is what lets a secret
+  scanner recognise a leaked credential in a commit or a paste and say *whose* it is.
+- `expires_at: nil` means it never expires — a real choice for a deploy key and a poor one for
+  a laptop, so it is yours to make. The sweeper never touches one.
+- `last_used_at` is throttled to one write per five minutes. Without that, every authenticated
+  API request becomes a write.
+- `revoke_all(account_id)` is what a "revoke all my tokens" button calls.
+
+### JWT
+
+Off unless you pass a validator, and second on purpose: **a JWT cannot be revoked before its
+`exp`**. Read `## The JWT you cannot take back` below before turning it on.
+
+This validates tokens minted elsewhere — an identity provider, a gateway, another service. It
+does not mint them.
+
+```crystal
+KemalIdentity.configure(
+  accounts: accounts,
+  sessions: sessions,
+  jwt: KemalIdentity::JWT::Validator.new(
+    keyring: KemalIdentity::JWT::Keyring.new([
+      KemalIdentity::JWT::Key.new(KemalIdentity::JWT::HS256, current_secret, id: "2026-08"),
+      KemalIdentity::JWT::Key.new(KemalIdentity::JWT::HS256, previous_secret, id: "2026-05"),
+    ]),
+    issuer:     "https://issuer.example.com",
+    audience:   "https://api.example.com",
+    algorithms: ["HS256"],
+    clock:      KemalIdentity::SystemClock.new,
+  ),
+)
+```
+
+Every one of these is a documented, exploited JWT failure, and none of them is optional:
+
+| Attack | What stops it |
+|---|---|
+| `alg: none` | no algorithm can express it; the allow-list refuses the string at boot; `alg` is compared against the key's |
+| algorithm confusion (RS256 verified as HS256) | the **key** names its algorithm; the token's `alg` selects nothing |
+| a retired key still accepted | an unknown `kid` is rejected, never retried against the ring |
+| a token replayed at the wrong service | `iss` and `aud` are required and compared |
+| a token that never expires | `exp` is required, and `max_lifetime` bounds how far away it may be |
+| a reset-link token used as an access token | `purpose` is required and compared |
+| clock skew widened into an expiry bypass | `leeway` is bounded at five minutes |
+| a signature over re-encoded claims | verification runs over the received bytes |
+| a multi-megabyte header | size and shape are checked before any parsing |
+
+Only HMAC ships — `HS256`, `HS384`, `HS512` — because Crystal's OpenSSL bindings expose `HMAC`
+and not the `EVP` interface RSA and ECDSA verification need. RS256 is a subclass of
+`JWT::Algorithm` plus a C binding away; nothing else changes, since the keyring names the
+algorithm rather than trusting the token to.
+
+Two knobs turn off, and both want an explicit `nil` rather than a default:
+
+```crystal
+max_lifetime: nil,   # for an issuer trusted to bound its own tokens
+purpose:      nil,   # for an issuer that emits no purpose claim
+```
+
+Understand the second one: without it, any validly signed token from that issuer authenticates
+a request, including one minted to authorise a password reset.
+
+`kid` selection is strict in both directions. An unknown `kid` is rejected outright rather than
+retried against the other keys — otherwise a compromised key can never be withdrawn. A token
+naming no `kid` resolves only when the ring holds exactly one key.
+
+### The JWT you cannot take back
+
+**A stateless JWT cannot be revoked before its `exp`.** The signature is the entire proof, the
+server keeps nothing, and there is therefore nothing to change when someone clicks "sign out
+everywhere" or an employee leaves. Two honest answers, neither free:
+
+1. **A very short lifetime.** `max_lifetime` defaults to one hour and rejects any token
+   claiming longer. Nothing is stored, and what you get is bounded exposure, not revocation.
+2. **A `jti` denylist.** Implement `JWT::RevocationStore`, pass it as `revocations:`, and the
+   validator checks it on every request. That is a read from shared storage on the hot path —
+   precisely the thing a JWT was chosen to avoid. It buys real revocation and it costs the
+   statelessness. Do not go on calling the result stateless.
+
+If you are reaching for option 2, compare it against personal access tokens first: those
+already read from storage on every request, and give revocation, an extendable expiry and a
+`last_used_at` for the same single lookup.
+
+The same applies to account status. By default the validator makes no account lookup, so a
+**disabled account keeps authenticating until `exp`**. Passing `accounts:` fixes that and costs
+the same lookup:
+
+```crystal
+revocations: MyRevocationStore.new(db),   # your own JWT::RevocationStore
+accounts:    accounts,                    # a disabled account stops immediately
+```
+
+### One header, two credentials
+
+Configure both and `AuthenticatorChain` asks each in turn, routing on **shape alone**: an
+opaque token is a fixed prefix plus a fixed-length random part, a JWT is three base64url
+segments, and neither can be mistaken for the other before any I/O.
+
+It falls through on `Anonymous` and on `MalformedCredential` — "this is not a credential of
+mine" — and stops at anything else. A credential that was recognised and then failed on its
+merits does not get a second opinion from an authenticator that never issued it, which is how a
+revoked credential ends up authenticating a request.
+
+The same rule applies one level up: a request that presents a bearer token is never resolved
+from a session cookie afterwards, even when the token is rejected. A client that sent a token
+is asking to be authenticated by it.
+
 ## PostgreSQL
 
 ```crystal
@@ -350,6 +494,9 @@ end
 | `session.rejected` | a presented cookie did not resolve — carries `reason` |
 | `remember.restored` | a remembered login was restored |
 | `remember.replay_detected` | **warning** — a spent remember-me token came back |
+| `api_token.issued` | a personal access token was minted — carries `expires_at` |
+| `api_token.revoked` | one token ended |
+| `api_token.revoked_all` | bulk revocation — carries `count` |
 | `csrf.rejected` | an unsafe request carried no valid token |
 | `password_reset.requested` | carries `known`, which the HTTP response deliberately does not |
 | `password_reset.throttled` | a reset request was rate limited |
@@ -426,8 +573,9 @@ directives — this repository depends on no migration tool, because neither pub
 resolves against Crystal 1.21 and crystal-pg 0.30
 (`blueprints/0002-no-micrate-dependency.md`).
 
-`migrations/postgres/` holds `auth_sessions`, `auth_action_tokens`, and the optional
-reference `auth_accounts`. If you already have a `users` table with a password digest, you
+`migrations/postgres/` holds `auth_sessions`, `auth_action_tokens`, `auth_remember_tokens`,
+`auth_api_tokens`, and the optional reference `auth_accounts`. `migrations/sqlite/` holds the
+same five in SQLite's dialect. If you already have a `users` table with a password digest, you
 implement `AccountRepository` over it and never create `auth_accounts` at all — that is the
 whole point of the contract being abstract.
 

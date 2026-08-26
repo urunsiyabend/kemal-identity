@@ -16,6 +16,18 @@ module KemalIdentity
     # recently and may not be present at all. Below `Password` on purpose.
     Remembered = 10
 
+    # A long-lived API token was presented — a personal access token, not a browser session.
+    #
+    # Above `Remembered` because the holder deliberately created this credential and can revoke
+    # it, and below `Password` because no person typed anything: a token in a CI job's
+    # environment proves possession of a secret, not the presence of the account holder.
+    #
+    # `Principal#fresh?` is therefore false for it, so `require_fresh!` refuses a token-bearing
+    # request outright. That is the intended answer. An automated client cannot re-authenticate
+    # interactively, so a destructive account action should not be reachable with a token in the
+    # first place.
+    ApiToken = 15
+
     # A password (or equivalent single factor) was verified in this session's lifetime.
     Password = 20
 
