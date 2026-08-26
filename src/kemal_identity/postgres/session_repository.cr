@@ -99,6 +99,13 @@ module KemalIdentity::Postgres
       result.rows_affected.to_i32
     end
 
+    def delete_revoked_before(before : Time) : Int32
+      result = @db.exec(
+        "DELETE FROM auth_sessions WHERE revoked_at IS NOT NULL AND revoked_at <= $1", before
+      )
+      result.rows_affected.to_i32
+    end
+
     def delete_expired(before : Time) : Int32
       # `<=`, matching the `>=` in SessionService#expired?. If the two disagreed about the
       # boundary the sweeper could delete a row `resolve` still considered live, which would

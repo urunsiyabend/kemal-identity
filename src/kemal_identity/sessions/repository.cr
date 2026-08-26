@@ -57,6 +57,18 @@ module KemalIdentity::Sessions
     # re-stamped, so the count is the number of sessions actually ended.
     abstract def revoke_all_for_account(account_id : String, at : Time, except_id : String? = nil) : Int32
 
+    # Deletes revoked rows whose `revoked_at` is at or before `before`, returning the count.
+    #
+    # Separate from `#delete_expired` because a revoked session is not necessarily an expired
+    # one: logging out at nine in the morning revokes a row whose absolute deadline is still
+    # hours away, and that row is worth keeping for a while. It is the evidence behind "you
+    # were signed out of this device", and deleting it the instant it is revoked throws away
+    # the only record that the logout happened.
+    #
+    # The retention window is the application's to choose. Disk reclamation either way —
+    # correctness never depends on this having run, because revocation is evaluated on read.
+    abstract def delete_revoked_before(before : Time) : Int32
+
     # Deletes rows whose `absolute_expires_at` is at or before `before`, returning the count.
     #
     # Disk reclamation only. **Correctness never depends on this having run**: expiry is

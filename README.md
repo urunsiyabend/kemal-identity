@@ -326,6 +326,27 @@ KemalIdentity::Postgres::SessionRepository.new(db, accounts_table: "users")
 Both classes run the same contract specs as the in-memory doubles. That is the only thing that
 makes the doubles trustworthy.
 
+## Sweeping
+
+Expired rows are rejected on read, always — a sweeper that never runs costs you storage and
+nothing else. Revocation and expiry are never deferred to it, which is the lesson of
+kemal-session #116.
+
+It does not start itself:
+
+```crystal
+sweeper = KemalIdentity::Sweeper.new(KemalIdentity.app)
+sweeper.run_every(1.hour)
+```
+
+For anything beyond a single process, call `sweeper.sweep` from cron instead — four processes
+behind a load balancer would otherwise run four sweepers against one database.
+
+It sweeps sessions (expired, and revoked past a retention window), action tokens, and
+remember-me tokens. It never removes a spent remember-me token before it expires: that row is
+the evidence of a replay, and deleting it early would make a stolen cookie look unknown rather
+than stolen.
+
 ## Migrations
 
 Published as files you copy in, not run automatically. An auth library that mutates your

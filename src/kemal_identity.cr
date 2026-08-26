@@ -43,6 +43,7 @@ require "./kemal_identity/accounts/service"
 require "./kemal_identity/rate_limiter"
 require "./kemal_identity/csrf"
 require "./kemal_identity/application"
+require "./kemal_identity/sweeper"
 
 # Authentication for Crystal web applications.
 #

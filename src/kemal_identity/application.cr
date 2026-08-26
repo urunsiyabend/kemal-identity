@@ -57,6 +57,12 @@ module KemalIdentity
     # goes through `sessions` instead.
     getter session_repository : Sessions::Repository
 
+    # The stores behind the account lifecycle and remember-me services, exposed for the
+    # sweeper. Nil when the application configured neither, in which case there is nothing of
+    # theirs to sweep.
+    getter action_tokens : Accounts::ActionTokenRepository?
+    getter remember_tokens : Sessions::RememberRepository?
+
     def initialize(
       @accounts : Accounts::Repository,
       sessions : Sessions::Repository,
@@ -67,8 +73,8 @@ module KemalIdentity
       session_config : Sessions::Config = Sessions::Config.new,
       @cookie : Sessions::CookieConfig = Sessions::CookieConfig.new,
       @csrf : CSRFConfig? = nil,
-      action_tokens : Accounts::ActionTokenRepository? = nil,
-      remember_tokens : Sessions::RememberRepository? = nil,
+      @action_tokens : Accounts::ActionTokenRepository? = nil,
+      @remember_tokens : Sessions::RememberRepository? = nil,
       notifier : Accounts::Notifier? = nil,
       password_policy : Passwords::Policy? = nil,
       @remember_cookie : Sessions::CookieConfig = Sessions::CookieConfig.new(

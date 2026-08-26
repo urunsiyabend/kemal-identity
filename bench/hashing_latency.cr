@@ -219,6 +219,10 @@ class CountingSessions < KemalIdentity::Sessions::Repository
     @inner.revoke_all_for_account(account_id, at, except_id: except_id)
   end
 
+  def delete_revoked_before(before : Time) : Int32
+    @inner.delete_revoked_before(before)
+  end
+
   def delete_expired(before : Time) : Int32
     @inner.delete_expired(before)
   end

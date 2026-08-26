@@ -59,6 +59,14 @@ the endpoint cannot be used to flood someone's inbox.
 SQLite adapter (which also makes CI cheaper), the sweeper, structured audit events,
 `kemal_identity_argon2` as a separate shard, and the compatibility matrix.
 
+| Deliverable | State |
+|---|---|
+| The sweeper | **done** — `KemalIdentity::Sweeper`, opt-in, across all four tables |
+| Compatibility matrix | **done** — floors measured and CI-tested, `blueprints/0013` |
+| Structured audit events | partial — every service logs through `KemalIdentity::Log`; no dedicated event contract yet |
+| SQLite adapter | not started |
+| `kemal_identity_argon2` | not started |
+
 ## v0.4 — API authentication
 
 Bearer tokens as a `RequestAuthenticator`. Opaque personal access tokens first, since they

@@ -269,6 +269,36 @@ def it_behaves_like_a_session_repository(&build : Array(KemalIdentity::Accounts:
     end
   end
 
+  # A revoked session is not necessarily an expired one, and the row is the evidence that a
+  # logout happened. The retention window is the application's to choose.
+  describe "#delete_revoked_before" do
+    it "removes revoked rows revoked at or before the given instant" do
+      repo = build.call(one_account)
+      repo.create(session.call("s1", "a1", "token-1", 1))
+      repo.revoke("s1", now)
+
+      repo.delete_revoked_before(now).should eq(1)
+      repo.find_by_digest(digest.call("token-1")).should be_nil
+    end
+
+    it "leaves a session revoked after that instant alone" do
+      repo = build.call(one_account)
+      repo.create(session.call("s1", "a1", "token-1", 1))
+      repo.revoke("s1", now + 1.hour)
+
+      repo.delete_revoked_before(now).should eq(0)
+      repo.find_by_digest(digest.call("token-1")).should_not be_nil
+    end
+
+    it "never touches a live session, however old" do
+      repo = build.call(one_account)
+      repo.create(session.call("s1", "a1", "token-1", 1))
+
+      repo.delete_revoked_before(now + 100.hours).should eq(0)
+      repo.find_by_digest(digest.call("token-1")).should_not be_nil
+    end
+  end
+
   describe "#delete_expired" do
     it "removes only rows past absolute_expires_at" do
       repo = build.call(one_account)

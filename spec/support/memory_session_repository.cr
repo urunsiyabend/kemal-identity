@@ -92,6 +92,22 @@ module KemalIdentity::Testing
       end
     end
 
+    def delete_revoked_before(before : Time) : Int32
+      @mutex.synchronize do
+        stale = @sessions.each_value.select do |record|
+          revoked_at = record.revoked_at
+          !revoked_at.nil? && revoked_at <= before
+        end.to_a
+
+        stale.each do |record|
+          @sessions.delete(record.id)
+          @by_digest.delete(record.token_digest.hexstring)
+        end
+
+        stale.size
+      end
+    end
+
     def delete_expired(before : Time) : Int32
       @mutex.synchronize do
         expired = @sessions.each_value.select { |record| record.absolute_expires_at <= before }.to_a
