@@ -1,5 +1,64 @@
 # Changelog
 
+## v0.5.0 — 2026-08-28
+
+Federated identity and MFA, the two halves of `docs/06-roadmap.md`'s v0.5. Additive; nothing
+was removed or changed in behaviour.
+
+### Second factors
+
+- `MFA::TOTP` (RFC 6238), checked against the RFC's own SHA-1, SHA-256 and SHA-512 vectors,
+  plus an RFC 4648 base32 codec because Crystal ships only base64.
+- `MFA::Service`: two-step enrolment, a rate limit consumed **before** the code is checked,
+  single-use counters, drift bounded at two steps, and ten recovery codes issued at the moment
+  a first factor turns MFA on. What makes TOTP safe is these, not the arithmetic.
+- `MFA::SecretBox` — AES-256-CBC with encrypt-then-MAC, verified before decrypting. The one
+  secret in this shard that is encrypted rather than hashed, because the server has to read it
+  back to compute a code. GCM would be the obvious choice and Crystal's `OpenSSL::Cipher` does
+  not expose the authentication tag.
+- `AssuranceLevel::MFA` and `env.auth.mfa_verified!`, which **rotates the session**: an id an
+  attacker learned while it was worth `Password` must not silently become one worth `MFA`.
+- Redeeming a recovery code signs the account's other sessions out, as
+  `docs/02-security-model.md` requires.
+- New tables `auth_mfa_factors` and `auth_mfa_recovery_codes`, PostgreSQL and SQLite, both
+  running the same 34-example contract — including the two single-use operations run
+  concurrently.
+
+### Signing in with a provider
+
+- `OIDC::Client`: Authorization Code with PKCE and nothing else. `state` compared in constant
+  time before anything is exchanged, `nonce` compared inside the ID token, `S256` only, exact
+  redirect matching, `iss`/`aud`/`azp`, a 15-minute flow TTL, and timeouts on every call out.
+- `return_to` is restricted to a same-site path and validated **on the way in**, before it has
+  round-tripped through the provider — including the `//evil.example.com` and `/\evil` forms a
+  browser reads as absolute.
+- `OIDC::LinkRepository` over `auth_external_identities`, keyed on `(issuer, subject)` with
+  **no email column at all**. Addresses change and are claimed rather than proved; looking an
+  account up by one is account takeover with extra steps.
+- The provider's access and refresh tokens are discarded rather than stored. Keeping one your
+  application never uses turns a breach here into a breach of every user's account there.
+- `OIDC::PendingCodec` signs the flow state for a cookie, so applications do not hand-roll
+  carrying the PKCE verifier through a redirect.
+
+### JWT
+
+- **RS256, RS384 and RS512.** `jwt/rsa.cr` reopens `lib LibCrypto` for the five functions
+  Crystal's standard library omits, and builds the public key as a DER `SubjectPublicKeyInfo`
+  for `d2i_PUBKEY` — the one route stable across OpenSSL 1.1.1 and 3.x. Verification only;
+  signing is bound in `spec/support/` so it cannot become API by accident.
+- A `JWT::Key` now holds a shared secret **or** a public key, and refuses to pair either with
+  the wrong algorithm — the confusion attack written into configuration rather than a token.
+- `JWT::JWKS`, a cached key source with a TTL *and* a floor between refetches provoked by an
+  unknown `kid`. A failed refetch keeps serving the last good key set; a failed first fetch
+  raises.
+- `JWT::Validator` accepts a `KeySource` as well as a fixed `Keyring`, and gained `#validate`,
+  which keeps the claim set an OIDC callback needs.
+
+### Everything else
+
+- `blueprints/0016-second-factors.md` and `blueprints/0017-federated-identity.md` record the
+  decisions, including which defences are deliberately unobservable and why.
+
 ## v0.4.0 — 2026-08-26
 
 API authentication: bearer tokens as a `RequestAuthenticator`, in the order
