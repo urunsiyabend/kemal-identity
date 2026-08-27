@@ -15,6 +15,7 @@ require "./support/memory_remember_repository"
 require "./support/memory_api_token_repository"
 require "./support/memory_revocation_store"
 require "./support/memory_mfa_repository"
+require "./support/memory_link_repository"
 require "./support/rsa_test_key"
 require "./support/jwt_forge"
 
@@ -28,6 +29,7 @@ require "./contract/action_token_repository_contract"
 require "./contract/remember_repository_contract"
 require "./contract/api_token_repository_contract"
 require "./contract/mfa_repository_contract"
+require "./contract/oidc_link_repository_contract"
 
 module KemalIdentity::SpecHelper
   # A fixed instant every spec can anchor on, so no spec depends on the wall clock.

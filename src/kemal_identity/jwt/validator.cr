@@ -1,6 +1,25 @@
 require "json"
 
 module KemalIdentity::JWT
+  # A token that passed every check, and the claims it carried.
+  #
+  # `Principal` carries a subject and nothing else by design. An OpenID Connect callback needs
+  # the rest — that is where the provider's assertions about a person live — so `#validate`
+  # hands back both rather than making a caller re-parse a token already verified here.
+  struct Validated
+    getter principal : Principal
+
+    # Every claim in the token, including ones this shard does not interpret.
+    #
+    # **Verified, not trusted.** The signature says the issuer wrote these; it says nothing
+    # about whether `email_verified` is true or whether `groups` should mean anything to your
+    # application. Read `OIDC::Identity` before using any of them as an identifier.
+    getter claims : Hash(String, ::JSON::Any)
+
+    def initialize(@principal : Principal, @claims : Hash(String, ::JSON::Any))
+    end
+  end
+
   # Validates a JSON Web Token presented as a bearer credential.
   #
   # ### Off by default, and second on purpose
@@ -199,6 +218,18 @@ module KemalIdentity::JWT
     # for meaning until it has been proven to come from a key we hold — reading claims out
     # of an unverified token is how a validator ends up trusting an attacker's `kid`.
     def authenticate(credential : String?) : Outcome
+      result = authenticate_and_keep_claims(credential)
+
+      case result
+      in Validated then Authenticated.new(result.principal)
+      in Failed    then result
+      in Anonymous then result
+      end
+    end
+
+    # Shared by `#authenticate` and `#validate`. `Anonymous` only ever escapes through the
+    # first: a caller asking for claims presented a token on purpose.
+    private def authenticate_and_keep_claims(credential : String?) : Validated | Failed | Anonymous
       return Anonymous.new if credential.nil? || credential.empty?
       return Failed.new(FailureReason::MalformedCredential) if credential.bytesize > @max_bytesize
 
@@ -230,6 +261,25 @@ module KemalIdentity::JWT
       return Failed.new(FailureReason::MalformedCredential) if claims.nil?
 
       check_claims(claims)
+    end
+
+    # The same validation as `#authenticate`, keeping the claims.
+    #
+    # `Principal` deliberately carries nothing but a subject, an assurance and a time — no
+    # email, no name, no groups (`docs/03-architecture.md` on why). An OpenID Connect callback
+    # genuinely needs the rest of the claim set, though, because that is where the provider's
+    # assertions live, so this returns both rather than making `OIDC::Client` re-parse a token
+    # this class has already verified.
+    #
+    # Everything `#authenticate` refuses, this refuses identically. It is the same code path.
+    def validate(credential : String?) : Validated | Failed
+      result = authenticate_and_keep_claims(credential)
+
+      # Nothing presented is a rejection here rather than a state: a caller asking for claims
+      # is holding a token it believes in.
+      return Failed.new(FailureReason::MalformedCredential) if result.is_a?(Anonymous)
+
+      result
     end
 
     private NONE = "none"
@@ -289,7 +339,7 @@ module KemalIdentity::JWT
       kid.nil? || kid.empty? ? "" : kid
     end
 
-    private def check_claims(claims : Hash(String, ::JSON::Any)) : Outcome
+    private def check_claims(claims : Hash(String, ::JSON::Any)) : Validated | Failed
       now = @clock.now
 
       # `exp` is mandatory. A token with no expiry is a permanent grant that cannot be
@@ -315,19 +365,19 @@ module KemalIdentity::JWT
         return failure
       end
 
-      Authenticated.new(
-        Principal.new(
-          subject: subject,
-          # The same level an opaque token gets, and for the same reason: possession of a
-          # secret, not the presence of a person. Never fresh, so `require_fresh!` refuses it.
-          assurance: AssuranceLevel::ApiToken,
-          # `iat` when the issuer stated one — it is when the credential behind this
-          # principal was actually verified, and it is what `Principal#fresh?` measures.
-          authenticated_at: issued_at || now,
-          # No session: a bearer token is presented per request and establishes nothing.
-          session_id: nil,
-        )
+      principal = Principal.new(
+        subject: subject,
+        # The same level an opaque token gets, and for the same reason: possession of a
+        # secret, not the presence of a person. Never fresh, so `require_fresh!` refuses it.
+        assurance: AssuranceLevel::ApiToken,
+        # `iat` when the issuer stated one — it is when the credential behind this principal
+        # was actually verified, and it is what `Principal#fresh?` measures.
+        authenticated_at: issued_at || now,
+        # No session: a bearer token is presented per request and establishes nothing.
+        session_id: nil,
       )
+
+      Validated.new(principal: principal, claims: claims)
     end
 
     # When the token is valid, and for how long it claims to be. Returns `nil` when every

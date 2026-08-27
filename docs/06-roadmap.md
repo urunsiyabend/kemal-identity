@@ -153,11 +153,20 @@ replacing a factor and using a recovery code all require fresh authentication.
 | `MFA::Service` | **done** — two-step enrolment, rate limiting before the code is checked, single-use counters, bounded drift, recovery codes |
 | `MFA::Repository` + adapters | **done** — 34-example contract against the in-memory double, PostgreSQL and SQLite, including the two single-use operations run concurrently |
 | `AssuranceLevel::MFA` and step-up | **done** — `env.auth.mfa_verified!` rotates the session up, as `docs/02-security-model.md` requires of any assurance increase |
-| Federated identity (OAuth2 / OIDC) | **not started** |
+| RS256 verification | **done** — `JWT::RSA`, binding the five libcrypto functions Crystal's stdlib omits. Every real provider signs ID tokens with it |
+| Cached JWKS with a timeout | **done** — `JWT::JWKS`, with a TTL *and* a floor between refetches provoked by an unknown `kid`; a cache without both is either frozen at boot or a denial-of-service amplifier |
+| OAuth2 / OIDC client | **done** — `OIDC::Client`, Authorization Code + PKCE only, `state`, `nonce`, exact redirect matching, `iss`/`aud`/`azp`, a flow TTL and an open-redirect check on `return_to` |
+| `(issuer, subject)` identities | **done** — `auth_external_identities`, with no email column at all. `blueprints/0017-federated-identity.md` says why |
+| Provider tokens discarded | **done** — the token response is read for `id_token` and the rest is dropped |
 
 Fresh authentication for disabling MFA and replacing a factor is enforced at the route with
 `require_fresh!`, not inside the service: `MFA::Service` takes an account id and has no request
 to inspect.
+
+Not done here, deliberately: a Kemal handler for the two OIDC routes. The flow is
+framework-agnostic, `OIDC::PendingCodec` covers the sharp edge (the PKCE verifier has to survive
+a round trip through the provider), and what is left is a redirect and a cookie — shown in the
+README rather than wrapped.
 
 ## v0.6 — Authorization and tenancy
 

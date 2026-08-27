@@ -567,6 +567,145 @@ Lose it and every enrolled factor stops working; recovery codes still do, since 
 digests. Rotating it means decrypting and re-sealing each row with `AesSecretBox#reseal` — an
 offline job over a small table.
 
+## Signing in with a provider
+
+OpenID Connect as a **client** — Google, Okta, an internal provider. Never as an authorization
+server; `docs/00-scope.md` puts that permanently outside this shard.
+
+Authorization Code with PKCE, and nothing else is expressible here. No implicit flow (a token in
+a URL fragment lands in browser history and in any `Referer` that leaks), no password grant
+(which asks your application to handle somebody else's password, the thing federating avoids).
+
+```crystal
+provider = KemalIdentity::OIDC::Provider.new(
+  issuer:                 "https://accounts.google.com",
+  client_id:              ENV["OIDC_CLIENT_ID"],
+  client_secret:          KemalIdentity::Secret.new(ENV["OIDC_CLIENT_SECRET"]),
+  authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+  token_endpoint:         "https://oauth2.googleapis.com/token",
+  redirect_uri:           "https://app.example.com/auth/callback",
+  keys: KemalIdentity::JWT::JWKS.new(
+    uri:   "https://www.googleapis.com/oauth2/v3/certs",
+    clock: KemalIdentity::SystemClock.new,
+  ),
+)
+
+oidc = KemalIdentity::OIDC::Client.new(
+  provider: provider,
+  clock:    KemalIdentity::SystemClock.new,
+  random:   KemalIdentity::SecureRandomSource.new,
+)
+```
+
+### The two routes
+
+```crystal
+CODEC = KemalIdentity::OIDC::PendingCodec.new(KemalIdentity::Secret.new(ENV["SIGNING_KEY"]))
+
+get "/auth/start" do |env|
+  request = oidc.authorize(return_to: env.params.query["return_to"]?)
+
+  # Holds the PKCE verifier. HttpOnly, Secure, scoped to the callback, and short-lived.
+  env.response.cookies << HTTP::Cookie.new(
+    name: "__Host-oidc", value: CODEC.seal(request.pending),
+    path: "/auth/callback", secure: true, http_only: true,
+    samesite: HTTP::Cookie::SameSite::Lax, max_age: 15.minutes
+  )
+
+  env.redirect request.url
+end
+
+get "/auth/callback" do |env|
+  pending = CODEC.open?(env.request.cookies["__Host-oidc"]?.try(&.value))
+  next env.status(400).text("No sign-in is in progress") if pending.nil?
+
+  result = oidc.complete(
+    pending,
+    state: env.params.query["state"]?,
+    code:  env.params.query["code"]?,
+    error: env.params.query["error"]?,
+  )
+
+  case result
+  in KemalIdentity::OIDC::Identity
+    account = account_for(result)          # yours — see below
+    env.auth.start!(
+      KemalIdentity::Principal.new(
+        subject: account.id,
+        assurance: KemalIdentity::AssuranceLevel::Password,
+        authenticated_at: Time.utc,
+      )
+    )
+    env.redirect(pending.return_to || "/")
+  in KemalIdentity::Failed
+    env.status(401).text("Sign-in failed")
+  end
+end
+```
+
+### `(issuer, subject)` is the identity. The email is not.
+
+```crystal
+def account_for(identity : KemalIdentity::OIDC::Identity)
+  link = LINKS.find(identity.issuer, identity.subject)
+  return accounts.find_by_id(link.account_id) if link
+  # ... otherwise: create an account, or ask the person to confirm a merge.
+end
+```
+
+`auth_external_identities` has **no email column**, and that is not an oversight:
+
+- **Addresses change.** People marry, change surname, leave a company and come back. A row keyed
+  on an address becomes a different person's row, or a stranded orphan.
+- **Addresses are claimed, not proved.** A provider that lets somebody set an unverified address
+  and hands it to you has let them claim to be whoever owns that address at *your* service.
+  Looking an account up by it is account takeover with extra steps.
+
+Use `identity.email` to display, and to pre-fill a form somebody then confirms. Never to find an
+account. `identity.email_verified?` is a claim about a claim: it means only that this provider
+says so.
+
+Linking a pair that is already linked raises, **including to the same account**. Silently
+accepting a second link is how one provider account ends up attached to two local ones, and then
+whichever row is found first decides who somebody signs in as.
+
+### What the flow checks, and why each one is there
+
+| Attack | What stops it |
+|---|---|
+| login CSRF — an attacker's code handed to your victim | `state`, compared in constant time *before* the code is exchanged |
+| an ID token replayed from another flow | `nonce`, carried into the token and compared |
+| authorization-code interception | PKCE `S256`; only the hash ever leaves this process |
+| a token issued to another app at the same provider | `aud`, and `azp` when present |
+| a token from an issuer you do not trust | `iss`, compared exactly |
+| a forged token | RS256 against the provider's JWKS, refetched on rotation |
+| an open redirect after login | `return_to` restricted to a same-site path, checked on the way *in* |
+| a stale flow resumed from an old tab | a 15-minute flow TTL |
+| a hung provider | connect and read timeouts on both the JWKS and the token endpoint |
+
+### The provider's tokens are thrown away
+
+The token response is read for `id_token` and the rest is discarded. An access token is a
+credential *for somebody else's service*, and storing one your application never uses turns a
+breach of your database into a breach of every user's account there.
+
+If you genuinely call the provider's API, run that exchange yourself and keep the result in your
+own encrypted storage, with its own lifecycle.
+
+### RS256 and the JWKS
+
+`JWT::JWKS` caches the provider's keys with a TTL, and refetches once when a token names a `kid`
+it does not hold — which is what a rotation looks like from here. That refetch is rate-limited,
+because otherwise a stream of tokens carrying invented `kid`s is a way to make your process
+hammer somebody else's identity provider.
+
+A failed refetch keeps serving the last good key set: a provider outage should not sign every
+user out. A failed *first* fetch raises, because an empty key set that verifies nothing while
+looking healthy is worse than an error.
+
+The endpoint must be `https`. Anybody who can rewrite a key set can mint tokens that verify —
+that is the whole game.
+
 ## PostgreSQL
 
 ```crystal
@@ -634,6 +773,15 @@ end
 | `mfa.factor_removed` | one factor was removed |
 | `mfa.disabled` | **warning** — MFA was turned off for an account |
 | `mfa.secret_unreadable` | **error** — a factor's secret will not open under the current key |
+| `oidc.authorization_started` | a federated sign-in began |
+| `oidc.identity_asserted` | a provider's ID token verified — carries `issuer` and `subject`, never the email |
+| `oidc.state_mismatch` | **warning** — a callback that did not come from a flow we started. Login CSRF, or a stale tab |
+| `oidc.nonce_mismatch` | **warning** — a valid token from somebody else's flow |
+| `oidc.declined` / `oidc.rejected` / `oidc.token_error` | the flow did not complete |
+| `oidc.exchange_failed` | **warning** — the provider's token endpoint could not be reached |
+| `jwks.fetched` | signing keys were loaded — carries `keys` |
+| `jwks.refresh_failed` | **warning** — a refetch failed; the last good key set is still in use |
+| `jwks.fetch_failed` | **error** — there is no key set at all |
 | `csrf.rejected` | an unsafe request carried no valid token |
 | `password_reset.requested` | carries `known`, which the HTTP response deliberately does not |
 | `password_reset.throttled` | a reset request was rate limited |
@@ -711,8 +859,9 @@ resolves against Crystal 1.21 and crystal-pg 0.30
 (`blueprints/0002-no-micrate-dependency.md`).
 
 `migrations/postgres/` holds `auth_sessions`, `auth_action_tokens`, `auth_remember_tokens`,
-`auth_api_tokens`, `auth_mfa_factors`, `auth_mfa_recovery_codes`, and the optional reference
-`auth_accounts`. `migrations/sqlite/` holds the same seven in SQLite's dialect. If you already have a `users` table with a password digest, you
+`auth_api_tokens`, `auth_mfa_factors`, `auth_mfa_recovery_codes`, `auth_external_identities`,
+and the optional reference `auth_accounts`. `migrations/sqlite/` holds the same eight in
+SQLite's dialect. If you already have a `users` table with a password digest, you
 implement `AccountRepository` over it and never create `auth_accounts` at all — that is the
 whole point of the contract being abstract.
 

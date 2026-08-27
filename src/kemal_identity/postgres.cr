@@ -7,6 +7,7 @@ require "./postgres/action_token_repository"
 require "./postgres/remember_repository"
 require "./postgres/api_token_repository"
 require "./postgres/mfa_repository"
+require "./postgres/link_repository"
 
 # The PostgreSQL adapters.
 #

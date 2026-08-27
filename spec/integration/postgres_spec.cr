@@ -28,7 +28,7 @@ end
 private def reset_schema! : Nil
   database.exec(
     "TRUNCATE auth_sessions, auth_action_tokens, auth_remember_tokens, auth_api_tokens, " \
-    "auth_mfa_factors, auth_mfa_recovery_codes, auth_accounts"
+    "auth_mfa_factors, auth_mfa_recovery_codes, auth_external_identities, auth_accounts"
   )
 rescue error : PQ::PQError
   raise Spec::AssertionFailed.new(
@@ -100,6 +100,13 @@ else
     it_behaves_like_an_mfa_repository do
       reset_schema!
       KemalIdentity::Postgres::MfaRepository.new(database)
+    end
+  end
+
+  describe KemalIdentity::Postgres::LinkRepository do
+    it_behaves_like_a_link_repository do
+      reset_schema!
+      KemalIdentity::Postgres::LinkRepository.new(database)
     end
   end
 
