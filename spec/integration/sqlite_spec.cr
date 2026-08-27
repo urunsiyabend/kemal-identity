@@ -60,7 +60,8 @@ private def migrate! : Nil
 end
 
 private def reset_schema! : Nil
-  %w[auth_sessions auth_action_tokens auth_remember_tokens auth_api_tokens auth_accounts].each do |table|
+  %w[auth_sessions auth_action_tokens auth_remember_tokens auth_api_tokens
+    auth_mfa_factors auth_mfa_recovery_codes auth_accounts].each do |table|
     DATABASE.exec("DELETE FROM #{table}")
   end
 end
@@ -97,6 +98,13 @@ describe KemalIdentity::SQLite::ApiTokenRepository do
     reset_schema!
     accounts.each { |account| insert(account) }
     KemalIdentity::SQLite::ApiTokenRepository.new(DATABASE)
+  end
+end
+
+describe KemalIdentity::SQLite::MfaRepository do
+  it_behaves_like_an_mfa_repository do
+    reset_schema!
+    KemalIdentity::SQLite::MfaRepository.new(DATABASE)
   end
 end
 

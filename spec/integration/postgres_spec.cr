@@ -26,7 +26,10 @@ end
 # TRUNCATE rather than DELETE: it is what a test suite wants, and it fails loudly if the schema
 # is not there at all, which is a better error than a confusing empty result later.
 private def reset_schema! : Nil
-  database.exec("TRUNCATE auth_sessions, auth_action_tokens, auth_remember_tokens, auth_api_tokens, auth_accounts")
+  database.exec(
+    "TRUNCATE auth_sessions, auth_action_tokens, auth_remember_tokens, auth_api_tokens, " \
+    "auth_mfa_factors, auth_mfa_recovery_codes, auth_accounts"
+  )
 rescue error : PQ::PQError
   raise Spec::AssertionFailed.new(
     "the auth_ tables are missing -- run `shards build migrate && bin/migrate up` " \
@@ -90,6 +93,13 @@ else
       reset_schema!
       accounts.each { |account| insert(account) }
       KemalIdentity::Postgres::ApiTokenRepository.new(database)
+    end
+  end
+
+  describe KemalIdentity::Postgres::MfaRepository do
+    it_behaves_like_an_mfa_repository do
+      reset_schema!
+      KemalIdentity::Postgres::MfaRepository.new(database)
     end
   end
 

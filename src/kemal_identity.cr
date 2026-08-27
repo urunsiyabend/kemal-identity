@@ -1,3 +1,4 @@
+require "uri"
 require "base64"
 require "digest/sha256"
 require "crypto/subtle"
@@ -43,6 +44,13 @@ require "./kemal_identity/passwords/authenticator"
 require "./kemal_identity/api_tokens/token"
 require "./kemal_identity/api_tokens/repository"
 require "./kemal_identity/api_tokens/service"
+
+require "./kemal_identity/mfa/base32"
+require "./kemal_identity/mfa/totp"
+require "./kemal_identity/mfa/secret_box"
+require "./kemal_identity/mfa/factor"
+require "./kemal_identity/mfa/repository"
+require "./kemal_identity/mfa/service"
 
 require "./kemal_identity/jwt/algorithm"
 require "./kemal_identity/jwt/key"

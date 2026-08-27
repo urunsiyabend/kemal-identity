@@ -144,6 +144,21 @@ then only encrypted at rest in separate storage.
 MFA: TOTP plus hashed recovery codes, reflected in `AssuranceLevel`. Disabling MFA,
 replacing a factor and using a recovery code all require fresh authentication.
 
+### Progress
+
+| Deliverable | State |
+|---|---|
+| TOTP, RFC 6238 | **done** — `MFA::TOTP`, checked against the RFC's own SHA-1, SHA-256 and SHA-512 vectors, plus an RFC 4648 base32 codec because Crystal ships only base64 |
+| Encrypted factor storage | **done** — `MFA::SecretBox`, AES-256-CBC with encrypt-then-MAC. The one secret here that is reversible by necessity, and `blueprints/0016-second-factors.md` says so rather than hiding it |
+| `MFA::Service` | **done** — two-step enrolment, rate limiting before the code is checked, single-use counters, bounded drift, recovery codes |
+| `MFA::Repository` + adapters | **done** — 34-example contract against the in-memory double, PostgreSQL and SQLite, including the two single-use operations run concurrently |
+| `AssuranceLevel::MFA` and step-up | **done** — `env.auth.mfa_verified!` rotates the session up, as `docs/02-security-model.md` requires of any assurance increase |
+| Federated identity (OAuth2 / OIDC) | **not started** |
+
+Fresh authentication for disabling MFA and replacing a factor is enforced at the route with
+`require_fresh!`, not inside the service: `MFA::Service` takes an account id and has no request
+to inspect.
+
 ## v0.6 — Authorization and tenancy
 
 `Authorizer` contract, an RBAC extension, tenant membership. Deliberately last: it is a

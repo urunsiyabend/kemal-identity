@@ -94,7 +94,11 @@ module KemalIdentity::Kemal
     # lives here instead: a core service taking an `HTTP::Server::Context` would put HTTP into
     # the layer that is meant not to know HTTP exists. See
     # `blueprints/0008-kemal-layer-owns-the-http-seam.md`.
-    def start!(principal : Principal, assurance : AssuranceLevel? = nil) : Principal
+    def start!(
+      principal : Principal,
+      assurance : AssuranceLevel? = nil,
+      mfa_verified_at : Time? = nil,
+    ) : Principal
       account = @app.accounts.find_by_id(principal.subject)
 
       if account.nil?
@@ -104,7 +108,11 @@ module KemalIdentity::Kemal
       end
 
       previous = principal?.try(&.session_id)
-      issued = @app.sessions.start(account, assurance || principal.assurance)
+      issued = @app.sessions.start(
+        account,
+        assurance || principal.assurance,
+        mfa_verified_at: mfa_verified_at || principal.mfa_verified_at,
+      )
 
       @app.sessions.revoke(previous) if previous
 
@@ -115,6 +123,28 @@ module KemalIdentity::Kemal
       # double every login in the trail.
 
       issued.principal
+    end
+
+    # Records that a second factor was proved, and raises this session to `AssuranceLevel::MFA`.
+    #
+    # Call it after `MFA::Service#verify` or `#redeem_recovery_code` returns `Verified`:
+    #
+    # ```
+    # case KemalIdentity.app.mfa!.verify(env.auth.require!.subject, env.params.body["code"])
+    # in KemalIdentity::MFA::Verified then env.auth.mfa_verified!
+    # in KemalIdentity::Failed        then render_the_same_error_for_every_reason
+    # end
+    # ```
+    #
+    # **This rotates the session**, exactly as login does. `docs/02-security-model.md` lists an
+    # assurance increase alongside login among the events that must produce a new identifier:
+    # a session id an attacker learned while it was worth `Password` must not silently become
+    # one worth `MFA`.
+    #
+    # `mfa_verified_at` is stamped from the application's clock, so `require_assurance!` and a
+    # freshness window both measure from when the factor was actually proved.
+    def mfa_verified! : Principal
+      start!(require!, assurance: AssuranceLevel::MFA, mfa_verified_at: @app.clock.now)
     end
 
     # Starts remembering this browser, and writes the cookie.

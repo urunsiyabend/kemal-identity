@@ -440,6 +440,133 @@ The same rule applies one level up: a request that presents a bearer token is ne
 from a session cookie afterwards, even when the token is rejected. A client that sent a token
 is asking to be authenticated by it.
 
+## Second factors
+
+TOTP, the kind an authenticator app produces, plus single-use recovery codes. Off unless you
+configure it.
+
+```crystal
+KemalIdentity.configure(
+  accounts:       accounts,
+  sessions:       sessions,
+  mfa_factors:    KemalIdentity::Postgres::MfaRepository.new(db),
+  mfa_secret_key: KemalIdentity::Secret.new(ENV["MFA_SECRET_KEY"]),   # >= 32 bytes
+  mfa_issuer:     "Acme",                                             # shown in the app
+  rate_limiter:   limiter,                                            # read the warning below
+)
+```
+
+All three `mfa_` arguments or none: a service with nowhere to store a factor, or no key to seal
+it with, would accept an enrolment and lose it, so a partial configuration is refused at boot.
+
+### Enrolling
+
+Two steps, and the second one is not optional. A secret that was generated but never proved is
+a secret nobody may actually hold — a mis-scanned QR code, a clock two minutes out, an app that
+failed to save — and treating it as a factor immediately is how somebody locks themselves out
+of their own account. An unconfirmed factor never authenticates and never counts as enrolled.
+
+```crystal
+post "/mfa/enrol" do |env|
+  subject = env.auth.require_fresh!(within: 5.minutes).subject
+  account = accounts.find_by_id(subject) || raise "account vanished mid-request"
+  pending = KemalIdentity.app.mfa!.enrol(account, "iPhone")
+
+  # Contains the secret. Render it as a QR code and let it go — never log it, never store it.
+  render_qr(pending.provisioning_uri)
+end
+
+post "/mfa/confirm" do |env|
+  confirmed = KemalIdentity.app.mfa!.confirm(env.params.body["factor"], env.params.body["code"])
+
+  if confirmed
+    # Non-empty only when this is what turned MFA on. Show them once; only digests are stored.
+    show_recovery_codes(confirmed.recovery_codes)
+  else
+    env.status(401).text("Invalid code")
+  end
+end
+```
+
+### Proving a factor
+
+```crystal
+post "/mfa/verify" do |env|
+  principal = env.auth.require!
+
+  case KemalIdentity.app.mfa!.verify(principal.subject, env.params.body["code"])
+  in KemalIdentity::MFA::Verified
+    env.auth.mfa_verified!    # rotates the session up to AssuranceLevel::MFA
+    redirect_to "/"
+  in KemalIdentity::Failed
+    # One message for every reason, as everywhere else in this shard.
+    env.status(401).text("Invalid code")
+  end
+end
+
+get "/vault" do |env|
+  env.auth.require_assurance!(KemalIdentity::AssuranceLevel::MFA)
+  # ...
+end
+```
+
+`mfa_verified!` **rotates the session**, exactly as login does. A session id an attacker learned
+while it was worth `Password` must not silently become one worth `MFA`.
+
+### ⚠ Configure a rate limiter before you turn this on
+
+A six-digit code is one of a million, and with the default drift it is valid for ninety seconds.
+Without a limit, a million guesses is a few minutes of traffic. `NullRateLimiter` is the default
+and it counts nothing — see [Rate limiting is off by default](#rate-limiting-is-off-by-default).
+
+Two more things do the rest of the work, and neither is optional:
+
+- **Single use.** A code that verified once is spent, atomically, so six digits read over
+  somebody's shoulder are worthless by the time they are typed again. This is why
+  `TOTP.match` returns the counter rather than a boolean — a boolean cannot say "correct, but
+  already spent".
+- **Bounded drift.** Each step of tolerance multiplies the codes valid at any moment, so it is
+  an authentication bypass with a limit on it. One step either side by default; more than two
+  is refused at boot.
+
+### Recovery codes
+
+Ten of them, issued at the moment a first factor turns MFA on. Adding a *second* device does not
+reissue them, because that would silently void a list somebody already wrote down.
+
+```crystal
+post "/mfa/recover" do |env|
+  principal = env.auth.require!
+
+  case KemalIdentity.app.mfa!.redeem_recovery_code(
+    principal.subject, env.params.body["code"], except_session_id: principal.session_id
+  )
+  in KemalIdentity::MFA::Verified then env.auth.mfa_verified!
+  in KemalIdentity::Failed        then env.status(401).text("Invalid code")
+  end
+end
+```
+
+- **Redeeming one signs the account's other sessions out.** Somebody is using a recovery code
+  because the device is gone, and "lost" and "taken" look identical from here. Pass
+  `except_session_id`, or the way back in signs them out.
+- They are full-entropy bearer secrets, stored as digests, and printed in groups —
+  `redeem_recovery_code` strips the spacing a person types back.
+- `regenerate_recovery_codes` voids the old list. That is the point: it is what somebody calls
+  when they think it leaked.
+- `mfa.recovery_code_used` is logged at **warning**. It is worth alerting on.
+
+### The secret you have to keep
+
+Unlike every other secret here, a TOTP secret is **encrypted rather than hashed** — the server
+recomputes a code from it on every verification, so it has to read it back. `mfa_secret_key` is
+what makes a stolen table useless, and it belongs in configuration or a secrets manager, never
+in the database it protects.
+
+Lose it and every enrolled factor stops working; recovery codes still do, since those are
+digests. Rotating it means decrypting and re-sealing each row with `AesSecretBox#reseal` — an
+offline job over a small table.
+
 ## PostgreSQL
 
 ```crystal
@@ -497,6 +624,16 @@ end
 | `api_token.issued` | a personal access token was minted — carries `expires_at` |
 | `api_token.revoked` | one token ended |
 | `api_token.revoked_all` | bulk revocation — carries `count` |
+| `mfa.enrolment_started` | a factor was created, not yet proved |
+| `mfa.enabled` | a factor was proved — MFA is now on for that account |
+| `mfa.confirmation_failed` / `mfa.rejected` | a code did not verify — carries `reason` |
+| `mfa.throttled` | **warning** — code submissions were rate limited |
+| `mfa.verified` | a second factor was proved |
+| `mfa.recovery_codes_issued` | carries `count` |
+| `mfa.recovery_code_used` | **warning** — carries `remaining`. Worth alerting on |
+| `mfa.factor_removed` | one factor was removed |
+| `mfa.disabled` | **warning** — MFA was turned off for an account |
+| `mfa.secret_unreadable` | **error** — a factor's secret will not open under the current key |
 | `csrf.rejected` | an unsafe request carried no valid token |
 | `password_reset.requested` | carries `known`, which the HTTP response deliberately does not |
 | `password_reset.throttled` | a reset request was rate limited |
@@ -574,8 +711,8 @@ resolves against Crystal 1.21 and crystal-pg 0.30
 (`blueprints/0002-no-micrate-dependency.md`).
 
 `migrations/postgres/` holds `auth_sessions`, `auth_action_tokens`, `auth_remember_tokens`,
-`auth_api_tokens`, and the optional reference `auth_accounts`. `migrations/sqlite/` holds the
-same five in SQLite's dialect. If you already have a `users` table with a password digest, you
+`auth_api_tokens`, `auth_mfa_factors`, `auth_mfa_recovery_codes`, and the optional reference
+`auth_accounts`. `migrations/sqlite/` holds the same seven in SQLite's dialect. If you already have a `users` table with a password digest, you
 implement `AccountRepository` over it and never create `auth_accounts` at all — that is the
 whole point of the contract being abstract.
 

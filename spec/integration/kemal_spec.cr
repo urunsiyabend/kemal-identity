@@ -28,6 +28,7 @@ API_TOKENS      = KemalIdentity::Testing::MemoryApiTokenRepository.new(ACCOUNTS)
 REMEMBER        = KemalIdentity::Testing::MemoryRememberRepository.new
 NOTIFIER        = KemalIdentity::Testing::RecordingNotifier.new
 REMEMBER_COOKIE = "kemal_identity_remember"
+MFA_FACTORS     = KemalIdentity::Testing::MemoryMfaRepository.new
 
 # JWT validation is off by default; this application turns it on so that the chain behind one
 # `Authorization: Bearer` header — opaque token first, JWT second — is exercised over HTTP.
@@ -56,6 +57,9 @@ KemalIdentity.configure(
   action_tokens: ACTION_TOKENS,
   api_tokens: API_TOKENS,
   jwt: JWT_VALIDATOR,
+  mfa_factors: MFA_FACTORS,
+  mfa_secret_key: KemalIdentity::Secret.new("mfa-secret-box-key-of-32-bytes!!"),
+  mfa_issuer: "Acme",
   remember_tokens: REMEMBER,
   notifier: NOTIFIER,
   remember_cookie: KemalIdentity::Sessions::CookieConfig.new(
@@ -165,6 +169,27 @@ post "/login-remembered" do |env|
   in KemalIdentity::Failed, KemalIdentity::Anonymous
     env.status(401).text("Invalid email or password")
   end
+end
+
+# The second-factor step of a login. The person already has a Password session; proving a
+# factor rotates it up to MFA.
+post "/mfa/verify" do |env|
+  principal = env.auth.require!
+
+  case KemalIdentity.app.mfa!.verify(principal.subject, env.params.body["code"])
+  in KemalIdentity::MFA::Verified
+    env.auth.mfa_verified!
+    "mfa ok"
+  in KemalIdentity::Failed
+    # One message for every reason, as everywhere else.
+    env.status(401).text("Invalid code")
+  end
+end
+
+# Reachable only once a second factor has been proved.
+get "/vault" do |env|
+  env.auth.require_assurance!(KemalIdentity::AssuranceLevel::MFA)
+  "vault ok"
 end
 
 post "/logout" do |env|
@@ -1041,5 +1066,96 @@ describe "JWTs over HTTP" do
     headers["Authorization"] = "Bearer #{jwt_for}"
 
     request("POST", "/api/things", headers).status_code.should eq(403)
+  end
+end
+
+# `docs/02-security-model.md` lists an assurance increase alongside login among the events that
+# must produce a new session identifier.
+private def enrol_mfa : Bytes
+  clock = TEST_CLOCK
+  pending = KemalIdentity.app.mfa!.enrol(ACCOUNTS.find_by_id("a1").or_fail, "phone")
+
+  secret = KemalIdentity::MFA::Base32.decode?(
+    URI.parse(pending.provisioning_uri).query_params["secret"]
+  ).or_fail
+
+  KemalIdentity.app.mfa!.confirm(
+    pending.factor.id,
+    KemalIdentity::MFA::TOTP.code(secret, KemalIdentity::MFA::TOTP.counter(clock.now))
+  ).or_fail
+
+  secret
+end
+
+private def totp_code(secret : Bytes, offset : Int32 = 0) : String
+  KemalIdentity::MFA::TOTP.code(
+    secret, KemalIdentity::MFA::TOTP.counter(TEST_CLOCK.now) + offset
+  )
+end
+
+# Submits a code to /mfa/verify from an authenticated session, CSRF token and all.
+private def submit_code(session : String, code : String) : HTTP::Client::Response
+  csrf = fetch_csrf(session)
+
+  post "/mfa/verify", body: "code=#{code}&_csrf=#{csrf.token}", headers: form(csrf, session)
+
+  response
+end
+
+describe "the second factor over HTTP" do
+  it "raises the session's assurance once a code is proved" do
+    secret = enrol_mfa
+    session = log_in
+
+    request("GET", "/vault", cookies("kemal_identity=#{session}")).status_code.should eq(403)
+
+    TEST_CLOCK.advance(30.seconds)
+    proved = submit_code(session, totp_code(secret))
+
+    proved.status_code.should eq(200)
+
+    raised = session_cookie(proved).or_fail
+    request("GET", "/vault", cookies("kemal_identity=#{raised}")).status_code.should eq(200)
+  end
+
+  # A session id an attacker learned while it was worth `Password` must not silently become one
+  # worth `MFA`.
+  it "rotates the session identifier, and the old one stops working" do
+    secret = enrol_mfa
+    session = log_in
+
+    TEST_CLOCK.advance(30.seconds)
+    raised = session_cookie(submit_code(session, totp_code(secret))).or_fail
+
+    raised.should_not eq(session)
+    request("GET", "/vault", cookies("kemal_identity=#{session}")).status_code.should eq(302)
+  end
+
+  it "answers the same way for a wrong code as for a replayed one" do
+    secret = enrol_mfa
+    session = log_in
+
+    TEST_CLOCK.advance(30.seconds)
+    code = totp_code(secret)
+
+    submit_code(session, code).status_code.should eq(200)
+
+    # The same code again, from a fresh Password session: correct arithmetic, already spent.
+    replay_session = log_in
+    replayed = submit_code(replay_session, code)
+    body = replayed.body
+
+    wrong = submit_code(log_in, "000000")
+
+    replayed.status_code.should eq(401)
+    wrong.status_code.should eq(401)
+    body.should eq(wrong.body)
+  end
+
+  it "leaves an unproved session below the bar" do
+    enrol_mfa
+    session = log_in
+
+    request("GET", "/vault", cookies("kemal_identity=#{session}")).status_code.should eq(403)
   end
 end

@@ -67,6 +67,14 @@ module KemalIdentity
     # Opaque personal access tokens, or `nil` unless an `ApiTokens::Repository` was supplied.
     getter api : ApiTokens::Service?
 
+    # The factor store, exposed so an application can run its own reports over it.
+    getter mfa_factors : MFA::Repository?
+
+    # Second factors, or `nil` unless an `MFA::Repository`, a secret-box key and an issuer were
+    # all supplied. Half of an MFA setup is worse than none: a service with nowhere to store a
+    # factor, or no key to seal it with, would accept an enrolment and lose it.
+    getter mfa : MFA::Service?
+
     # JWT validation, or `nil` — which it is unless an application passed a `JWT::Validator`.
     # Off by default on purpose: a JWT cannot be revoked before its `exp`, and
     # `JWT::RevocationStore` sets out what that costs.
@@ -94,6 +102,10 @@ module KemalIdentity
       @api_tokens : ApiTokens::Repository? = nil,
       api_token_prefix : String = ApiTokens::Service::DEFAULT_PREFIX,
       @jwt : JWT::Validator? = nil,
+      @mfa_factors : MFA::Repository? = nil,
+      mfa_secret_key : Secret? = nil,
+      mfa_issuer : String? = nil,
+      mfa_drift : Int32 = 1,
       notifier : Accounts::Notifier? = nil,
       password_policy : Passwords::Policy? = nil,
       @remember_cookie : Sessions::CookieConfig = Sessions::CookieConfig.new(
@@ -144,6 +156,8 @@ module KemalIdentity
         )
       end
 
+      @mfa = build_mfa(mfa_secret_key, mfa_issuer, mfa_drift)
+
       # Built only when everything they need is present. Half a reset flow is worse than none:
       # it would accept a request and quietly drop it.
       if action_tokens && notifier
@@ -182,6 +196,47 @@ module KemalIdentity
 
       raise ConfigurationError.new(
         "API tokens are not configured. Pass api_tokens: to KemalIdentity.configure."
+      )
+    end
+
+    # Same rule as the reset flow: built only when everything it needs is present, because half
+    # an MFA setup would accept an enrolment and then have nowhere to put it.
+    private def build_mfa(key : Secret?, issuer : String?, drift : Int32) : MFA::Service?
+      factors = @mfa_factors
+
+      if factors.nil? || key.nil? || issuer.nil?
+        if factors || key || issuer
+          raise ConfigurationError.new(
+            "MFA needs all three of mfa_factors:, mfa_secret_key: and mfa_issuer:. Configuring " \
+            "some of them would accept an enrolment and then have nowhere to put it."
+          )
+        end
+
+        return
+      end
+
+      MFA::Service.new(
+        factors: factors,
+        secret_box: MFA::AesSecretBox.new(key, @random),
+        clock: @clock,
+        random: @random,
+        issuer: issuer,
+        rate_limiter: @rate_limiter,
+        # So that redeeming a recovery code ends the account's other sessions, which
+        # `docs/02-security-model.md` requires.
+        sessions: @sessions,
+        drift: drift,
+      )
+    end
+
+    # Second factors, or a clear error rather than a nil.
+    def mfa! : MFA::Service
+      service = @mfa
+      return service if service
+
+      raise ConfigurationError.new(
+        "MFA is not configured. Pass mfa_factors:, mfa_secret_key: and mfa_issuer: to " \
+        "KemalIdentity.configure."
       )
     end
 
@@ -228,6 +283,10 @@ module KemalIdentity
     api_tokens : ApiTokens::Repository? = nil,
     api_token_prefix : String = ApiTokens::Service::DEFAULT_PREFIX,
     jwt : JWT::Validator? = nil,
+    mfa_factors : MFA::Repository? = nil,
+    mfa_secret_key : Secret? = nil,
+    mfa_issuer : String? = nil,
+    mfa_drift : Int32 = 1,
     notifier : Accounts::Notifier? = nil,
     password_policy : Passwords::Policy? = nil,
     remember_cookie : Sessions::CookieConfig = Sessions::CookieConfig.new(
@@ -251,6 +310,10 @@ module KemalIdentity
       remember_tokens: remember_tokens,
       api_tokens: api_tokens,
       jwt: jwt,
+      mfa_factors: mfa_factors,
+      mfa_secret_key: mfa_secret_key,
+      mfa_issuer: mfa_issuer,
+      mfa_drift: mfa_drift,
       api_token_prefix: api_token_prefix,
       notifier: notifier,
       password_policy: password_policy,
