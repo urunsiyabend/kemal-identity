@@ -23,30 +23,71 @@ module KemalIdentity::JWT
     # The scheme this key may be used with, and the only one.
     getter algorithm : Algorithm
 
-    def initialize(@algorithm : Algorithm, @secret : Secret, @id : String? = nil)
-      if (id = @id) && id.empty?
-        raise ConfigurationError.new("key id must not be empty; use nil for an unnamed key")
-      end
+    # A shared secret for HMAC, or a public key for RSA.
+    #
+    # The union is what keeps `Keyring`, `kid` selection and the allow-list identical for both:
+    # only the two lines in `#verify` care which kind of material a key holds.
+    @material : Secret | RSAPublicKey
 
-      if @secret.empty?
-        raise ConfigurationError.new("key secret must not be empty")
-      end
+    def initialize(@algorithm : Algorithm, secret : Secret, @id : String? = nil)
+      validate_id!
 
-      if (algorithm = @algorithm).is_a?(HMAC) && @secret.bytesize < algorithm.minimum_key_bytes
+      raise ConfigurationError.new("key secret must not be empty") if secret.empty?
+
+      algorithm = @algorithm
+
+      unless algorithm.is_a?(HMAC)
         raise ConfigurationError.new(
-          "#{algorithm.name} requires a key of at least #{algorithm.minimum_key_bytes} bytes, " \
-          "got #{@secret.bytesize}"
+          "#{algorithm.name} needs a public key, not a shared secret. Passing one would be the " \
+          "algorithm-confusion attack with the roles reversed."
         )
       end
+
+      if secret.bytesize < algorithm.minimum_key_bytes
+        raise ConfigurationError.new(
+          "#{algorithm.name} requires a key of at least #{algorithm.minimum_key_bytes} bytes, " \
+          "got #{secret.bytesize}"
+        )
+      end
+
+      @material = secret
+    end
+
+    # :ditto:
+    def initialize(@algorithm : Algorithm, public_key : RSAPublicKey, @id : String? = nil)
+      validate_id!
+
+      unless @algorithm.is_a?(RSA)
+        raise ConfigurationError.new("#{@algorithm.name} does not take a public key")
+      end
+
+      @material = public_key
     end
 
     # Whether `signature` verifies over `signing_input` under this key.
     def verify(signing_input : String, signature : Bytes) : Bool
-      @algorithm.verify(signing_input, signature, @secret)
+      material = @material
+      algorithm = @algorithm
+
+      if algorithm.is_a?(RSA) && material.is_a?(RSAPublicKey)
+        return algorithm.verify_with(signing_input, signature, material)
+      end
+
+      return false unless material.is_a?(Secret)
+
+      algorithm.verify(signing_input, signature, material)
+    end
+
+    private def validate_id! : Nil
+      if (id = @id) && id.empty?
+        raise ConfigurationError.new("key id must not be empty; use nil for an unnamed key")
+      end
     end
 
     # Redacted: a config dump in a crash report must not print a verification key, which
     # for HMAC is also a *signing* key and therefore forges tokens.
+    # Redacted even for a public key, which is not itself a secret: the point is that no `Key`
+    # ever prints its material, so nobody has to check which kind they are looking at.
     def to_s(io : IO) : Nil
       io << "#<KemalIdentity::JWT::Key " << (@id || "(unnamed)") << ' ' << @algorithm.name
       io << " [REDACTED]>"

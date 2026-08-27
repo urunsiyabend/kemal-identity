@@ -15,6 +15,7 @@ require "./support/memory_remember_repository"
 require "./support/memory_api_token_repository"
 require "./support/memory_revocation_store"
 require "./support/memory_mfa_repository"
+require "./support/rsa_test_key"
 require "./support/jwt_forge"
 
 require "./contract/clock_contract"

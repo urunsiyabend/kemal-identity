@@ -12,10 +12,9 @@ private alias Forge = KemalIdentity::Testing::JWTForge
 # is the whole point: with HMAC only, "the key decides which algorithm applies" has no visible
 # consequence, because an HMAC key recomputes its own digest and a mismatched one fails on the
 # signature anyway. The confusion attack needs a key that *would* have said yes.
-private class AlwaysVerifies < KemalIdentity::JWT::Algorithm
-  getter name : String
-
-  def initialize(@name : String)
+private class AlwaysVerifies < KemalIdentity::JWT::HMAC
+  def initialize(name : String)
+    super(name, ::OpenSSL::Algorithm::SHA256, 32)
   end
 
   def verify(signing_input : String, signature : Bytes, key : KemalIdentity::Secret) : Bool
@@ -227,6 +226,162 @@ describe "algorithm confusion" do
         algorithms: ["HS256"],
       )
     end
+  end
+end
+
+# The asymmetric half, which is what an OpenID Connect provider actually signs ID tokens with.
+# Unlike HMAC, the key this shard holds verifies and cannot forge — and that difference is
+# exactly what the classic confusion attack tries to erase.
+private def rsa_harness(algorithms : Array(String) = ["RS256"], kid : String? = "rsa")
+  ring = keyring(
+    KemalIdentity::JWT::Key.new(
+      KemalIdentity::JWT::RS256, KemalIdentity::Testing::RSATestKey.public_key, kid
+    )
+  )
+
+  jwt_harness(keyring: ring, algorithms: algorithms)
+end
+
+describe "RSA-signed tokens" do
+  it "verifies a token signed by the issuer's private key" do
+    validator, _ = rsa_harness
+
+    KemalIdentity::SpecHelper.should_authenticate(
+      validator.authenticate(Forge.encode_rsa(Forge.claims, kid: "rsa"))
+    ).subject.should eq("a1")
+  end
+
+  it "verifies every RSA variant it ships" do
+    {"RS256" => KemalIdentity::JWT::RS256,
+     "RS384" => KemalIdentity::JWT::RS384,
+     "RS512" => KemalIdentity::JWT::RS512}.each do |name, algorithm|
+      ring = keyring(
+        KemalIdentity::JWT::Key.new(
+          algorithm, KemalIdentity::Testing::RSATestKey.public_key, "rsa"
+        )
+      )
+      validator, _ = jwt_harness(keyring: ring, algorithms: [name])
+
+      validator.authenticate(Forge.encode_rsa(Forge.claims, algorithm: name, kid: "rsa"))
+        .should be_a(KemalIdentity::Authenticated)
+    end
+  end
+
+  it "rejects claims swapped underneath a valid RSA signature" do
+    validator, _ = rsa_harness
+    genuine = Forge.encode_rsa(Forge.claims(subject: "a1"), kid: "rsa")
+
+    validator.authenticate(Forge.swap_claims(genuine, Forge.claims(subject: "admin")))
+      .should be_a(KemalIdentity::Failed)
+  end
+
+  it "rejects a signature that was not made by the matching private key" do
+    validator, _ = rsa_harness
+    parts = Forge.encode_rsa(Forge.claims, kid: "rsa").split('.')
+    signature = Forge.encode_bytes(
+      KemalIdentity::Testing::RSATestKey.sign("#{parts[0]}.#{parts[1]}x")
+    )
+
+    validator.authenticate("#{parts[0]}.#{parts[1]}.#{signature}")
+      .should be_a(KemalIdentity::Failed)
+  end
+
+  # **The real algorithm-confusion attack.** An attacker who has the issuer's *public* key —
+  # which is public, it is served from a JWKS — re-signs the payload as HS256 using those very
+  # bytes as an HMAC secret. A validator that reads `alg` from the token and then asks "what key
+  # do I have?" verifies it and hands over the account.
+  it "rejects the issuer's public key used as an HMAC secret" do
+    validator, _ = rsa_harness(algorithms: ["RS256", "HS256"])
+
+    # The public key as an attacker would have it: the raw modulus, long enough to satisfy
+    # HS256's key-length floor.
+    public_bytes = KemalIdentity::Testing::RSATestKey.modulus
+    forged = Forge.encode(
+      Forge.claims(subject: "admin"),
+      secret: KemalIdentity::Secret.new(String.new(public_bytes)),
+      algorithm: "HS256",
+      kid: "rsa",
+    )
+
+    validator.authenticate(forged).should be_a(KemalIdentity::Failed)
+  end
+
+  it "rejects an RSA token whose kid names no key in the ring" do
+    validator, _ = rsa_harness
+
+    validator.authenticate(Forge.encode_rsa(Forge.claims, kid: "retired"))
+      .should be_a(KemalIdentity::Failed)
+  end
+
+  it "never raises for a malformed RSA signature" do
+    validator, _ = rsa_harness
+    parts = Forge.encode_rsa(Forge.claims, kid: "rsa").split('.')
+
+    ["", "AAAA", parts[2][0..40], "A" * 400].each do |signature|
+      validator.authenticate("#{parts[0]}.#{parts[1]}.#{signature}")
+        .should be_a(KemalIdentity::Outcome)
+    end
+  end
+end
+
+describe "an RSA key" do
+  # The weakest key in a rotating JWKS would otherwise set the security of the whole thing.
+  it "refuses a modulus below 2048 bits" do
+    expect_raises(KemalIdentity::ConfigurationError, /2048 bits/) do
+      KemalIdentity::JWT::RSAPublicKey.new(Bytes.new(128, 0xff_u8), Bytes[0x01, 0x00, 0x01])
+    end
+  end
+
+  it "refuses an empty exponent" do
+    expect_raises(KemalIdentity::ConfigurationError, /exponent/) do
+      KemalIdentity::JWT::RSAPublicKey.new(
+        KemalIdentity::Testing::RSATestKey.modulus, Bytes.new(0)
+      )
+    end
+  end
+
+  # The DER this shard writes is parsed by OpenSSL rather than trusted, so a key built from the
+  # wrong numbers is a key that verifies nothing — not one that verifies everything.
+  it "verifies nothing when built from a modulus that is not the issuer's" do
+    wrong = KemalIdentity::Testing::RSATestKey.modulus.dup
+    wrong[100] ^= 0x01
+
+    ring = keyring(
+      KemalIdentity::JWT::Key.new(
+        KemalIdentity::JWT::RS256,
+        KemalIdentity::JWT::RSAPublicKey.new(wrong, KemalIdentity::Testing::RSATestKey.exponent),
+        "rsa"
+      )
+    )
+    validator, _ = jwt_harness(keyring: ring, algorithms: ["RS256"])
+
+    validator.authenticate(Forge.encode_rsa(Forge.claims, kid: "rsa"))
+      .should be_a(KemalIdentity::Failed)
+  end
+
+  # Pairing an RSA algorithm with a shared secret, or an HMAC algorithm with a public key, is
+  # the confusion attack written into the configuration instead of into a token.
+  it "refuses to pair an RSA algorithm with a shared secret" do
+    expect_raises(KemalIdentity::ConfigurationError, /public key/) do
+      KemalIdentity::JWT::Key.new(KemalIdentity::JWT::RS256, KemalIdentity::Secret.new("k" * 64))
+    end
+  end
+
+  it "refuses to pair an HMAC algorithm with a public key" do
+    expect_raises(KemalIdentity::ConfigurationError) do
+      KemalIdentity::JWT::Key.new(
+        KemalIdentity::JWT::HS256, KemalIdentity::Testing::RSATestKey.public_key
+      )
+    end
+  end
+
+  it "redacts itself" do
+    key = KemalIdentity::JWT::Key.new(
+      KemalIdentity::JWT::RS256, KemalIdentity::Testing::RSATestKey.public_key, "rsa"
+    )
+
+    key.inspect.should contain("[REDACTED]")
+    key.inspect.should contain("RS256")
   end
 end
 

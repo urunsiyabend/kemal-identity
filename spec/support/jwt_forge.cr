@@ -102,6 +102,22 @@ module KemalIdentity::Testing
       "#{parts[0]}.#{segment(claims.to_json)}.#{parts[2]}"
     end
 
+    # An RS256/384/512 token signed by the fixed test key.
+    def self.encode_rsa(
+      claims : Hash(String, ::JSON::Any),
+      algorithm : String = "RS256",
+      kid : String? = nil,
+      header : Hash(String, ::JSON::Any) = {} of String => ::JSON::Any,
+    ) : String
+      full = {"alg" => ::JSON::Any.new(algorithm), "typ" => ::JSON::Any.new("JWT")}
+      full["kid"] = ::JSON::Any.new(kid) if kid
+      full.merge!(header)
+
+      signing_input = "#{segment(full.to_json)}.#{segment(claims.to_json)}"
+
+      "#{signing_input}.#{encode_bytes(RSATestKey.sign(signing_input, algorithm))}"
+    end
+
     def self.segment(json : String) : String
       encode_bytes(json.to_slice)
     end

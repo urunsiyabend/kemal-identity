@@ -81,6 +81,11 @@ module KemalIdentity::JWT
     # tokens have expired; see `RevocationStore`.
     getter revocations : RevocationStore?
 
+    # A `JWKS` has not been fetched at boot, so the boot-time check against the algorithm
+    # allow-list applies only when a fixed keyring was supplied.
+    @static_keyring : Keyring?
+    @keys : KeySource
+
     # `algorithms` is an allow-list of `alg` header values, checked before a key is even
     # selected. It is separate from the keyring's algorithms on purpose: two independent
     # gates on the same value, so that one misconfigured keyring is not enough.
@@ -95,8 +100,11 @@ module KemalIdentity::JWT
     # a disabled account stops authenticating immediately instead of at `exp`. That is a
     # read from storage on every request, which is the cost a JWT was chosen to avoid — the
     # honest accounting is in `RevocationStore`.
+    # `keyring` may be a fixed `Keyring` or a `KeySource` such as `JWKS`. The difference is
+    # visible in exactly one place — an unknown `kid` asks a `JWKS` to refetch once, because
+    # that is what a key rotation looks like from here.
     def initialize(
-      @keyring : Keyring,
+      keyring : Keyring | KeySource,
       @issuer : String,
       @audience : String,
       @algorithms : Array(String),
@@ -109,6 +117,9 @@ module KemalIdentity::JWT
       @accounts : Accounts::Repository? = nil,
       @max_bytesize : Int32 = DEFAULT_MAX_BYTESIZE,
     )
+      @keys = keyring.is_a?(Keyring) ? StaticKeySource.new(keyring) : keyring
+      @static_keyring = keyring.is_a?(Keyring) ? keyring : nil
+
       raise ConfigurationError.new("issuer must not be empty") if @issuer.blank?
       raise ConfigurationError.new("audience must not be empty") if @audience.blank?
 
@@ -132,14 +143,20 @@ module KemalIdentity::JWT
         raise ConfigurationError.new("an algorithm name must not be empty")
       end
 
+      # Only for a fixed keyring: a `JWKS` has not been fetched yet at boot, and its own parser
+      # already drops entries the allow-list does not permit.
+      #
       # The keyring can only ever prove tokens the allow-list would refuse anyway, which is
       # a configuration mistake rather than a hole — but it is the kind that hides a typo in
       # an algorithm name until the day rotation needs it.
-      @keyring.keys.each do |key|
-        unless @algorithms.includes?(key.algorithm.name)
-          raise ConfigurationError.new(
-            "keyring holds a #{key.algorithm.name} key, which the algorithm allow-list does not permit"
-          )
+      if static = @static_keyring
+        static.keys.each do |key|
+          unless @algorithms.includes?(key.algorithm.name)
+            raise ConfigurationError.new(
+              "keyring holds a #{key.algorithm.name} key, which the algorithm allow-list " \
+              "does not permit"
+            )
+          end
         end
       end
     end
@@ -229,7 +246,13 @@ module KemalIdentity::JWT
       return unless @algorithms.includes?(alg)
       return unless acceptable_header?(header)
 
-      key = @keyring.find(select_kid(header))
+      kid = select_kid(header)
+      key = @keys.keyring.find(kid)
+
+      # An unknown `kid` is what a key rotation looks like from here, so a `JWKS` gets one
+      # chance to refetch. It rate-limits itself, because this path is reachable by anybody who
+      # can send a token — see `JWKS#minimum_refresh_interval`.
+      key = @keys.refresh_for(kid).find(kid) if key.nil?
       return if key.nil?
 
       # The token said how it wanted to be verified; the key says how it may be. Only the

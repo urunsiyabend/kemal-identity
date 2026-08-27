@@ -53,7 +53,9 @@ require "./kemal_identity/mfa/repository"
 require "./kemal_identity/mfa/service"
 
 require "./kemal_identity/jwt/algorithm"
+require "./kemal_identity/jwt/rsa"
 require "./kemal_identity/jwt/key"
+require "./kemal_identity/jwt/jwks"
 require "./kemal_identity/jwt/revocation_store"
 require "./kemal_identity/jwt/validator"
 
