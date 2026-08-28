@@ -42,6 +42,28 @@ JWT_VALIDATOR = KemalIdentity::JWT::Validator.new(
   clock: TEST_CLOCK,
 )
 
+AUTHZ_STORE = KemalIdentity::Testing::MemoryAuthzRepository.new
+
+# Roles are code, assignments are data: the catalog is built here, and every example that needs
+# a grant writes one row.
+AUTHORIZER = KemalIdentity::Authz::RBAC.new(
+  catalog: KemalIdentity::Authz::RoleCatalog.new(
+    KemalIdentity::Authz::PermissionRegistry.new([
+      KemalIdentity::Authz::Permission.new("invoices.read"),
+      KemalIdentity::Authz::Permission.new(
+        "invoices.refund", minimum_assurance: KemalIdentity::AssuranceLevel::MFA
+      ),
+    ]),
+    [
+      KemalIdentity::Authz::Role.new("reader", ["invoices.read"]),
+      KemalIdentity::Authz::Role.new("finance", ["invoices.read", "invoices.refund"]),
+    ]
+  ),
+  store: AUTHZ_STORE,
+  clock: TEST_CLOCK,
+  random: KemalIdentity::Testing::DeterministicRandom.new(seed: 3),
+)
+
 KemalIdentity.configure(
   accounts: ACCOUNTS,
   sessions: SESSIONS,
@@ -57,6 +79,7 @@ KemalIdentity.configure(
   action_tokens: ACTION_TOKENS,
   api_tokens: API_TOKENS,
   jwt: JWT_VALIDATOR,
+  authorizer: AUTHORIZER,
   mfa_factors: MFA_FACTORS,
   mfa_secret_key: KemalIdentity::Secret.new("mfa-secret-box-key-of-32-bytes!!"),
   mfa_issuer: "Acme",
@@ -205,6 +228,31 @@ end
 
 post "/api/things" do |env|
   "created"
+end
+
+# Authorization guards the action, at the point of action, with the permission it is about to
+# perform.
+get "/invoices" do |env|
+  env.auth.authorize!("invoices.read")
+  "invoices ok"
+end
+
+get "/tenants/:tenant/invoices" do |env|
+  env.auth.authorize!("invoices.read", tenant: env.params.url["tenant"])
+  "tenant invoices ok"
+end
+
+# GET rather than POST only so the example need not carry a CSRF token; the permission is what
+# is under test.
+get "/invoices/refund" do |env|
+  env.auth.authorize!("invoices.refund")
+  "refunded"
+end
+
+# What a template does: `can?` decides whether to render the button, `authorize!` guards the
+# action behind it.
+get "/invoices/menu" do |env|
+  env.auth.can?("invoices.read") ? "show" : "hide"
 end
 
 get "/whoami" do |env|
@@ -1157,5 +1205,110 @@ describe "the second factor over HTTP" do
     session = log_in
 
     request("GET", "/vault", cookies("kemal_identity=#{session}")).status_code.should eq(403)
+  end
+end
+
+describe "authorization over HTTP" do
+  before_each { AUTHZ_STORE.remove_account("a1") }
+
+  # 401, not 403: nobody is signed in, so logging in is the thing that could help.
+  it "answers an anonymous request with a 401 rather than a 403" do
+    get "/invoices", headers: HTTP::Headers{"Accept" => "application/json"}
+
+    response.status_code.should eq(401)
+  end
+
+  it "answers a signed-in request with no grant with a 403" do
+    session = log_in
+
+    get "/invoices", headers: cookies("kemal_identity=#{session}")
+
+    response.status_code.should eq(403)
+  end
+
+  it "serves the route once the role is granted" do
+    session = log_in
+    AUTHORIZER.grant("a1", "reader")
+
+    get "/invoices", headers: cookies("kemal_identity=#{session}")
+
+    response.status_code.should eq(200)
+    response.body.should eq("invoices ok")
+  end
+
+  # The denial reason is an audit-log value. A response that varied with it would confirm that
+  # a guessed tenant exists and that the caller is outside it.
+  it "answers 'not a member' and 'a member with no role' identically" do
+    session = log_in
+    AUTHZ_STORE.add_member(KemalIdentity::Authz::Membership.new(
+      id: "m1", account_id: "a1", tenant_id: "acme", created_at: TEST_CLOCK.now
+    ))
+
+    get "/tenants/acme/invoices", headers: cookies("kemal_identity=#{session}")
+    member = {response.status_code, response.body, response.headers["Content-Type"]?}
+
+    get "/tenants/globex/invoices", headers: cookies("kemal_identity=#{session}")
+    stranger = {response.status_code, response.body, response.headers["Content-Type"]?}
+
+    member.should eq(stranger)
+    member[0].should eq(403)
+  end
+
+  it "serves a tenant route to a member holding the role there" do
+    session = log_in
+    AUTHORIZER.add_member("a1", "acme")
+    AUTHORIZER.grant("a1", "reader", tenant_id: "acme")
+
+    get "/tenants/acme/invoices", headers: cookies("kemal_identity=#{session}")
+
+    response.status_code.should eq(200)
+  end
+
+  # A tenant grant is inert without a membership, over HTTP as everywhere else.
+  it "refuses a tenant route to somebody holding the role but not a member" do
+    session = log_in
+    AUTHORIZER.grant("a1", "reader", tenant_id: "acme")
+
+    get "/tenants/acme/invoices", headers: cookies("kemal_identity=#{session}")
+
+    response.status_code.should eq(403)
+  end
+
+  # Distinguishable from an outright denial on purpose, exactly as `require_fresh!` is: the
+  # application has to be able to prompt for a second factor rather than show a dead end.
+  it "asks for stronger authentication when the grant is there and the assurance is not" do
+    session = log_in
+    AUTHORIZER.grant("a1", "finance")
+
+    get "/invoices/refund", headers: cookies("kemal_identity=#{session}")
+
+    response.status_code.should eq(403)
+    response.body.should contain("fresh authentication required")
+  end
+
+  it "lets a template ask without raising" do
+    session = log_in
+
+    get "/invoices/menu", headers: cookies("kemal_identity=#{session}")
+    response.body.should eq("hide")
+
+    AUTHORIZER.grant("a1", "reader")
+
+    get "/invoices/menu", headers: cookies("kemal_identity=#{session}")
+    response.body.should eq("show")
+  end
+
+  # Nothing is carried in the session, so nothing has to be reissued for a revocation to bite.
+  it "stops serving the route the moment the role is revoked, with the same session" do
+    session = log_in
+    AUTHORIZER.grant("a1", "reader")
+
+    get "/invoices", headers: cookies("kemal_identity=#{session}")
+    response.status_code.should eq(200)
+
+    AUTHORIZER.revoke("a1", "reader")
+
+    get "/invoices", headers: cookies("kemal_identity=#{session}")
+    response.status_code.should eq(403)
   end
 end

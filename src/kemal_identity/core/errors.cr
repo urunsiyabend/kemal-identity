@@ -32,4 +32,17 @@ module KemalIdentity
   # enough, or at too low an assurance level. Mapped to 403 — the caller is known, they
   # simply have to prove it again.
   class FreshAuthenticationRequiredError < Error; end
+
+  # Raised by `authorize!` when the caller is authenticated and simply not allowed. Mapped to
+  # 403.
+  #
+  # Deliberately not `NotAuthenticatedError`: answering a denied action with a 401 tells the
+  # caller to log in again, which for somebody who is already logged in is both wrong and a
+  # loop. It is also not `FreshAuthenticationRequiredError` — proving themselves again would
+  # change nothing, because the problem is the grant and not the credential.
+  #
+  # The message must not name the permission, the tenant, or the reason. `Authz::DenialReason`
+  # exists for the audit log; a response that varies with it tells an attacker whether the
+  # tenant they guessed exists and whether they are inside it.
+  class ForbiddenError < Error; end
 end

@@ -1,5 +1,5 @@
 module KemalIdentity::Kemal
-  # Turns the two guard exceptions into responses: 401 and 403.
+  # Turns the guard exceptions into responses: 401 and 403.
   #
   # `require!` raises `NotAuthenticatedError` — nobody is signed in, so 401. `require_fresh!`
   # raises `FreshAuthenticationRequiredError` — the caller *is* known and simply has to prove
@@ -34,6 +34,11 @@ module KemalIdentity::Kemal
       # No redirect: sending somebody to a login page when they are already logged in is
       # confusing, and the application usually wants its own re-authentication prompt.
       respond(env, status: 403, message: "fresh authentication required", redirect: false)
+    rescue ForbiddenError
+      # 403, no redirect, and one body for every denial reason: whether the caller is not a
+      # member of a tenant or a member with no role is an answer the audit log gets and the
+      # client does not.
+      respond(env, status: 403, message: "not permitted", redirect: false)
     rescue CSRFError
       # 403, and never a redirect: the request was refused on its own merits, and bouncing a
       # rejected POST to a login page would suggest the session had ended when it had not.

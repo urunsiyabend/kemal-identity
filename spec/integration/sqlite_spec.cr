@@ -62,6 +62,7 @@ end
 private def reset_schema! : Nil
   %w[auth_sessions auth_action_tokens auth_remember_tokens auth_api_tokens
     auth_mfa_factors auth_mfa_recovery_codes auth_external_identities
+    auth_role_assignments auth_tenant_memberships
     auth_accounts].each do |table|
     DATABASE.exec("DELETE FROM #{table}")
   end
@@ -113,6 +114,13 @@ describe KemalIdentity::SQLite::LinkRepository do
   it_behaves_like_a_link_repository do
     reset_schema!
     KemalIdentity::SQLite::LinkRepository.new(DATABASE)
+  end
+end
+
+describe KemalIdentity::SQLite::AuthzRepository do
+  it_behaves_like_an_authz_repository do
+    reset_schema!
+    KemalIdentity::SQLite::AuthzRepository.new(DATABASE)
   end
 end
 

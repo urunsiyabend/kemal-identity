@@ -12,9 +12,12 @@ Kemal handler that populates `env.auth`.
 
 ## What Kemal Identity is not
 
-- **Not an authorization system.** It answers "who", not "may they". An
-  `Authorizer` contract is a planned extension point (P2); RBAC, ACLs and policy
-  evaluation live outside the core, permanently.
+- **Not an authorization system.** It answers "who", not "may they". The
+  `Authorizer` contract shipped in v0.6 and `Authz::RBAC` with it, but both live
+  outside the core and stay there permanently: `Principal` carries no roles, no
+  handler consults an authorizer, and an application that wants policy evaluation,
+  ACLs or attribute-based rules implements the contract rather than asking this
+  shard to grow them.
 - **Not an OAuth2 authorization server.** Being an OAuth/OIDC *client* is a
   planned extension. Issuing tokens to third parties is a different product and
   will not be built here. (Laravel's Sanctum/Passport split is the precedent.)

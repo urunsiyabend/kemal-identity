@@ -8,6 +8,7 @@ require "./postgres/remember_repository"
 require "./postgres/api_token_repository"
 require "./postgres/mfa_repository"
 require "./postgres/link_repository"
+require "./postgres/authz_repository"
 
 # The PostgreSQL adapters.
 #

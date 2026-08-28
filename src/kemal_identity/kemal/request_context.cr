@@ -83,6 +83,74 @@ module KemalIdentity::Kemal
       raise FreshAuthenticationRequiredError.new("stronger authentication required")
     end
 
+    # The principal, if they may perform `permission`.
+    #
+    # Two different refusals, and the difference matters to the caller:
+    #
+    # * nobody is signed in — `NotAuthenticatedError`, a 401, go and log in;
+    # * signed in and not allowed — `ForbiddenError`, a 403, logging in again will not help;
+    # * signed in, allowed, but not strongly enough authenticated —
+    #   `FreshAuthenticationRequiredError`, also a 403, but the application should prompt for a
+    #   second factor rather than show a dead end.
+    #
+    # ```
+    # post "/invoices/:id/refund" do |env|
+    #   env.auth.authorize!("invoices.refund", tenant: env.params.url["tenant"])
+    #   # ...
+    # end
+    # ```
+    #
+    # **Pass the tenant.** A check that names no tenant is a question about global scope, not a
+    # question about whichever tenant the route happens to be operating on, so a route that
+    # forgets it gets a denial rather than a quiet upgrade — but a route that forgets it *and*
+    # the caller holds a global role gets an answer about the wrong thing entirely.
+    #
+    # The denial is logged with its reason and the response is not: the reason distinguishes
+    # "not a member of this tenant" from "a member with no role", and telling the caller which
+    # would confirm that a guessed tenant exists.
+    def authorize!(permission : String, tenant : String? = nil) : Principal
+      principal = require!
+
+      case decision = @app.authorizer!.decide(principal, permission, tenant)
+      in Authz::Permitted
+        principal
+      in Authz::Forbidden
+        Log.info &.emit(
+          "authz.denied",
+          account: principal.subject,
+          permission: permission,
+          tenant: tenant,
+          reason: decision.reason.to_s,
+        )
+
+        if decision.reason.insufficient_assurance?
+          raise FreshAuthenticationRequiredError.new("stronger authentication required")
+        end
+
+        raise ForbiddenError.new("not permitted")
+      end
+    end
+
+    # The decision, unraised, for a caller that wants to branch on it.
+    #
+    # An anonymous request is `Forbidden` rather than an exception: asking "may they" about
+    # somebody who is not signed in has an answer, and it is no.
+    def authorize(permission : String, tenant : String? = nil) : Authz::Decision
+      principal = principal?
+
+      if principal.nil?
+        return Authz::Forbidden.new(permission, Authz::DenialReason::NotPermitted, tenant)
+      end
+
+      @app.authorizer!.decide(principal, permission, tenant)
+    end
+
+    # Whether the current request may perform `permission`. For a template deciding whether to
+    # render a button — never as the guard itself, which is `authorize!` at the point of action.
+    def can?(permission : String, tenant : String? = nil) : Bool
+      authorize(permission, tenant).permitted?
+    end
+
     # Mints a session for `principal` and sets the cookie.
     #
     # **This is the session fixation defence.** Any session the client held before this call

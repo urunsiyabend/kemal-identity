@@ -87,6 +87,18 @@ module KemalIdentity
     # when the application accepts no bearer credential at all.
     getter bearer : RequestAuthenticator?
 
+    # What decides whether a principal may perform an action, or `nil` when the application has
+    # not configured authorization at all.
+    #
+    # Nil rather than a permissive default, and `Authz::DenyAll` rather than "allow" when
+    # something is half-configured: an authorizer that permitted everything would turn a wiring
+    # mistake into an open application, and a nil is what makes `env.auth.authorize!` say so
+    # loudly instead of guessing.
+    #
+    # Built by the application rather than assembled from parameters here — `Authz::RBAC.new`
+    # takes a role catalog, and a catalog is code that belongs next to the routes it guards.
+    getter authorizer : Authz::Authorizer?
+
     def initialize(
       @accounts : Accounts::Repository,
       sessions : Sessions::Repository,
@@ -102,6 +114,7 @@ module KemalIdentity
       @api_tokens : ApiTokens::Repository? = nil,
       api_token_prefix : String = ApiTokens::Service::DEFAULT_PREFIX,
       @jwt : JWT::Validator? = nil,
+      @authorizer : Authz::Authorizer? = nil,
       @mfa_factors : MFA::Repository? = nil,
       mfa_secret_key : Secret? = nil,
       mfa_issuer : String? = nil,
@@ -240,6 +253,17 @@ module KemalIdentity
       )
     end
 
+    # The authorizer, or a clear error rather than a nil.
+    def authorizer! : Authz::Authorizer
+      authorizer = @authorizer
+      return authorizer if authorizer
+
+      raise ConfigurationError.new(
+        "authorization is not configured. Pass authorizer: KemalIdentity::Authz::RBAC.new(...) " \
+        "to KemalIdentity.configure."
+      )
+    end
+
     # Remember-me, or a clear error rather than a nil.
     def remember! : Sessions::RememberService
       service = @remember
@@ -283,6 +307,7 @@ module KemalIdentity
     api_tokens : ApiTokens::Repository? = nil,
     api_token_prefix : String = ApiTokens::Service::DEFAULT_PREFIX,
     jwt : JWT::Validator? = nil,
+    authorizer : Authz::Authorizer? = nil,
     mfa_factors : MFA::Repository? = nil,
     mfa_secret_key : Secret? = nil,
     mfa_issuer : String? = nil,
@@ -310,6 +335,7 @@ module KemalIdentity
       remember_tokens: remember_tokens,
       api_tokens: api_tokens,
       jwt: jwt,
+      authorizer: authorizer,
       mfa_factors: mfa_factors,
       mfa_secret_key: mfa_secret_key,
       mfa_issuer: mfa_issuer,

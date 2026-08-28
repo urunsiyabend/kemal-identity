@@ -65,6 +65,15 @@ require "./kemal_identity/jwt/jwks"
 require "./kemal_identity/jwt/revocation_store"
 require "./kemal_identity/jwt/validator"
 
+require "./kemal_identity/authz/permission"
+require "./kemal_identity/authz/role"
+require "./kemal_identity/authz/decision"
+require "./kemal_identity/authz/membership"
+require "./kemal_identity/authz/repository"
+require "./kemal_identity/authz/authorizer"
+require "./kemal_identity/authz/cache"
+require "./kemal_identity/authz/rbac"
+
 require "./kemal_identity/accounts/service"
 
 require "./kemal_identity/rate_limiter"

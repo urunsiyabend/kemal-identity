@@ -706,6 +706,162 @@ looking healthy is worse than an error.
 The endpoint must be `https`. Anybody who can rewrite a key set can mint tokens that verify —
 that is the whole game.
 
+## Authorization
+
+Off by default, and separate from everything above on purpose. Authentication answers "who is
+this"; authorization answers "and may they". The two have different lifetimes — a session is
+minted once and lives for days, a grant can be taken away in the middle of it — and that is why
+`Principal` carries no roles and no permissions, and why nothing here writes any into a session
+or a token. Every check reads the current answer.
+
+### Roles are code, assignments are data
+
+```crystal
+PERMISSIONS = KemalIdentity::Authz::PermissionRegistry.new([
+  KemalIdentity::Authz::Permission.new("invoices.read", "See invoices"),
+  KemalIdentity::Authz::Permission.new(
+    "invoices.refund", "Move money back to a customer",
+    minimum_assurance: KemalIdentity::AssuranceLevel::MFA
+  ),
+  KemalIdentity::Authz::Permission.new("members.invite", "Add somebody to a tenant"),
+])
+
+CATALOG = KemalIdentity::Authz::RoleCatalog.new(PERMISSIONS, [
+  KemalIdentity::Authz::Role.new("reader", ["invoices.read"]),
+  KemalIdentity::Authz::Role.new("finance", ["invoices.read", "invoices.refund"]),
+  KemalIdentity::Authz::Role.new("owner", ["invoices.read", "members.invite"]),
+])
+
+KemalIdentity.configure(
+  accounts: KemalIdentity::Postgres::AccountRepository.new(db),
+  sessions: KemalIdentity::Postgres::SessionRepository.new(db),
+  authorizer: KemalIdentity::Authz::RBAC.new(
+    catalog: CATALOG,
+    store: KemalIdentity::Postgres::AuthzRepository.new(db),
+  ),
+)
+```
+
+There is no `auth_roles` table. The database holds only **who holds which role**; what a role
+grants is a literal in your application. A role definition in a table is one UPDATE away from
+rewriting what everybody holding it can do, through an injection or an over-permissive admin
+screen or a restored backup, with nothing about the application having changed. In code the
+same change is a diff somebody reviews.
+
+The cost is that roles cannot be administered at runtime. If you need that, implement
+`Authz::Authorizer` against your own tables — that is why it is a contract.
+
+`RoleCatalog` refuses at **boot** a role granting a permission nobody declared, so a rename
+that misses one definition fails on your machine rather than denying an action in production
+for a month.
+
+### There are no wildcards
+
+`invoices.*` is refused at construction. A wildcard is a grant of permissions **that do not
+exist yet**: whoever holds `admin.*` today silently acquires `admin.billing.export_everything`
+the day somebody adds it, and no reviewer sees a privilege change. Enumerate them; the typing
+is the point.
+
+### Guarding a route
+
+```crystal
+post "/invoices/:id/refund" do |env|
+  env.auth.authorize!("invoices.refund", tenant: env.params.url["tenant"])
+  # ...
+end
+```
+
+Three refusals, three meanings:
+
+| Situation | Raises | Status |
+|---|---|---|
+| nobody signed in | `NotAuthenticatedError` | 401 — logging in would help |
+| signed in, no grant | `ForbiddenError` | 403 — logging in again would not |
+| signed in, grant, weak assurance | `FreshAuthenticationRequiredError` | 403 — prompt for a second factor |
+
+`ErrorHandler` maps all three. The response body for a denial is identical whatever the reason:
+`Authz::DenialReason` distinguishes "not a member of this tenant" from "a member with no role",
+and a body that varied with it would confirm that a guessed tenant exists.
+
+For a template, ask without raising:
+
+```crystal
+<% if env.auth.can?("invoices.refund", tenant: tenant) %>
+  <button>Refund</button>
+<% end %>
+```
+
+Use `can?` to decide what to *render* and `authorize!` to guard what happens when it is
+clicked. A permission list handed to a template is a snapshot, and a snapshot used as a
+decision is the stale-grant problem this whole module exists to avoid.
+
+### Tenancy
+
+Two rows say one thing, and the redundancy is deliberate:
+
+```crystal
+authorizer = KemalIdentity.app.authorizer!.as(KemalIdentity::Authz::RBAC)
+
+authorizer.add_member("account-1", "acme")
+authorizer.grant("account-1", "finance", tenant_id: "acme", granted_by: current.subject)
+```
+
+A role held inside a tenant grants **nothing** without a membership in that tenant. So
+`remove_member` is a single call that revokes everything at once — it deletes that tenant's
+assignments too — and it cannot be defeated by an assignment somebody missed in the cleanup.
+Re-inviting them later does not silently restore the roles they used to hold.
+
+A grant with **no** tenant is global: it applies everywhere, including inside every tenant, and
+is not gated by membership. That is the dangerous kind. Have very few, and record
+`granted_by` on each.
+
+`Principal#tenant_id` binds a session to one tenant. A bound principal asking about another is
+refused before membership is even read — that is the identifier-in-the-URL attack, and it must
+not depend on a database row being correct. A principal with no tenant is unconstrained, which
+is the single-tenant deployment.
+
+**Pass the tenant.** A check that names no tenant is a question about *global* scope, not about
+whichever tenant the route happens to be operating on, so a route that forgets it gets a denial
+rather than a quiet upgrade.
+
+### Assurance belongs to the permission
+
+`minimum_assurance` is a property of the action — refunding money needs a second factor wherever
+it is called from — so it is declared once, not repeated at every call site where somebody might
+forget it. The floor defaults to `Password`: a session restored from a remember-me cookie proves
+possession of a stored token, not the presence of the account holder.
+
+### The cache, and what its TTL costs you
+
+Off by default. Every check reads the store, which is one indexed query.
+
+```crystal
+KemalIdentity::Authz::RBAC.new(
+  catalog: CATALOG,
+  store: KemalIdentity::Postgres::AuthzRepository.new(db),
+  cache: KemalIdentity::Authz::Cache.new(KemalIdentity::SystemClock.new, ttl: 5.seconds),
+)
+```
+
+**The TTL is the revocation delay.** Whatever you set, that is how long somebody keeps access
+after it is taken away, in every process that had cached them. `MAX_TTL` is one minute and the
+constructor refuses more — not because a longer one would not be faster, but because a
+ten-minute cache is a ten-minute window in which a compromised account keeps working after
+somebody has already noticed.
+
+`grant`, `revoke` and `remove_member` called on the `RBAC` object invalidate it. Behind several
+processes that clears only the one that made the change; the others wait out the TTL. That is
+the honest bound, which is why the TTL is capped rather than trusted to invalidation.
+
+### Deleting an account
+
+```crystal
+authorizer.remove_account(account_id)
+```
+
+Authorization data must not outlive the account it describes — otherwise a reused identifier
+inherits somebody else's grants.
+
 ## PostgreSQL
 
 ```crystal
@@ -860,8 +1016,8 @@ resolves against Crystal 1.21 and crystal-pg 0.30
 
 `migrations/postgres/` holds `auth_sessions`, `auth_action_tokens`, `auth_remember_tokens`,
 `auth_api_tokens`, `auth_mfa_factors`, `auth_mfa_recovery_codes`, `auth_external_identities`,
-and the optional reference `auth_accounts`. `migrations/sqlite/` holds the same eight in
-SQLite's dialect. If you already have a `users` table with a password digest, you
+`auth_tenant_memberships`, `auth_role_assignments`, and the optional reference
+`auth_accounts`. `migrations/sqlite/` holds the same ten in SQLite's dialect. If you already have a `users` table with a password digest, you
 implement `AccountRepository` over it and never create `auth_accounts` at all — that is the
 whole point of the contract being abstract.
 

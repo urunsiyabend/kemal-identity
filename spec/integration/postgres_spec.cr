@@ -28,7 +28,8 @@ end
 private def reset_schema! : Nil
   database.exec(
     "TRUNCATE auth_sessions, auth_action_tokens, auth_remember_tokens, auth_api_tokens, " \
-    "auth_mfa_factors, auth_mfa_recovery_codes, auth_external_identities, auth_accounts"
+    "auth_mfa_factors, auth_mfa_recovery_codes, auth_external_identities, " \
+    "auth_role_assignments, auth_tenant_memberships, auth_accounts"
   )
 rescue error : PQ::PQError
   raise Spec::AssertionFailed.new(
@@ -107,6 +108,13 @@ else
     it_behaves_like_a_link_repository do
       reset_schema!
       KemalIdentity::Postgres::LinkRepository.new(database)
+    end
+  end
+
+  describe KemalIdentity::Postgres::AuthzRepository do
+    it_behaves_like_an_authz_repository do
+      reset_schema!
+      KemalIdentity::Postgres::AuthzRepository.new(database)
     end
   end
 
@@ -241,6 +249,70 @@ else
 
       returned.compact.sort!.should eq((2..9).to_a)
       repo.find_by_id("a1").or_fail.auth_version.should eq(9)
+    end
+  end
+
+  describe KemalIdentity::Postgres::AuthzRepository do
+    now = KemalIdentity::SpecHelper::FIXED_NOW
+
+    # A plain unique index does not collide on NULL, so without the partial
+    # `WHERE tenant_id IS NULL` index every one of these would insert its own row and the
+    # account would hold the same global role sixteen times. The duplicates would be harmless
+    # until somebody revoked it once and found it still granted.
+    it "lets exactly one concurrent grant of the same global role win" do
+      reset_schema!
+
+      repo = KemalIdentity::Postgres::AuthzRepository.new(database)
+      results = Channel(Bool).new
+
+      16.times do |index|
+        spawn do
+          results.send(repo.grant(KemalIdentity::Authz::Assignment.new(
+            id: "g#{index}", account_id: "a1", role: "operator", granted_at: now
+          )))
+        end
+      end
+
+      Array.new(16) { results.receive }.count(true).should eq(1)
+      repo.assignments_for("a1").size.should eq(1)
+    end
+
+    it "lets exactly one concurrent grant of the same tenant role win" do
+      reset_schema!
+
+      repo = KemalIdentity::Postgres::AuthzRepository.new(database)
+      results = Channel(Bool).new
+
+      16.times do |index|
+        spawn do
+          results.send(repo.grant(KemalIdentity::Authz::Assignment.new(
+            id: "g#{index}", account_id: "a1", role: "finance",
+            granted_at: now, tenant_id: "acme"
+          )))
+        end
+      end
+
+      Array.new(16) { results.receive }.count(true).should eq(1)
+    end
+
+    # Two invitations accepted at once must not produce two memberships: "remove them from this
+    # tenant" would then be a partial operation, leaving one row behind.
+    it "lets exactly one concurrent membership win" do
+      reset_schema!
+
+      repo = KemalIdentity::Postgres::AuthzRepository.new(database)
+      results = Channel(Bool).new
+
+      16.times do |index|
+        spawn do
+          results.send(repo.add_member(KemalIdentity::Authz::Membership.new(
+            id: "m#{index}", account_id: "a1", tenant_id: "acme", created_at: now
+          )))
+        end
+      end
+
+      Array.new(16) { results.receive }.count(true).should eq(1)
+      repo.memberships_for("a1").size.should eq(1)
     end
   end
 end

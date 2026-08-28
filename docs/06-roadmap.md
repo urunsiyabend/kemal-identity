@@ -178,6 +178,25 @@ Role and permission lists do not get copied into long-lived tokens or sessions. 
 membership changes must take effect immediately, they are read from the authorization store
 or a short-lived versioned cache.
 
+### Progress
+
+| Deliverable | State |
+|---|---|
+| `Authorizer` contract | **done** — `Authz::Authorizer`, plus `DenyAll`, because the only safe thing an unconfigured authorizer can do is permit nothing |
+| Permissions and roles | **done** — `Authz::Permission` and `Authz::Role`, with roles defined in **code** and only assignments in the database. `blueprints/0018-authorization-and-tenancy.md` says why, and what it costs |
+| No wildcards | **done** — `Permission::PATTERN` refuses `*` at construction. A wildcard is a grant of permissions that do not exist yet |
+| Unknown permissions fail closed and loudly | **done** — `RoleCatalog` refuses at boot a role granting an undeclared permission; a typo at a call site denies with `DenialReason::UnknownPermission` rather than looking like a working check |
+| Tenant membership | **done** — `auth_tenant_memberships`, separate from role assignment, and a tenant role is inert without one |
+| Cross-tenant refusal | **done** — a principal bound to one tenant asking about another is refused before membership is read |
+| Assurance-gated permissions | **done** — `Permission#minimum_assurance`; a denial for weak assurance asks for step-up rather than showing a dead end |
+| `Authz::Repository` + adapters | **done** — a 30-example contract against the in-memory double, PostgreSQL and SQLite, plus sixteen-fiber concurrency examples that fail if the partial unique index on the global scope is dropped |
+| Grants read, never carried | **done** — `Principal` still carries no roles; a revocation bites on the very next request with the same session, asserted over HTTP |
+| Short-lived cache | **done** — `Authz::Cache`, off by default, five seconds by default, `MAX_TTL` one minute, bounded and self-clearing. The TTL *is* the revocation delay and is documented as such |
+
+Not done here, deliberately: a path-prefix authorization guard along the lines of `PathGuard`.
+Authorization is per-action, and a prefix-to-permission map encourages exactly the coarse check
+that lets `/admin/billing` inherit whatever `/admin` required.
+
 ## v1.0 — API freeze
 
 The criterion is contract stability, not feature count. `Principal`,
