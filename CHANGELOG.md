@@ -1,5 +1,60 @@
 # Changelog
 
+## v0.7.0 — 2026-08-29
+
+Adoption. The migration path `docs/06-roadmap.md` has described since v0.1, made real, plus one
+packaging change that had to happen before the v1.0 freeze rather than after it.
+
+### ⚠ Breaking: the database drivers are yours to declare
+
+`pg` and `sqlite3` moved from `dependencies` to `development_dependencies`. An application that
+requires `kemal_identity/postgres` or `kemal_identity/sqlite` must now list that driver in its
+own `shard.yml` — which it already had to, for its own queries.
+
+Nothing in `kemal_identity` itself requires either driver. Listing them made every consumer
+compile and link both, including one using neither because it implements the repository
+contracts over its own storage, which `docs/03-data-model.md` treats as the normal arrangement.
+Deferred since v0.3; done now because a breaking packaging change belongs before an API freeze.
+
+### Passwords, lazily
+
+- `Passwords::LegacyVerifier` — verify-only by construction. No `hash_secret`, so a migration
+  cannot keep creating rows in the old format and the count of old digests can only go down.
+- `Passwords::MigratingHasher` — the current hasher plus one or more legacy verifiers. A correct
+  password against a legacy digest logs in and is rehashed immediately; nobody is forced through
+  a reset. It is a `Hasher` wherever a hasher goes and runs the same contract spec.
+- Digests are routed to exactly **one** verifier by shape (`handles?`, which never sees the
+  secret). Trying every verifier in turn would make a login cost the sum of every legacy scheme.
+- **This shard ships no legacy verifier implementations**, deliberately: a published
+  `Sha1Verifier` is a published working SHA-1 password check. Yours is five lines.
+- A failed legacy verification pays for a throwaway verification against the current hasher's
+  dummy digest. Legacy schemes are fast and bcrypt is slow, so without it the response time says
+  which accounts are still on the cheap scheme — precisely the ones worth attacking if the
+  database leaks. Distinct from the enumeration oracle `dummy_digest` already closes.
+- A legacy password longer than the current hasher can represent is **refused** rather than
+  verified-then-500ing on the rehash, with a `Log.warn` naming the scheme and the byte count so
+  an operator learns those accounts exist. Truncating was never an option.
+
+### Sessions, adopted once
+
+- `Kemal::LegacySessionHandler` takes a block that returns **a subject and nothing else** — not a
+  principal, not a timestamp, and above all not a token. Whatever signed the old session stays in
+  the old system and dies with it.
+- The adopted session is `AssuranceLevel::Remembered`, so `require_fresh!` still forces a real
+  login before anything sensitive. An old cookie proves somebody authenticated at some point, to
+  a system this one cannot inspect.
+- It runs only when the session cookie, a bearer token and remember-me have all found nothing, so
+  a live session is never replaced — and only on `Anonymous`, never on a rejected cookie, for the
+  reason `blueprints/0012-remember-me.md` gives.
+- Registered as its own handler because it is meant to be deleted. The day the `use` line goes is
+  the day the old sessions stop working.
+- `RequestContext#adopt_legacy_session!` returns nil rather than raising for an unknown or
+  disabled account.
+
+Thirteen mutations of the two new pieces: eleven killed outright, and the two survivors were both
+real spec weaknesses — an example that named an account the legacy path would have refused
+anyway, and an explicit argument shadowing the value it duplicated. Both fixed, both now killed.
+
 ## v0.6.0 — 2026-08-29
 
 Authorization and tenancy — `docs/06-roadmap.md`'s v0.6, and the last milestone before the v1.0
