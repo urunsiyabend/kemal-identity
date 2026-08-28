@@ -4,17 +4,18 @@ Authentication for Crystal web applications — Kemal integration included.
 
 Server-side opaque sessions, password credentials, and revocation that actually revokes.
 It answers *who is making this request*, gives the application a typed answer, and stops
-there.
+there. Authorization is a separate, opt-in contract that carries nothing into a session.
 
-> **Released: `v0.3.0`.** Password login, revocable server-side sessions, cookie policy, Kemal
-> guards, CSRF including the login form, rate limiting, PostgreSQL adapters, a dedicated
-> execution context for hashing, password reset, email confirmation, and remember-me with
-> theft detection. Every release blocker in `docs/05-testing.md` has a named spec.
+> **Released: `v0.6.0`.** Password login, revocable server-side sessions, cookie policy, Kemal
+> guards, CSRF including the login form, rate limiting, PostgreSQL and SQLite adapters, a
+> dedicated execution context for hashing, password reset, email confirmation, remember-me with
+> theft detection, the session sweeper, opaque API tokens, a strict off-by-default JWT
+> validator, TOTP second factors with recovery codes, OpenID Connect sign-in, and role-based
+> authorization with tenant membership. Every release blocker in `docs/05-testing.md` has a
+> named spec.
 >
-> `v0.2.0` covered both the v0.1 and v0.2 milestones of `docs/06-roadmap.md`, which were
-> finished back to back with no release between them; `v0.3.0` widens compatibility down to
-> Crystal 1.12. Not yet: a SQLite adapter and the session
-> sweeper (v0.3), API tokens (v0.4). **The API is not frozen until v1.0.**
+> Authorization is the last milestone before the v1.0 API freeze, whose criterion is contract
+> stability rather than feature count. **The API is not frozen until v1.0.**
 
 ## What it is not
 

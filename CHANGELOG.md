@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.6.0 — 2026-08-29
+
+Authorization and tenancy — `docs/06-roadmap.md`'s v0.6, and the last milestone before the v1.0
+API freeze. Additive and **off by default**: an application that passes no `authorizer:` is
+unchanged, and `Principal` still carries no roles.
+
+### Authorization
+
+- `Authz::Authorizer`, a contract, plus `Authz::RBAC` as the implementation this shard ships
+  and `Authz::DenyAll` for anything half-configured — the only safe thing an unconfigured
+  authorizer can do is permit nothing.
+- **Roles are code; only assignments are data.** `Authz::RoleCatalog` is built at boot from
+  literals in the application, and there is no `auth_roles` table. A role definition in a table
+  is one UPDATE away from rewriting what everybody holding it can do, with nothing about the
+  application having changed. The cost — roles cannot be administered at runtime — is stated in
+  `blueprints/0018-authorization-and-tenancy.md` rather than hidden.
+- A role granting a permission nobody declared raises at **boot**, so a rename that misses one
+  definition fails on the machine of whoever made the change rather than denying an action in
+  production for a month. A mistyped permission at a call site denies with
+  `DenialReason::UnknownPermission`.
+- **No wildcards.** `Permission::PATTERN` refuses `*` at construction: a wildcard is a grant of
+  permissions that do not exist yet, and whoever holds `admin.*` silently acquires the next one
+  somebody adds.
+- `Permission#minimum_assurance` — assurance is a property of the action, declared once, not a
+  rule repeated at every call site where somebody might forget it. A denial for weak assurance
+  raises `FreshAuthenticationRequiredError` so the application can prompt for a second factor
+  instead of showing a dead end.
+- `env.auth.authorize!`, `#authorize` and `#can?`. New `ForbiddenError`, mapped to 403 by
+  `ErrorHandler` with one body for every denial reason — `DenialReason` is for the audit log,
+  and a response that varied with it would confirm that a guessed tenant exists.
+
+### Tenancy
+
+- New tables `auth_tenant_memberships` and `auth_role_assignments`, PostgreSQL and SQLite, both
+  running the same 30-example contract.
+- A role held inside a tenant is **inert without a membership**, so removing somebody from a
+  tenant is a single call that revokes everything at once — `remove_member` deletes that
+  tenant's assignments too, and re-inviting them does not restore the roles they used to hold.
+- A principal bound to one tenant asking about another is refused before membership is read.
+  That is the identifier-in-the-URL attack, and it must not depend on a database row being
+  correct.
+- A grant with no tenant is global: it applies everywhere, including inside every tenant, and is
+  not gated by membership. `Assignment#granted_by` exists because that is the dangerous kind.
+- The unique index on the global scope is **partial** (`WHERE tenant_id IS NULL`), because a
+  plain unique index does not collide on NULL. Dropping it makes both the contract example and
+  a sixteen-fiber concurrency example fail, which is how it was verified.
+
+### Nothing is carried in a session
+
+- A revocation bites on the very next request, with the same session, asserted over HTTP. That
+  is the reason `Principal` carries no roles.
+- `Authz::Cache` is off by default, five seconds when on, and refuses a TTL over one minute:
+  the TTL *is* the revocation delay. It is bounded and clears itself at the limit rather than
+  evicting one entry at a time — the key space is attacker-influenced, and the failure mode of
+  a stampede should be "the cache stops helping", not "the process runs out of memory".
+- `RBAC#grant`, `#revoke` and `#remove_member` invalidate it, which helps the process that made
+  the change and no other. Documented as such rather than papered over with a pub/sub channel
+  that would be one more thing to be silently broken.
+
+Twenty mutations of the module, the adapters and the double: twenty killed, none surviving.
+
 ## v0.5.0 — 2026-08-28
 
 Federated identity and MFA, the two halves of `docs/06-roadmap.md`'s v0.5. Additive; nothing
