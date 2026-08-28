@@ -886,6 +886,29 @@ regression because a database is missing defeats the point of having it.
 Design documents are in `docs/`. Feature blueprints and decision records are in
 `blueprints/`. Executable tests are in `spec/`. Those three directories never mix.
 
+### Releasing
+
+A git tag and a GitHub release are different objects, and pushing the first does not create
+the second. `.github/workflows/release.yml` closes that gap: pushing a `v*` tag publishes the
+release with notes taken from `CHANGELOG.md`.
+
+```bash
+# 1. Bump both, in the same commit as the changelog entry.
+#    shard.yml            version: 0.6.0
+#    src/kemal_identity/version.cr   VERSION = "0.6.0"
+# 2. Add the `## v0.6.0 — YYYY-MM-DD` section to CHANGELOG.md.
+git commit -am "Release v0.6.0 with ..."
+git push origin main
+
+git tag -a v0.6.0 -m "v0.6.0 — ..."
+git push origin v0.6.0     # this is what publishes the release
+```
+
+The workflow refuses to publish if the tag disagrees with `shard.yml` or `VERSION`, or if the
+changelog has no section for it. A tag saying `v0.6.0` on a tree whose `shard.yml` still says
+`0.5.0` is a release nobody can resolve correctly, and it is an easy mistake to make when the
+bump and the tag are two separate commands.
+
 ## Example
 
 `examples/browser_session/` is a complete first-party browser application — log in, be

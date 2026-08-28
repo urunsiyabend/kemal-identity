@@ -1,0 +1,83 @@
+name: Release
+
+# A git tag and a GitHub release are two different objects, and pushing the first does not
+# create the second. This is what closes that gap: `git push origin v0.6.0` publishes the
+# release, with notes taken from CHANGELOG.md rather than retyped.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: "1.21.0"
+
+      - name: Install dependencies
+        run: shards install
+
+      # A tag saying v0.6.0 on a tree whose shard.yml still says 0.5.0 is a release nobody can
+      # resolve correctly, and it is an easy mistake to make when the bump and the tag are two
+      # commands. Cheap to check, painful to discover afterwards.
+      - name: Check the tag matches the shard version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          shard=$(grep -E '^version:' shard.yml | awk '{print $2}')
+          constant=$(grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' src/kemal_identity/version.cr | tr -d '"')
+
+          echo "tag=$tag shard.yml=$shard VERSION=$constant"
+
+          if [ "$tag" != "$shard" ] || [ "$tag" != "$constant" ]; then
+            echo "::error::tag $GITHUB_REF_NAME disagrees with shard.yml ($shard) or VERSION ($constant)"
+            exit 1
+          fi
+
+      # The full matrix already ran on this commit when it landed on main. This is the
+      # database-free subset, re-run against the tag itself so a release is never cut from a
+      # tree that does not build — the tag is what people will actually resolve.
+      - name: Verify the tagged tree
+        run: |
+          crystal tool format --check
+          crystal build --no-codegen src/kemal_identity.cr
+          crystal build --no-codegen examples/browser_session/app.cr
+          crystal spec spec/unit spec/security spec/integration/sqlite_spec.cr
+
+      # The section between this version's heading and the next one. Written once, in the
+      # changelog, and read from there: release notes that are retyped are release notes that
+      # drift from the changelog.
+      - name: Extract the changelog section
+        id: notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+
+          awk -v v="$version" '
+            $0 ~ "^## v" v " " { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+          echo "Release notes:"
+          cat release-notes.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            --verify-tag
