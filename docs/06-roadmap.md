@@ -197,6 +197,32 @@ Not done here, deliberately: a path-prefix authorization guard along the lines o
 Authorization is per-action, and a prefix-to-permission map encourages exactly the coarse check
 that lets `/admin/billing` inherit whatever `/admin` required.
 
+## v0.7 — Adoption
+
+The migration path below, made real, plus the packaging change that had to happen before the
+freeze rather than after it.
+
+Nothing in v0.1 – v0.6 helps an application that already has users. Step 1 of the migration
+path was always possible — `AccountRepository` is abstract — and step 4 shipped in v0.6 as its
+own contract. Steps 2 and 3 were the gap: the lazy-rehash machinery existed and had no way to
+verify the old digest in the first place, which made the whole path unreachable.
+
+### Progress
+
+| Deliverable | State |
+|---|---|
+| `Passwords::LegacyVerifier` | **done** — verify-only, by construction: no `hash_secret`, so the count of old digests can only go down |
+| `Passwords::MigratingHasher` | **done** — routes a digest to exactly one legacy verifier by shape, and is a `Hasher` everywhere a hasher goes (it runs the same contract spec) |
+| No shipped legacy implementations | **done**, deliberately — a published `Sha1Verifier` is a published working SHA-1 password check. The contract ships; yours is five lines |
+| The migration-status timing oracle | **done** — a failed legacy verification pays for a throwaway current-hasher verification, so an attacker cannot tell which accounts are still on the cheap scheme |
+| Over-length legacy passwords | **done** — refused rather than 500ing on the rehash, with a `Log.warn` naming the scheme and the byte count so an operator finds out those accounts exist |
+| `Kemal::LegacySessionHandler` | **done** — the block returns a subject and nothing else; the adopted session is `Remembered`, so `require_fresh!` still forces a real login |
+| Drivers out of `dependencies` | **done** — `pg` and `sqlite3` are development dependencies. **Breaking**, and pre-1.0 on purpose |
+
+Counting what is left to migrate is a query against the application's own table, not a method on
+`AccountRepository`: adding an abstract method would break every existing implementor for a
+reporting convenience, weeks before the contracts freeze.
+
 ## v1.0 — API freeze
 
 The criterion is contract stability, not feature count. `Principal`,
@@ -207,6 +233,8 @@ frozen. Provider lists, ORM adapters and TOTP internals stay free to evolve behi
 ## Migration path for existing Kemal apps
 
 Not a flag day. Four independent steps, each reversible.
+
+Implemented in v0.7 — see `blueprints/0019-migrating-an-existing-application.md`.
 
 **1. Adapter first, no schema change.** Implement `AccountRepository` against the existing
 `users` table. `auth_accounts` need not exist. This is the step that makes the whole
@@ -222,11 +250,16 @@ login
 ```
 
 Nobody is forced through a reset. Old digests disappear as people log in. Track the
-remaining count so the legacy verifier can eventually be removed.
+remaining count so the legacy verifier can eventually be removed —
+`SELECT count(*) FROM users WHERE password_scheme <> 'bcrypt'`, against your own table.
 
-**3. Sessions, through a legacy authenticator.** A `LegacySessionAuthenticator` reads the
-old `kemal-session` cookie, extracts **only the subject**, mints a new auth session and
-issues the new cookie. Secrets are never copied from one system to the other. After a grace
+`Passwords::MigratingHasher` is what makes this expressible: the current hasher plus one or
+more `LegacyVerifier`s, which can verify and cannot write.
+
+**3. Sessions, through a legacy authenticator.** `Kemal::LegacySessionHandler` takes a block
+that reads the old cookie and extracts **only the subject**, then mints a new auth session and
+issues the new cookie. The adopted session is `AssuranceLevel::Remembered`, so anything
+sensitive still forces a real login. Secrets are never copied from one system to the other. After a grace
 period the legacy authenticator is removed and any remaining old sessions become invalid.
 
 **4. Authorization, separately.** Do not couple the authorization migration to the

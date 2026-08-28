@@ -19,6 +19,8 @@ require "./kemal_identity/core/authenticator_chain"
 
 require "./kemal_identity/passwords/hasher"
 require "./kemal_identity/passwords/bcrypt_hasher"
+require "./kemal_identity/passwords/legacy_verifier"
+require "./kemal_identity/passwords/migrating_hasher"
 require "./kemal_identity/passwords/hashing_executor"
 
 require "./kemal_identity/accounts/login"

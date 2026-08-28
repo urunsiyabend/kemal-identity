@@ -29,12 +29,21 @@ dependencies:
     version: ">= 1.10.0, < 2.0"
   db:
     github: crystal-lang/crystal-db
+
+development_dependencies:
+  # The drivers are development dependencies, not dependencies. `pg` and `sqlite3` are needed
+  # to *run this shard's own contract specs* against real databases; they are not needed to use
+  # it. Nothing under `src/kemal_identity.cr` requires either — only `kemal_identity/postgres`
+  # and `kemal_identity/sqlite` do, and an application that requires one of those declares that
+  # driver itself, which it already had to for its own queries.
+  #
+  # Listing them here would make every consumer compile and link both drivers, including one
+  # using neither because it implements the repository contracts over its own storage — which
+  # is the arrangement `docs/03-data-model.md` treats as the normal one.
   pg:
     github: will/crystal-pg
   sqlite3:
     github: crystal-lang/crystal-sqlite3
-
-development_dependencies:
   ameba:
     github: crystal-ameba/ameba
     # No released ameba supports Crystal 1.21: v1.6.4 fails to compile against it

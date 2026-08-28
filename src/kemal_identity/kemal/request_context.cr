@@ -193,6 +193,29 @@ module KemalIdentity::Kemal
       issued.principal
     end
 
+    # Mints a session for an account named by the system this application is migrating off.
+    #
+    # Returns nil — never raises — for a subject the account store does not have, or one whose
+    # account is disabled. Both are ordinary: the old system outlived a deletion, or somebody
+    # was disabled here and the old cookie has not noticed yet. A hostile value reaching this
+    # from a tampered legacy cookie ends the same way.
+    #
+    # `AssuranceLevel::Remembered`, deliberately. See `LegacySessionHandler` for why an adopted
+    # session must not claim that somebody typed a password.
+    def adopt_legacy_session!(subject : String) : Principal?
+      account = @app.accounts.find_by_id(subject)
+      return if account.nil? || account.disabled?
+
+      start!(
+        Principal.new(
+          subject: account.id,
+          assurance: AssuranceLevel::Remembered,
+          authenticated_at: @app.clock.now,
+          tenant_id: account.tenant_id,
+        )
+      )
+    end
+
     # Records that a second factor was proved, and raises this session to `AssuranceLevel::MFA`.
     #
     # Call it after `MFA::Service#verify` or `#redeem_recovery_code` returns `Verified`:

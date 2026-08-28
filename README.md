@@ -6,15 +6,17 @@ Server-side opaque sessions, password credentials, and revocation that actually 
 It answers *who is making this request*, gives the application a typed answer, and stops
 there. Authorization is a separate, opt-in contract that carries nothing into a session.
 
-> **Released: `v0.6.0`.** Password login, revocable server-side sessions, cookie policy, Kemal
+> **Released: `v0.7.0`.** Password login, revocable server-side sessions, cookie policy, Kemal
 > guards, CSRF including the login form, rate limiting, PostgreSQL and SQLite adapters, a
 > dedicated execution context for hashing, password reset, email confirmation, remember-me with
 > theft detection, the session sweeper, opaque API tokens, a strict off-by-default JWT
-> validator, TOTP second factors with recovery codes, OpenID Connect sign-in, and role-based
-> authorization with tenant membership. Every release blocker in `docs/05-testing.md` has a
-> named spec.
+> validator, TOTP second factors with recovery codes, OpenID Connect sign-in, role-based
+> authorization with tenant membership, and a migration path for applications that already have
+> users. Every release blocker in `docs/05-testing.md` has a named spec.
 >
-> Authorization is the last milestone before the v1.0 API freeze, whose criterion is contract
+> **v0.7.0 is a breaking packaging change:** `pg` and `sqlite3` are no longer dependencies of
+> this shard, so an application requiring `kemal_identity/postgres` or `kemal_identity/sqlite`
+> declares that driver itself. Next is the v1.0 API freeze, whose criterion is contract
 > stability rather than feature count. **The API is not frozen until v1.0.**
 
 ## What it is not
@@ -1015,12 +1017,149 @@ directives — this repository depends on no migration tool, because neither pub
 resolves against Crystal 1.21 and crystal-pg 0.30
 (`blueprints/0002-no-micrate-dependency.md`).
 
+### The database drivers are yours to declare
+
+`pg` and `sqlite3` are **not** dependencies of this shard. Nothing in `kemal_identity` requires
+either; only `kemal_identity/postgres` and `kemal_identity/sqlite` do. If you require one of
+those, add that driver to your own `shard.yml` — which you already had to for your own queries:
+
+```yaml
+dependencies:
+  kemal_identity:
+    github: urunsiyabend/kemal-identity
+  pg:
+    github: will/crystal-pg
+```
+
+An application that implements the repository contracts over its own storage links neither,
+which is the point.
+
 `migrations/postgres/` holds `auth_sessions`, `auth_action_tokens`, `auth_remember_tokens`,
 `auth_api_tokens`, `auth_mfa_factors`, `auth_mfa_recovery_codes`, `auth_external_identities`,
 `auth_tenant_memberships`, `auth_role_assignments`, and the optional reference
 `auth_accounts`. `migrations/sqlite/` holds the same ten in SQLite's dialect. If you already have a `users` table with a password digest, you
 implement `AccountRepository` over it and never create `auth_accounts` at all — that is the
 whole point of the contract being abstract.
+
+## Migrating an application that already has users
+
+Not a flag day. Four independent steps, each reversible, and three of them are things this shard
+does for you.
+
+### 1. Your own table, no schema change
+
+`AccountRepository` is abstract. Implement it over the `users` table you already have and create
+no `auth_accounts` at all. This is the step that makes the whole thing adoptable, and it has been
+possible since v0.1.
+
+### 2. Passwords, lazily
+
+Keep the old scheme for **verification only**:
+
+```crystal
+class DeviseVerifier < KemalIdentity::Passwords::LegacyVerifier
+  def name : String
+    "devise"
+  end
+
+  # Shape alone, never the secret. This is what routes a digest to one verifier instead of all
+  # of them.
+  def handles?(digest : String) : Bool
+    digest.starts_with?("$2a$")
+  end
+
+  def verify(secret : KemalIdentity::Secret, digest : String) : Bool
+    Crypto::Bcrypt::Password.new(digest).verify(secret.reveal + PEPPER)
+  rescue Crypto::Bcrypt::Error
+    false
+  end
+end
+
+KemalIdentity.configure(
+  accounts: accounts,
+  sessions: sessions,
+  hasher: KemalIdentity::Passwords::MigratingHasher.new(
+    KemalIdentity::Passwords::BcryptHasher.new,
+    [DeviseVerifier.new.as(KemalIdentity::Passwords::LegacyVerifier)]
+  ),
+)
+```
+
+A correct password against a legacy digest logs in and is **rehashed immediately** with the
+current hasher. Nobody is forced through a reset, and old digests disappear as people sign in.
+
+`MigratingHasher` can verify the old scheme and can never write it: `hash_secret` and `scheme`
+are always the current hasher's, so the count only goes down. Watch it go down with a query
+against your own table:
+
+```sql
+SELECT count(*) FROM users WHERE password_scheme <> 'bcrypt';
+```
+
+When it reaches zero, delete the verifier and the `MigratingHasher` wrapper. That is the whole
+lifecycle.
+
+**This shard ships no legacy verifiers.** A ready-made `Sha1Verifier` would be this project
+publishing a working SHA-1 password check, and the first thing anyone does with a class that
+exists is use it for something new. Yours is the five lines above.
+
+#### ⚠ Some of your users may have a password bcrypt cannot hold
+
+Old schemes are usually unsalted digests with no input limit, so a table can contain passwords
+longer than bcrypt's 71 bytes. Verifying one would succeed and the rehash would then raise,
+because this shard refuses to truncate a secret — if bcrypt cuts at 71 bytes, then 71 A's and
+71 A's followed by anything at all open the same account.
+
+So those logins are **refused**, indistinguishable from a wrong password, and a `Log.warn` with
+`password.legacy_secret_too_long` tells you the accounts exist. Those people have to reset their
+password. Count them before you deploy:
+
+```sql
+SELECT count(*) FROM users WHERE length(password_digest) > 0 AND password_scheme = 'legacy';
+```
+
+— then check the ones that matter, or send that group a reset link in advance.
+
+### 3. Sessions, adopted once
+
+```crystal
+# Built first and then passed to `use`. Kemal's `use` is a macro, so a block written after
+# `use Handler.new(...)` attaches to `use` and the constructor complains it got none.
+LEGACY = KemalIdentity::Kemal::LegacySessionHandler.new(clear_cookie: "kemal_sessid") do |env|
+  Kemal::Session.get(env).try(&.string?("user_id"))
+end
+
+use KemalIdentity::Kemal::ErrorHandler.new
+use KemalIdentity::Kemal::AuthenticationHandler.new
+use LEGACY
+use KemalIdentity::Kemal::CSRFHandler.new
+```
+
+Nobody is signed out by the deployment that introduces this shard, and nobody logs in twice.
+
+The block returns **a subject and nothing else** — not a principal, not a timestamp, and above
+all not a token. Whatever signed or keyed the old session stays in the old system and dies with
+it. Reading the old cookie is your job because only you know what wrote it.
+
+The adopted session is `AssuranceLevel::Remembered`: the old cookie proves somebody
+authenticated at *some* point, to a system this one cannot inspect. So `require_fresh!` still
+forces a real login before anything sensitive, which is what you want from a credential you are
+retiring.
+
+It runs only when the session cookie, a bearer token and remember-me have all found nothing, so
+a live session is never replaced. Delete the `use` line when the grace period is over; that is
+the moment the old sessions stop working.
+
+### 4. Authorization, separately
+
+Do not couple the two migrations in one deployment. See [Authorization](#authorization) — it is
+its own contract, and it reads roles from wherever you point it.
+
+### Two things that are not migrations
+
+**Accepting long-lived legacy JWTs indefinitely** is permanent security debt with a deprecation
+notice attached. **Forcing a global password reset** to change hashing algorithms is a support
+burden that lazy rehash exists to make unnecessary.
 
 ## Development
 

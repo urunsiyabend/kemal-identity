@@ -28,7 +28,10 @@ API_TOKENS      = KemalIdentity::Testing::MemoryApiTokenRepository.new(ACCOUNTS)
 REMEMBER        = KemalIdentity::Testing::MemoryRememberRepository.new
 NOTIFIER        = KemalIdentity::Testing::RecordingNotifier.new
 REMEMBER_COOKIE = "kemal_identity_remember"
-MFA_FACTORS     = KemalIdentity::Testing::MemoryMfaRepository.new
+# Stands in for whatever the old system's cookie was. Its value is the subject, because the
+# extractor block is the application's and this one is as simple as it gets.
+LEGACY_COOKIE = "old_app_session"
+MFA_FACTORS   = KemalIdentity::Testing::MemoryMfaRepository.new
 
 # JWT validation is off by default; this application turns it on so that the chain behind one
 # `Authorization: Bearer` header — opaque token first, JWT second — is exercised over HTTP.
@@ -96,10 +99,28 @@ KemalIdentity.configure(
   ),
 )
 
+# Somebody the old system still has a session for and this one has disabled.
+ACCOUNTS.insert(KemalIdentity::SpecHelper.account(
+  id: "a-disabled", login: "banned@example.com", disabled_at: KemalIdentity::SpecHelper::FIXED_NOW
+))
+
+# A second live account, so "the old cookie does not override a live session" can name somebody
+# the legacy path would otherwise happily adopt.
+ACCOUNTS.insert(KemalIdentity::SpecHelper.account(id: "a2", login: "grace@example.com"))
+
 # ErrorHandler outermost, so it catches what a route or a guard raises. CSRFHandler after
 # authentication, because the token binds to the session. Never at position 0.
 use KemalIdentity::Kemal::ErrorHandler.new(login_path: "/login")
 use KemalIdentity::Kemal::AuthenticationHandler.new
+# The migration seam: temporary, registered after authentication so it sees only requests that
+# no live credential resolved, and ahead of CSRF so a token binds to the session it adopted.
+# Built first and then passed to `use`: Kemal's `use` is a macro, so a block written after
+# `use Handler.new(...)` attaches to `use` rather than to the constructor.
+LEGACY_HANDLER = KemalIdentity::Kemal::LegacySessionHandler.new(clear_cookie: LEGACY_COOKIE) do |env|
+  env.request.cookies[LEGACY_COOKIE]?.try(&.value)
+end
+
+use LEGACY_HANDLER
 use KemalIdentity::Kemal::CSRFHandler.new
 use KemalIdentity::Kemal::PathGuard.new(prefix: "/admin")
 use KemalIdentity::Kemal::PathGuard.new(prefix: "/step-up", within: 5.minutes)
@@ -1310,5 +1331,88 @@ describe "authorization over HTTP" do
 
     get "/invoices", headers: cookies("kemal_identity=#{session}")
     response.status_code.should eq(403)
+  end
+end
+
+describe "adopting a session from the system being migrated off" do
+  # Nobody is signed out by the deployment that introduces this shard.
+  it "signs in somebody the old cookie names" do
+    get "/whoami", headers: cookies("#{LEGACY_COOKIE}=a1")
+
+    response.status_code.should eq(200)
+    response.body.should eq("a1")
+  end
+
+  it "issues a real session cookie, so the old one is needed exactly once" do
+    get "/whoami", headers: cookies("#{LEGACY_COOKIE}=a1")
+
+    session_cookie(response).should_not be_nil
+  end
+
+  # The browser must stop presenting a credential to a system that no longer reads it.
+  it "clears the old cookie" do
+    get "/whoami", headers: cookies("#{LEGACY_COOKIE}=a1")
+
+    cleared = HTTP::Cookies.from_server_headers(response.headers)[LEGACY_COOKIE]?.or_fail
+    cleared.value.should eq("")
+    cleared.expires.or_fail.should be < KemalIdentity::SpecHelper::FIXED_NOW
+  end
+
+  # The old cookie proves somebody authenticated at some point, to a system this one cannot
+  # inspect. It does not prove the account holder is present.
+  it "adopts at Remembered rather than claiming a password was typed" do
+    get "/api/me", headers: cookies("#{LEGACY_COOKIE}=a1")
+
+    response.body.should eq("a1 via Remembered")
+  end
+
+  it "cannot pass a freshness guard, so anything sensitive forces a real login" do
+    get "/step-up/email", headers: cookies("#{LEGACY_COOKIE}=a1")
+
+    response.status_code.should eq(403)
+  end
+
+  # The legacy cookie names an account this shard would adopt without hesitation on its own, so
+  # the example fails if the handler stops checking that nothing else resolved first.
+  it "leaves a live session alone rather than replacing it" do
+    session = log_in
+
+    get "/whoami", headers: cookies("kemal_identity=#{session}", "#{LEGACY_COOKIE}=a2")
+
+    response.body.should eq("a1")
+  end
+
+  it "adopts that same account when there is no live session" do
+    get "/whoami", headers: cookies("#{LEGACY_COOKIE}=a2")
+
+    response.body.should eq("a2")
+  end
+
+  it "refuses a subject the account store does not have" do
+    get "/whoami", headers: cookies("#{LEGACY_COOKIE}=nobody-at-all")
+
+    response.body.should eq("nobody")
+    session_cookie(response).should be_nil
+  end
+
+  # Somebody disabled here whose old session has not noticed yet.
+  it "refuses a disabled account" do
+    get "/whoami", headers: cookies("#{LEGACY_COOKIE}=a-disabled")
+
+    response.body.should eq("nobody")
+    session_cookie(response).should be_nil
+  end
+
+  it "clears the old cookie even when it refuses, since it will never start working" do
+    get "/whoami", headers: cookies("#{LEGACY_COOKIE}=nobody-at-all")
+
+    HTTP::Cookies.from_server_headers(response.headers)[LEGACY_COOKIE]?.should_not be_nil
+  end
+
+  it "does nothing at all when there is no old cookie" do
+    get "/whoami"
+
+    response.body.should eq("nobody")
+    response.headers["Set-Cookie"]?.should be_nil
   end
 end
