@@ -85,6 +85,10 @@ Two honest limitations, both documented on the class and both with specs:
 - **Per process.** Two processes have two counters, so the effective limit is
   `limit × processes`. Behind a load balancer that is usually not what was intended; a shared
   store behind the same contract is the answer.
+
+  What that store does when it is *unreachable* was not settled here, and could not be: `Verdict`
+  had no way to say it. `blueprints/0023-rate-limiter-store-failure.md` adds the third state and
+  the fail-closed default.
 - **Fixed window, anchored to the first attempt.** Up to `2 × limit` attempts can land within
   seconds by filling a window about to elapse and then filling the next as it opens. There is a
   spec demonstrating the burst, so the paragraph does not have to be taken on trust.

@@ -93,7 +93,17 @@ module KemalIdentity::Accounts
     def request_password_reset(login : String, tenant_id : String? = nil, ip : String? = nil) : Nil
       normalized = Login.normalize(login)
 
-      unless @rate_limiter.consume(quota_key("reset", normalized, tenant_id)).allowed?
+      verdict = @rate_limiter.consume(quota_key("reset", normalized, tenant_id))
+
+      # Same fail-closed default as login, and the same escape hatch. This endpoint sends mail
+      # to an address somebody else chose, so running it unmetered turns it into a way to flood
+      # a stranger's inbox.
+      if verdict.unavailable?
+        Log.error &.emit("rate_limiter.unavailable", endpoint: "password_reset", ip: ip)
+        return
+      end
+
+      unless verdict.allowed?
         Log.info &.emit("password_reset.throttled", ip: ip)
         return
       end

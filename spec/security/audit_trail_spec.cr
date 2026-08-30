@@ -1,6 +1,16 @@
 require "log/spec"
 require "../spec_helper"
 
+# A limiter whose store is down, as a Redis-backed adapter would report it.
+private class BrokenStoreRateLimiter < KemalIdentity::RateLimiter
+  def consume(key : String) : KemalIdentity::Verdict
+    KemalIdentity::Verdict.unavailable
+  end
+
+  def reset(key : String) : Nil
+  end
+end
+
 # `docs/02-security-model.md`, "Logging":
 #
 #   Do log, as structured events: login success and failure with reason, logout, session
@@ -90,6 +100,31 @@ describe "the audit trail" do
 
       reasons.should contain("InvalidCredential")
       reasons.should contain("RateLimited")
+    end
+
+    # A broken limiter and a working one are different events. `RateLimited` is somebody having
+    # had their share; this is nobody knowing what anybody's share is, which is an incident and
+    # often the first half of an attack — the cheapest way to disable rate limiting is to break
+    # what stores it. A trail that reported them the same way would bury the page-worthy one
+    # inside the routine one.
+    it "records a broken limiter distinctly from a throttle, at error level" do
+      h = KemalIdentity::SpecHelper.account_harness
+      auth = KemalIdentity::Passwords::Authenticator.new(
+        accounts: h.accounts, hasher: h.hasher, clock: h.clock,
+        rate_limiter: BrokenStoreRateLimiter.new
+      )
+
+      entries = captured do
+        auth.authenticate(login: "ada@example.com", password: "wrong")
+      end
+
+      outage = entry(entries, "rate_limiter.unavailable")
+      outage.severity.should eq(::Log::Severity::Error)
+      outage.data[:endpoint].to_s.should eq("login")
+
+      entries.select { |candidate| candidate.message == "authentication.failed" }
+        .map(&.data.[:reason].to_s)
+        .should contain("RateLimiterUnavailable")
     end
   end
 

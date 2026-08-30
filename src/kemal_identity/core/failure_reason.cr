@@ -33,6 +33,19 @@ module KemalIdentity
     # carries a `retry_after` in this case.
     RateLimited
 
+    # The rate limiter could not reach its storage, and the attempt was refused rather than
+    # run unmetered.
+    #
+    # Kept apart from `RateLimited` for the same reason `InvalidClaim` is kept apart from
+    # `InvalidCredential`: the two mean opposite things to whoever reads the trail.
+    # `RateLimited` is the limiter working — somebody had their share. This one is the limiter
+    # *broken*, which is an operations incident and often the second half of an attack, since
+    # the cheapest way to disable rate limiting is to overwhelm the thing that stores it.
+    # A run of these deserves a page; a run of `RateLimited` does not.
+    #
+    # Invisible in the response, which is identical for every reason.
+    RateLimiterUnavailable
+
     # A single-use token was presented twice. For a remember-me token this also revokes
     # the whole token family, because either the thief or the legitimate holder is
     # replaying it.

@@ -137,6 +137,12 @@ module KemalIdentity::MFA
       return if factor.confirmed?
 
       verdict = @rate_limiter.consume(quota_key(factor.account_id))
+
+      if verdict.unavailable?
+        Log.error &.emit("rate_limiter.unavailable", endpoint: "mfa_confirm", subject: factor.account_id)
+        return
+      end
+
       return unless verdict.allowed?
 
       counter = match(factor, code)
@@ -175,6 +181,13 @@ module KemalIdentity::MFA
     # either, and only the factor that actually matched has its counter spent.
     def verify(account_id : String, code : String) : VerificationResult
       verdict = @rate_limiter.consume(quota_key(account_id))
+
+      # A second factor whose attempt counter cannot be read is a second factor that can be
+      # brute-forced, and six digits do not take long unmetered.
+      if verdict.unavailable?
+        Log.error &.emit("rate_limiter.unavailable", endpoint: "mfa_verify", subject: account_id)
+        return Failed.new(FailureReason::RateLimiterUnavailable)
+      end
 
       unless verdict.allowed?
         Log.warn &.emit("mfa.throttled", subject: account_id)
@@ -231,6 +244,13 @@ module KemalIdentity::MFA
       except_session_id : String? = nil,
     ) : VerificationResult
       verdict = @rate_limiter.consume(quota_key(account_id))
+
+      # Recovery codes are the last way in, so an unmetered guessing window here is the worst
+      # of the three.
+      if verdict.unavailable?
+        Log.error &.emit("rate_limiter.unavailable", endpoint: "mfa_recovery", subject: account_id)
+        return Failed.new(FailureReason::RateLimiterUnavailable)
+      end
 
       unless verdict.allowed?
         Log.warn &.emit("mfa.throttled", subject: account_id)

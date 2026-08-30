@@ -39,6 +39,38 @@ second half of `blueprints/0021-credential-reference.md` and land in this same r
 No new query anywhere. Every value comes from a row that was already read to authenticate the
 request.
 
+### A rate limiter can say that its store is gone
+
+`Verdict` gains a third state. A limiter over shared storage used to have three ways to lie
+when Redis was unreachable — allow and run unmetered, deny and take the endpoint down, or raise
+into a 500 — and all three made a decision that belongs to the application:
+
+```crystal
+def consume(key : String) : KemalIdentity::Verdict
+  # ...
+rescue Redis::Error
+  KemalIdentity::Verdict.unavailable
+end
+```
+
+Additive: `consume` and `reset` keep their signatures, and neither shipped limiter can produce
+the new state — `NullRateLimiter` has no store and `FixedWindowRateLimiter`'s store is the
+process. No existing deployment changes behaviour.
+
+**The default is fail-closed.** All five of this shard's call sites — login, password reset, and
+three ways of proving a second factor — refuse rather than run unmetered, and log
+`rate_limiter.unavailable` at error level. An application that prefers availability on a given
+path wraps that limiter in `FailOpenRateLimiter`; per endpoint, since each service takes its
+own.
+
+`Verdict.unavailable` reads as `allowed? == false`, so code that has not learned about the third
+state fails closed rather than open. `FailureReason::RateLimiterUnavailable` is kept apart from
+`RateLimited` because one is the limiter working and the other is an incident — the same
+argument that keeps `InvalidClaim` apart from `InvalidCredential`. Neither is visible in a
+response.
+
+`blueprints/0023-rate-limiter-store-failure.md`.
+
 ### Per-token scopes, intersected with account permissions
 
 `ApiTokens::Service#issue` takes `scopes:`, `auth_api_tokens` gains a nullable `scopes` column,

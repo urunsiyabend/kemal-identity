@@ -1,6 +1,21 @@
 module KemalIdentity
-  # Whether an attempt may proceed, and when to come back if not.
+  # Whether an attempt may proceed, when to come back if not, and whether the limiter could
+  # answer at all.
+  #
+  # ### Three states, because two of them are not the same "no"
+  #
+  # A limiter over shared storage has a third thing to say: *the store did not answer*. Without
+  # a way to say it, an adapter whose Redis is down can only lie — report `allow` and turn rate
+  # limiting off under exactly the conditions an attacker can provoke, report `deny` and take
+  # the login endpoint down for everybody, or raise and become a 500. All three are decisions
+  # the adapter has no business making on the application's behalf
+  # (`blueprints/0023-rate-limiter-store-failure.md`).
   struct Verdict
+    # Whether the attempt may proceed.
+    #
+    # **False when the store was unavailable.** Code that only ever asks this question therefore
+    # fails *closed* on an outage rather than open, which is the safe direction for the one to
+    # forget. Ask `#unavailable?` to tell the two apart.
     getter? allowed : Bool
 
     # How long until the caller may try again. Set only on a denial.
@@ -11,6 +26,13 @@ module KemalIdentity
     # second or an hour.
     getter retry_after : Time::Span?
 
+    # Whether the limiter could not reach its storage, so this attempt was never counted.
+    #
+    # Distinct from a denial: a denial says "you have had your share", this says "nobody knows
+    # what your share is". They call for opposite responses from an operator — one is working
+    # as designed, the other is an incident — and they are not the same event in an audit trail.
+    getter? unavailable : Bool
+
     def self.allow : self
       new(allowed: true)
     end
@@ -19,7 +41,15 @@ module KemalIdentity
       new(allowed: false, retry_after: retry_after)
     end
 
-    def initialize(@allowed : Bool, @retry_after : Time::Span? = nil)
+    # The store did not answer.
+    #
+    # `retry_after` is deliberately absent: there is no honest number to give when the limiter
+    # does not know what has been spent.
+    def self.unavailable : self
+      new(allowed: false, unavailable: true)
+    end
+
+    def initialize(@allowed : Bool, @retry_after : Time::Span? = nil, @unavailable : Bool = false)
     end
   end
 
@@ -57,12 +87,72 @@ module KemalIdentity
     #
     # Called before any I/O and before any hashing. A denial must be cheap, or the limiter
     # becomes the very lever it exists to remove.
+    #
+    # **Must not raise for a storage failure.** A limiter whose Redis is unreachable returns
+    # `Verdict.unavailable` and lets the application's configured policy decide, because the
+    # answer differs per endpoint: a login should refuse rather than run unmetered, while a
+    # less sensitive action may prefer to stay up. An exception here would make that choice for
+    # everybody, and would surface as a 500 rather than as either policy.
     abstract def consume(key : String) : Verdict
 
     # Clears the count for `key`, after a successful authentication.
     #
-    # Idempotent, and safe for a key that was never consumed.
+    # Idempotent, and safe for a key that was never consumed. **Must not raise**, including
+    # when the store is unavailable: a reset that does not happen leaves somebody throttled
+    # slightly longer than they earned, which is not worth failing a successful login over.
     abstract def reset(key : String) : Nil
+  end
+
+  # Turns "the store did not answer" into "carry on", for one call site.
+  #
+  # ### Why this is a wrapper and not a setting
+  #
+  # `blueprints/maturity-validation-scenarios.md` (OPS-01) requires the fail-open or fail-closed
+  # choice to be made **per endpoint**, and it genuinely differs: refusing every login while
+  # Redis is down is a self-inflicted outage, while running the login path unmetered is exactly
+  # what an attacker gets by overwhelming whatever stores the counts. Neither answer is right
+  # everywhere.
+  #
+  # A flag on the limiter would settle it once for the whole application. A wrapper settles it
+  # once per limiter, and every service already takes its own — so per-endpoint falls out of
+  # wiring that exists rather than out of a new parameter:
+  #
+  # ```
+  # shared = MyRedisRateLimiter.new(redis)
+  #
+  # KemalIdentity.configure(
+  #   rate_limiter: shared, # login stays fail-closed
+  #   # ...
+  # )
+  #
+  # # ...while something less sensitive prefers to stay up:
+  # notifications = MyThrottledMailer.new(KemalIdentity::FailOpenRateLimiter.new(shared))
+  # ```
+  #
+  # **The default is fail-closed and this is opt-in**, because every call site in this shard is
+  # an authentication path: a login, a password reset, and three ways of proving a second
+  # factor. Silence is the wrong answer for all five.
+  class FailOpenRateLimiter < RateLimiter
+    getter inner : RateLimiter
+
+    def initialize(@inner : RateLimiter)
+    end
+
+    def consume(key : String) : Verdict
+      verdict = @inner.consume(key)
+
+      return verdict unless verdict.unavailable?
+
+      # Logged at warn, not debug: the limit is not being enforced right now, and whoever is on
+      # call should be able to find that out from the trail rather than by inference.
+      Log.warn &.emit("rate_limiter.failing_open")
+
+      Verdict.allow
+    end
+
+    def reset(key : String) : Nil
+      @inner.reset(key)
+    end
   end
 
   # Allows everything. The default.

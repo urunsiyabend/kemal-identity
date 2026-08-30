@@ -25,6 +25,148 @@ private def build(limit : Int32 = 3, window : Time::Span = 1.minute, hasher = ni
   {auth, clock, limiter, repo}
 end
 
+# A limiter whose store is down. What a Redis-backed adapter returns when Redis is not there.
+private class UnavailableRateLimiter < KemalIdentity::RateLimiter
+  getter consumed = 0
+  getter resets = 0
+
+  def consume(key : String) : KemalIdentity::Verdict
+    @consumed += 1
+    KemalIdentity::Verdict.unavailable
+  end
+
+  def reset(key : String) : Nil
+    @resets += 1
+  end
+end
+
+private def build_with(limiter : KemalIdentity::RateLimiter, hasher = nil)
+  hasher ||= KemalIdentity::Testing::FastTestHasher.new
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+
+  repo = KemalIdentity::Testing::MemoryAccountRepository.new([
+    KemalIdentity::SpecHelper.account(
+      password_digest: hasher.hash_secret(KemalIdentity::Secret.new(PASSWORD))
+    ),
+  ])
+
+  KemalIdentity::Passwords::Authenticator.new(
+    accounts: repo, hasher: hasher, clock: clock, rate_limiter: limiter
+  )
+end
+
+# OPS-01. A limiter over shared storage has a third thing to say, and before v0.8 it could only
+# lie: allow and run unmetered, deny and take the endpoint down, or raise into a 500.
+describe "a rate limiter whose store is unavailable" do
+  it "refuses the login rather than running it unmetered" do
+    auth = build_with(UnavailableRateLimiter.new)
+
+    outcome = auth.authenticate(login: "ada@example.com", password: PASSWORD)
+
+    KemalIdentity::SpecHelper.should_fail_with(
+      outcome, KemalIdentity::FailureReason::RateLimiterUnavailable
+    )
+  end
+
+  # The correct password is refused too. That is the point: the limiter cannot vouch for how
+  # many attempts came before this one, so this one gets no more benefit of the doubt than any
+  # other.
+  it "refuses even a correct password" do
+    limiter = UnavailableRateLimiter.new
+    auth = build_with(limiter)
+
+    auth.authenticate(login: "ada@example.com", password: PASSWORD)
+
+    limiter.consumed.should be > 0
+  end
+
+  # Told apart from an ordinary throttle in the trail. One is the limiter working and the other
+  # is an incident, and they call for different responses from whoever is on call.
+  it "is a different failure reason from an ordinary throttle" do
+    KemalIdentity::FailureReason::RateLimiterUnavailable
+      .should_not eq(KemalIdentity::FailureReason::RateLimited)
+  end
+
+  # No honest number exists: the limiter does not know what has been spent.
+  it "offers no retry_after, because it does not know one" do
+    KemalIdentity::Verdict.unavailable.retry_after.should be_nil
+  end
+
+  # The safe direction for the branch somebody forgets. Code that only ever asks `allowed?`
+  # denies on an outage rather than waving everything through.
+  it "reads as not allowed for code that never learned about the third state" do
+    verdict = KemalIdentity::Verdict.unavailable
+
+    verdict.allowed?.should be_false
+    verdict.unavailable?.should be_true
+  end
+
+  describe "and the application chose availability for that endpoint" do
+    it "carries on when wrapped in FailOpenRateLimiter" do
+      auth = build_with(KemalIdentity::FailOpenRateLimiter.new(UnavailableRateLimiter.new))
+
+      principal = KemalIdentity::SpecHelper.should_authenticate(
+        auth.authenticate(login: "ada@example.com", password: PASSWORD)
+      )
+
+      principal.subject.should eq("a1")
+    end
+
+    # Only the unavailable case is converted. A real denial still denies, or the wrapper would
+    # be an off switch rather than an outage policy.
+    it "still honours a genuine denial" do
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+      inner = KemalIdentity::FixedWindowRateLimiter.new(limit: 1, window: 1.minute, clock: clock)
+      auth = build_with(KemalIdentity::FailOpenRateLimiter.new(inner))
+
+      auth.authenticate(login: "ada@example.com", password: "wrong")
+      outcome = auth.authenticate(login: "ada@example.com", password: PASSWORD)
+
+      KemalIdentity::SpecHelper.should_fail_with(outcome, KemalIdentity::FailureReason::RateLimited)
+    end
+  end
+end
+
+# The other three call sites. Login is not the only path that runs unmetered if a limiter can
+# only say yes or no, and a second factor whose attempt counter cannot be read is a second
+# factor somebody can guess at.
+describe "the other paths a broken limiter would leave unmetered" do
+  it "refuses to verify a second factor" do
+    limiter = UnavailableRateLimiter.new
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    random = KemalIdentity::Testing::DeterministicRandom.new
+
+    service = KemalIdentity::MFA::Service.new(
+      factors: KemalIdentity::Testing::MemoryMfaRepository.new,
+      secret_box: KemalIdentity::MFA::AesSecretBox.new(
+        KemalIdentity::Secret.new("a-test-secret-box-key-of-32-byte"), random
+      ),
+      clock: clock,
+      random: random,
+      issuer: "Acme",
+      rate_limiter: limiter,
+    )
+
+    outcome = service.verify("a1", "000000")
+
+    outcome.should be_a(KemalIdentity::Failed)
+    outcome.as(KemalIdentity::Failed).reason
+      .should eq(KemalIdentity::FailureReason::RateLimiterUnavailable)
+  end
+
+  # Silently, as every other outcome of this endpoint is: it must not become an account oracle
+  # by answering differently when the limiter is down.
+  it "declines to send a password reset" do
+    limiter = UnavailableRateLimiter.new
+    h = KemalIdentity::SpecHelper.account_harness(rate_limiter: limiter)
+
+    h.service.request_password_reset("ada@example.com")
+
+    h.notifier.delivered.should be_empty
+    limiter.consumed.should eq(1)
+  end
+end
+
 describe "throttling the password verification path" do
   it "denies once the limit is reached" do
     auth, _, _, _ = build(limit: 3)

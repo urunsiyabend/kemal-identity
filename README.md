@@ -269,6 +269,44 @@ credential stuffing rotates addresses and password spraying rotates logins.
 Once the limit is reached the *correct* password is refused too. Letting it through would tell
 an attacker they had guessed right.
 
+### When the store is gone
+
+A limiter over Redis has a third thing to say, and `Verdict` can say it:
+
+```crystal
+def consume(key : String) : KemalIdentity::Verdict
+  # ...
+rescue Redis::Error
+  KemalIdentity::Verdict.unavailable   # never raise; never guess
+end
+```
+
+**The default is fail-closed.** All five of this shard's own call sites — login, password reset,
+and three ways of proving a second factor — refuse rather than run unmetered, and log
+`rate_limiter.unavailable` at error level. The cheapest way to disable rate limiting is to break
+the thing that stores the counts, so an outage is not the moment to stop enforcing.
+
+If you would rather stay up on a given path, wrap the limiter:
+
+```crystal
+KemalIdentity::FailOpenRateLimiter.new(shared_limiter)
+```
+
+Per endpoint, because each service takes its own limiter — so the login can stay fail-closed
+while something less sensitive keeps serving. It converts only the unavailable case; a genuine
+denial still denies.
+
+- **`Verdict.unavailable` reads as `allowed? == false`**, so code that never learned about the
+  third state refuses on an outage rather than waving everything through. Ask `unavailable?` to
+  tell the two apart.
+- **It carries no `retry_after`.** There is no honest number when the limiter does not know what
+  has been spent.
+- **`FailureReason::RateLimiterUnavailable` is not `RateLimited`.** One is the limiter working,
+  the other is an incident, and only one of them deserves a page. Neither is visible in the
+  response.
+- **`consume` and `reset` must never raise.** An exception is neither policy, and it arrives as
+  a 500 rather than as either answer.
+
 ## CSRF
 
 Every unsafe request needs a token — including the login form, which is the case most
@@ -1043,7 +1081,7 @@ end
 | Event | Emitted when |
 |---|---|
 | `authentication.succeeded` | a password verified |
-| `authentication.failed` | it did not — carries `reason`, including `RateLimited` |
+| `authentication.failed` | it did not — carries `reason`, including `RateLimited` and `RateLimiterUnavailable` |
 | `password.rehashed` | a correct password was re-hashed at current parameters |
 | `session.started` | a session was created |
 | `session.rotated` | a login replaced the session a client already held — the fixation defence firing |
@@ -1060,6 +1098,8 @@ end
 | `mfa.enabled` | a factor was proved — MFA is now on for that account |
 | `mfa.confirmation_failed` / `mfa.rejected` | a code did not verify — carries `reason` |
 | `mfa.throttled` | **warning** — code submissions were rate limited |
+| `rate_limiter.unavailable` | **error** — the limiter could not reach its store and the attempt was refused. Carries `endpoint`. Worth paging on: the cheapest way to disable rate limiting is to break what stores it |
+| `rate_limiter.failing_open` | **warning** — the same outage, on a path wrapped in `FailOpenRateLimiter`. The attempt proceeded **unmetered** |
 | `mfa.verified` | a second factor was proved |
 | `mfa.recovery_codes_issued` | carries `count` |
 | `mfa.recovery_code_used` | **warning** — carries `remaining`. Worth alerting on |

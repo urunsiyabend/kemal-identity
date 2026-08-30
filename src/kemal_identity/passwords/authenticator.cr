@@ -49,6 +49,16 @@ module KemalIdentity::Passwords
       # a denial-of-service lever that no amount of later penalising takes away.
       verdict = consume_quota(normalized, tenant_id, ip)
 
+      # Fail closed, and loudly. A limiter that cannot answer is not a limiter, and running
+      # the login path unmetered is precisely what an attacker gets by overwhelming whatever
+      # stores the counts. An application that would rather stay up wraps its limiter in
+      # `FailOpenRateLimiter` — per endpoint, since each service takes its own.
+      if verdict.unavailable?
+        Log.error &.emit("rate_limiter.unavailable", endpoint: "login", ip: ip)
+
+        return failure(FailureReason::RateLimiterUnavailable, subject: nil, ip: ip)
+      end
+
       unless verdict.allowed?
         return failure(
           FailureReason::RateLimited, subject: nil, ip: ip, retry_after: verdict.retry_after
@@ -132,7 +142,11 @@ module KemalIdentity::Passwords
     # order of the checks observable.
     private def consume_quota(normalized : String, tenant_id : String?, ip : String?) : Verdict
       verdicts = quota_keys(normalized, tenant_id, ip).map { |key| @rate_limiter.consume(key) }
-      verdicts.find { |verdict| !verdict.allowed? } || Verdict.allow
+
+      # An unavailable store outranks a denial: the two need different responses from whoever
+      # is on call, and reporting the denial would hide the incident behind something that
+      # looks like the system working.
+      verdicts.find(&.unavailable?) || verdicts.find { |verdict| !verdict.allowed? } || Verdict.allow
     end
 
     private def reset_quota(normalized : String, tenant_id : String?, ip : String?) : Nil
