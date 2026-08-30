@@ -38,23 +38,30 @@ module KemalIdentity::Authz
     )
     end
 
-    def decide(principal : Principal, permission : String, tenant_id : String? = nil) : Decision
+    # `context.resource` and `context.attributes` are read by neither this method nor anything
+    # it calls, and that is what an RBAC implementation should do: a role grants a permission
+    # everywhere or nowhere. An application whose rules turn on the object being acted on
+    # implements `Authorizer` itself — which is the whole reason authorization is a contract
+    # rather than a table (`blueprints/0018-authorization-and-tenancy.md`).
+    def decide(principal : Principal, permission : String, context : Context) : Decision
+      tenant_id = context.tenant_id
+
       declared = @catalog.registry[permission]?
-      return Forbidden.new(permission, DenialReason::UnknownPermission, tenant_id) if declared.nil?
+      return Forbidden.unknown_permission(permission, tenant_id) if declared.nil?
 
       if cross_tenant?(principal, tenant_id)
-        return Forbidden.new(permission, DenialReason::TenantMismatch, tenant_id)
+        return Forbidden.tenant_mismatch(permission, tenant_id)
       end
 
       grants = grants_for(principal.subject, tenant_id)
       via = granting_role(grants, permission, tenant_id)
 
       if via.nil?
-        return Forbidden.new(permission, denial_for(grants, tenant_id), tenant_id)
+        return denial_for(permission, grants, tenant_id)
       end
 
       unless principal.at_least?(declared.minimum_assurance)
-        return Forbidden.new(permission, DenialReason::InsufficientAssurance, tenant_id)
+        return Forbidden.insufficient_assurance(permission, tenant_id)
       end
 
       Permitted.new(permission, via, tenant_id)
@@ -199,10 +206,10 @@ module KemalIdentity::Authz
     # A non-member is told apart from a member with no role, because the two mean different
     # things to whoever reads the audit trail: one is a provisioning gap, the other is somebody
     # reaching into a tenant they are not in.
-    private def denial_for(grants : Grants, tenant_id : String?) : DenialReason
-      return DenialReason::NotPermitted if tenant_id.nil? || grants.member?
+    private def denial_for(permission : String, grants : Grants, tenant_id : String?) : Forbidden
+      return Forbidden.not_permitted(permission, tenant_id) if tenant_id.nil? || grants.member?
 
-      DenialReason::NotAMember
+      Forbidden.not_a_member(permission, tenant_id)
     end
 
     private def grants_for(account_id : String, tenant_id : String?) : Grants

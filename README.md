@@ -836,6 +836,61 @@ Use `can?` to decide what to *render* and `authorize!` to guard what happens whe
 clicked. A permission list handed to a template is a snapshot, and a snapshot used as a
 decision is the stale-grant problem this whole module exists to avoid.
 
+### Guarding a particular object
+
+A role answers "may this account refund invoices". It does not answer "may they refund *this*
+one". Pass the object:
+
+```crystal
+put "/invoices/:id" do |env|
+  invoice = Invoice.find(env.params.url["id"])
+
+  env.auth.authorize!(
+    "invoices.edit",
+    resource: KemalIdentity::Authz::Resource.new(
+      "invoice", invoice.id, {"owner_id" => invoice.owner_id}
+    ),
+  )
+end
+```
+
+`RBAC` ignores it — a role grants a permission everywhere or nowhere, which is what an RBAC
+implementation should do. An application with per-object rules implements `Authorizer` and
+wraps the shipped one:
+
+```crystal
+class OwnershipAuthorizer < KemalIdentity::Authz::Authorizer
+  def initialize(@inner : KemalIdentity::Authz::Authorizer)
+  end
+
+  def decide(principal, permission, context : KemalIdentity::Authz::Context)
+    decision = @inner.decide(principal, permission, context)   # the grant first
+    return decision unless decision.permitted?
+
+    owner = context.resource.as?(KemalIdentity::Authz::Resource).try(&.["owner_id"])
+    return decision if owner.nil? || owner == principal.subject
+
+    KemalIdentity::Authz::Forbidden.policy(permission, code: "not_the_owner")
+  end
+end
+```
+
+- **The grant runs first, and the object rule can only narrow.** Owning something is not a
+  substitute for being allowed to act on it.
+- **Your own models can be the resource** instead of `Authz::Resource`: include
+  `Authz::Authorizable` and answer `authz_type` and `authz_id`. An authorizer that wants the
+  real object writes `context.resource.as?(Invoice)`, and a wrong guess is `nil` rather than an
+  exception. The module is frozen at those two methods, so an `include` cannot break on an
+  upgrade.
+- **`attributes:` carries the environment** — a device posture, a region, a change window —
+  without a type change: `env.auth.authorize!("reports.export", attributes: {"device" => posture})`.
+- **`Forbidden.policy` names your reason** for the audit trail. It never reaches the client;
+  every denial still renders one identical 403.
+- **`step_up: true` asks for re-authentication** under your own reason, without borrowing
+  `InsufficientAssurance`. Only set it when authenticating again could actually change the
+  answer — joining a tenant or enrolling a device cannot, and prompting for a second factor
+  there asks for something that will not help.
+
 ### Tenancy
 
 Two rows say one thing, and the redundancy is deliberate:

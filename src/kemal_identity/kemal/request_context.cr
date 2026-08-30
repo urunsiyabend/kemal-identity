@@ -119,10 +119,15 @@ module KemalIdentity::Kemal
     # The denial is logged with its reason and the response is not: the reason distinguishes
     # "not a member of this tenant" from "a member with no role", and telling the caller which
     # would confirm that a guessed tenant exists.
-    def authorize!(permission : String, tenant : String? = nil) : Principal
+    def authorize!(
+      permission : String,
+      tenant : String? = nil,
+      resource : Authz::Authorizable? = nil,
+      attributes : Hash(String, String)? = nil,
+    ) : Principal
       principal = require!
 
-      case decision = @app.authorizer!.decide(principal, permission, tenant)
+      case decision = @app.authorizer!.decide(principal, permission, context_for(principal, tenant, resource, attributes))
       in Authz::Permitted
         principal
       in Authz::Forbidden
@@ -132,6 +137,10 @@ module KemalIdentity::Kemal
           permission: permission,
           tenant: tenant,
           reason: decision.reason.to_s,
+          # An application authorizer's own reason, when it gave one. Audit only — the response
+          # is identical either way.
+          code: decision.code,
+          resource: resource.try { |target| "#{target.authz_type}:#{target.authz_id}" },
           # Which credential was refused, not only whose account. A denial against one of an
           # account's four tokens and a denial against its browser session are different
           # events, and a trail that cannot tell them apart cannot answer the question
@@ -139,7 +148,10 @@ module KemalIdentity::Kemal
           credential: principal.credential.try(&.id),
         )
 
-        if decision.reason.insufficient_assurance?
+        # `step_up?` and not `reason`: one authority for the control flow. A denial that a
+        # stronger credential would fix asks for one, whatever named it — including an
+        # application authorizer's own. See `blueprints/0022`.
+        if decision.step_up?
           raise FreshAuthenticationRequiredError.new("stronger authentication required")
         end
 
@@ -151,20 +163,44 @@ module KemalIdentity::Kemal
     #
     # An anonymous request is `Forbidden` rather than an exception: asking "may they" about
     # somebody who is not signed in has an answer, and it is no.
-    def authorize(permission : String, tenant : String? = nil) : Authz::Decision
+    def authorize(
+      permission : String,
+      tenant : String? = nil,
+      resource : Authz::Authorizable? = nil,
+      attributes : Hash(String, String)? = nil,
+    ) : Authz::Decision
       principal = principal?
 
-      if principal.nil?
-        return Authz::Forbidden.new(permission, Authz::DenialReason::NotPermitted, tenant)
-      end
+      return Authz::Forbidden.not_permitted(permission, tenant) if principal.nil?
 
-      @app.authorizer!.decide(principal, permission, tenant)
+      @app.authorizer!.decide(principal, permission, context_for(principal, tenant, resource, attributes))
     end
 
     # Whether the current request may perform `permission`. For a template deciding whether to
     # render a button — never as the guard itself, which is `authorize!` at the point of action.
-    def can?(permission : String, tenant : String? = nil) : Bool
-      authorize(permission, tenant).permitted?
+    def can?(
+      permission : String,
+      tenant : String? = nil,
+      resource : Authz::Authorizable? = nil,
+      attributes : Hash(String, String)? = nil,
+    ) : Bool
+      authorize(permission, tenant, resource, attributes).permitted?
+    end
+
+    # The credential travels on the context as well as on the principal, so an authorizer
+    # written against `Authz::Context` reads one object rather than two.
+    private def context_for(
+      principal : Principal,
+      tenant : String?,
+      resource : Authz::Authorizable?,
+      attributes : Hash(String, String)?,
+    ) : Authz::Context
+      Authz::Context.new(
+        tenant_id: tenant,
+        resource: resource,
+        attributes: attributes,
+        credential: principal.credential,
+      )
     end
 
     # Mints a session for `principal` and sets the cookie.

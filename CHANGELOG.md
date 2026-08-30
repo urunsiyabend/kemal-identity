@@ -39,6 +39,52 @@ second half of `blueprints/0021-credential-reference.md` and land in this same r
 No new query anywhere. Every value comes from a row that was already read to authenticate the
 request.
 
+### ⚠ Breaking: `Authorizer#decide` takes a context, and a denial is built by name
+
+`Authorizer#decide`'s abstract form is now
+`decide(principal, permission, context : Authz::Context)`. The tenant-only form remains as a
+concrete overload, so every existing **call site** is unchanged; an existing **implementation**
+overrides the new signature and reads `context.tenant_id`.
+
+`Authz::Context` carries the tenant, the object being acted on, environment attributes and the
+credential. A context object rather than more parameters because this method freezes at v1.0:
+the last time it needed something new — a resource — there was nowhere to put it, so a route
+with per-object rules had to bypass `env.auth` and re-implement the audit line, the step-up
+mapping and the uniform 403 for itself.
+
+```crystal
+env.auth.authorize!(
+  "invoices.edit",
+  resource: KemalIdentity::Authz::Resource.new("invoice", invoice.id, {"owner_id" => invoice.owner_id}),
+)
+```
+
+A resource is anything answering `authz_type` and `authz_id` — include `Authz::Authorizable` in
+your own model, or use the shipped `Authz::Resource`. The module is frozen at those two methods:
+a third would stop every implementor compiling, and a concrete addition would silently shadow a
+name in every including class. Growth happens on `Authz::Context`, which injects nothing into
+anybody's types.
+
+**`Forbidden` is now built by named constructor**, not `new`:
+
+```crystal
+Forbidden.not_permitted(permission, tenant_id)
+Forbidden.insufficient_assurance(permission, tenant_id)   # step_up: true
+Forbidden.out_of_scope(permission, tenant_id)
+Forbidden.policy(permission, code: "change_window_closed", step_up: false)
+```
+
+`DenialReason` gains `OutOfScope` and `Custom`, and `Forbidden` gains `code` — an application
+authorizer's own reason, for the audit trail only. It never reaches the client; every denial
+still renders one identical 403, because a denial that explains itself confirms which tenants
+exist and who is in them.
+
+`Forbidden#step_up?` now decides the control flow: `authorize!` raises
+`FreshAuthenticationRequiredError` on it rather than on `reason.insufficient_assurance?`. Two
+axes, one authority. The flag is not a parameter of the general constructor — `initialize` is
+private — so `RBAC` cannot build an assurance denial and forget it and leave step-up silently
+broken. The one place it is chosen is `.policy`, where this shard cannot know the answer.
+
 ## v0.7.0 — 2026-08-29
 
 Adoption. The migration path `docs/06-roadmap.md` has described since v0.1, made real, plus one

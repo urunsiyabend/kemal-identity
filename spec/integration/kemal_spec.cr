@@ -67,6 +67,49 @@ AUTHORIZER = KemalIdentity::Authz::RBAC.new(
   random: KemalIdentity::Testing::DeterministicRandom.new(seed: 3),
 )
 
+# What an application with ownership rules actually writes: the shipped RBAC decides whether the
+# account holds the permission at all, and this adds the per-object question on top. It is
+# installed as *the* authorizer, so `env.auth.authorize!` reaches it — which is the whole point
+# of `blueprints/0022`: before it, a route needing this had to bypass `env.auth` and lose the
+# audit line, the step-up mapping and the uniform 403 with it.
+class OwnershipAuthorizer < KemalIdentity::Authz::Authorizer
+  def initialize(@inner : KemalIdentity::Authz::Authorizer)
+  end
+
+  def decide(
+    principal : KemalIdentity::Principal,
+    permission : String,
+    context : KemalIdentity::Authz::Context,
+  ) : KemalIdentity::Authz::Decision
+    # The account's grant first. A resource rule can only ever narrow.
+    decision = @inner.decide(principal, permission, context)
+    return decision unless decision.permitted?
+
+    resource = context.resource
+    return decision if resource.nil?
+
+    owner = resource.as?(KemalIdentity::Authz::Resource).try(&.["owner_id"])
+
+    if owner && owner != principal.subject
+      return KemalIdentity::Authz::Forbidden.policy(
+        permission, code: "not_the_owner", tenant_id: context.tenant_id
+      )
+    end
+
+    # An environment rule, to prove attributes arrive too — and one that asks for step-up under
+    # its own name rather than borrowing InsufficientAssurance.
+    if context["device"] == "unrecognised"
+      return KemalIdentity::Authz::Forbidden.policy(
+        permission, code: "unrecognised_device", step_up: true, tenant_id: context.tenant_id
+      )
+    end
+
+    decision
+  end
+end
+
+OWNERSHIP_AUTHORIZER = OwnershipAuthorizer.new(AUTHORIZER)
+
 KemalIdentity.configure(
   accounts: ACCOUNTS,
   sessions: SESSIONS,
@@ -82,7 +125,7 @@ KemalIdentity.configure(
   action_tokens: ACTION_TOKENS,
   api_tokens: API_TOKENS,
   jwt: JWT_VALIDATOR,
-  authorizer: AUTHORIZER,
+  authorizer: OWNERSHIP_AUTHORIZER,
   mfa_factors: MFA_FACTORS,
   mfa_secret_key: KemalIdentity::Secret.new("mfa-secret-box-key-of-32-bytes!!"),
   mfa_issuer: "Acme",
@@ -268,6 +311,28 @@ end
 get "/invoices/refund" do |env|
   env.auth.authorize!("invoices.refund")
   "refunded"
+end
+
+# The resource-aware route. `invoice-1` belongs to the signed-in account; `invoice-2` does not.
+get "/invoices/:id" do |env|
+  env.auth.authorize!(
+    "invoices.read",
+    resource: KemalIdentity::Authz::Resource.new(
+      "invoice", env.params.url["id"],
+      {"owner_id" => env.params.url["id"] == "invoice-1" ? "a1" : "someone-else"}
+    ),
+  )
+  "invoice ok"
+end
+
+# Environment attributes, and a custom denial that asks for step-up under its own name.
+get "/invoices/export/:device" do |env|
+  env.auth.authorize!(
+    "invoices.read",
+    resource: KemalIdentity::Authz::Resource.new("invoice", "invoice-1", {"owner_id" => "a1"}),
+    attributes: {"device" => env.params.url["device"]},
+  )
+  "exported"
 end
 
 # What a template does: `can?` decides whether to render the button, `authorize!` guards the
@@ -1255,6 +1320,78 @@ describe "authorization over HTTP" do
 
     response.status_code.should eq(200)
     response.body.should eq("invoices ok")
+  end
+
+  # `blueprints/0022`. Before it, a route needing a per-object rule had to reach past
+  # `env.auth` to the authorizer, and re-implement the audit line, the step-up mapping and the
+  # uniform 403 at every such route.
+  describe "a resource-aware authorizer, reached through env.auth" do
+    it "serves the object the caller owns" do
+      session = log_in
+      AUTHORIZER.grant("a1", "reader")
+
+      get "/invoices/invoice-1", headers: cookies("kemal_identity=#{session}")
+
+      response.status_code.should eq(200)
+      response.body.should eq("invoice ok")
+    end
+
+    # Same account, same role, same permission. Only the object differs.
+    it "refuses the object the caller does not own" do
+      session = log_in
+      AUTHORIZER.grant("a1", "reader")
+
+      get "/invoices/invoice-2", headers: cookies("kemal_identity=#{session}")
+
+      response.status_code.should eq(403)
+    end
+
+    # The resource rule narrows and never widens: no grant is still no, whoever owns the object.
+    it "does not let ownership substitute for the grant" do
+      session = log_in
+
+      get "/invoices/invoice-1", headers: cookies("kemal_identity=#{session}")
+
+      response.status_code.should eq(403)
+    end
+
+    it "passes environment attributes to the policy" do
+      session = log_in
+      AUTHORIZER.grant("a1", "reader")
+
+      get "/invoices/export/managed", headers: cookies("kemal_identity=#{session}")
+
+      response.status_code.should eq(200)
+      response.body.should eq("exported")
+    end
+
+    # The custom denial asked for step-up under its own code, without borrowing
+    # InsufficientAssurance — and `authorize!` honoured it, because it reads `step_up?` rather
+    # than the enum member.
+    it "raises a step-up for a custom denial that asked for one" do
+      session = log_in
+      AUTHORIZER.grant("a1", "reader")
+
+      get "/invoices/export/unrecognised", headers: cookies("kemal_identity=#{session}")
+
+      response.status_code.should eq(403)
+      response.body.should contain("fresh authentication required")
+    end
+
+    # Every denial still renders one identical body. A custom `code` is for the audit trail; a
+    # response that carried it would tell a caller which rule it tripped.
+    it "renders an ownership denial identically to a missing grant" do
+      session = log_in
+      AUTHORIZER.grant("a1", "reader")
+
+      get "/invoices/invoice-2", headers: cookies("kemal_identity=#{session}")
+      owned = {response.status_code, response.body}
+
+      AUTHZ_STORE.remove_account("a1")
+      get "/invoices/invoice-1", headers: cookies("kemal_identity=#{session}")
+
+      {response.status_code, response.body}.should eq(owned)
+    end
   end
 
   # The denial reason is an audit-log value. A response that varied with it would confirm that
