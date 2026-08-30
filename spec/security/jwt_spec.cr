@@ -76,6 +76,27 @@ describe "a well-formed JWT" do
     KemalIdentity::SpecHelper.should_authenticate(outcome).subject.should eq("a1")
   end
 
+  it "names the token by its jti when the issuer states one" do
+    validator, _ = jwt_harness
+    outcome = validator.authenticate(Forge.encode(Forge.claims(jti: "jti-1")))
+
+    credential = KemalIdentity::SpecHelper.should_authenticate(outcome).credential.should_not be_nil
+    credential.kind.should eq(KemalIdentity::CredentialKind::Jwt)
+    credential.id.should eq("jti-1")
+  end
+
+  # `jti` is required only when a revocation store is configured, so an unnamed token is a
+  # legitimate configuration rather than an error. What it costs is worth stating: a
+  # credential with no id cannot be attributed in an audit line or revoked on its own.
+  it "leaves the credential unnamed when the issuer omits jti" do
+    validator, _ = jwt_harness
+    outcome = validator.authenticate(Forge.encode(Forge.claims))
+
+    credential = KemalIdentity::SpecHelper.should_authenticate(outcome).credential.should_not be_nil
+    credential.kind.should eq(KemalIdentity::CredentialKind::Jwt)
+    credential.id.should be_nil
+  end
+
   # Same level an opaque token gets, and for the same reason: possession of a secret, not
   # the presence of a person.
   it "authenticates at ApiToken assurance, which is never fresh" do

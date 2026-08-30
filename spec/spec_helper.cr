@@ -154,19 +154,30 @@ module KemalIdentity::SpecHelper
     )
   end
 
+  # `session_id` stays as a convenience here — the overwhelming majority of specs want a
+  # session-backed principal and should not have to build a `CredentialRef` to say so. Pass
+  # `credential:` explicitly for a bearer-backed one; it wins over `session_id`.
   def self.principal(
     subject : String = "account-1",
     assurance : KemalIdentity::AssuranceLevel = KemalIdentity::AssuranceLevel::Password,
     authenticated_at : Time = FIXED_NOW,
     session_id : String? = "session-1",
+    credential : KemalIdentity::CredentialRef? = nil,
     mfa_verified_at : Time? = nil,
     tenant_id : String? = nil,
   ) : KemalIdentity::Principal
+    credential ||= if session_id
+                     KemalIdentity::CredentialRef.new(
+                       kind: KemalIdentity::CredentialKind::Session,
+                       id: session_id,
+                     )
+                   end
+
     KemalIdentity::Principal.new(
       subject: subject,
       assurance: assurance,
       authenticated_at: authenticated_at,
-      session_id: session_id,
+      credential: credential,
       mfa_verified_at: mfa_verified_at,
       tenant_id: tenant_id,
     )

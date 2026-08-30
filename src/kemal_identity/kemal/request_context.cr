@@ -16,6 +16,17 @@ module KemalIdentity::Kemal
 
     # The principal, or nil. Prefer `require!` in a guarded route: it makes the principal
     # available only where it exists, with no nil check.
+    # The credential that proved this request, when one was presented.
+    #
+    # What an audit line records, what a "used by token X" screen renders, and what an
+    # application's own per-credential policy reads. Safe by construction: it carries no
+    # secret, no digest and no signature, so it cannot leak one into a log or a template.
+    #
+    # `nil` when nobody is signed in, and also for a principal no credential produced.
+    def credential : CredentialRef?
+      principal?.try(&.credential)
+    end
+
     def principal? : Principal?
       outcome = @outcome
       outcome.is_a?(Authenticated) ? outcome.principal : nil
@@ -121,6 +132,11 @@ module KemalIdentity::Kemal
           permission: permission,
           tenant: tenant,
           reason: decision.reason.to_s,
+          # Which credential was refused, not only whose account. A denial against one of an
+          # account's four tokens and a denial against its browser session are different
+          # events, and a trail that cannot tell them apart cannot answer the question
+          # somebody actually asks after an incident.
+          credential: principal.credential.try(&.id),
         )
 
         if decision.reason.insufficient_assurance?

@@ -90,9 +90,11 @@ module KemalIdentity::Passwords
           subject: account.id,
           assurance: AssuranceLevel::Password,
           authenticated_at: @clock.now,
-          # No session yet. `Sessions::Service#start` is what mints one, and doing it there
-          # is what makes login rotate the session identifier.
-          session_id: nil,
+          # No credential yet, and none is coming from here. Verifying a password *proves* an
+          # identity; it does not hand back something to present on the next request.
+          # `Sessions::Service#start` is what mints that, and doing it there is what makes
+          # login rotate the session identifier.
+          credential: nil,
           tenant_id: account.tenant_id,
         )
       )

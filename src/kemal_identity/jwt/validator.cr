@@ -373,8 +373,18 @@ module KemalIdentity::JWT
         # `iat` when the issuer stated one — it is when the credential behind this principal
         # was actually verified, and it is what `Principal#fresh?` measures.
         authenticated_at: issued_at || now,
-        # No session: a bearer token is presented per request and establishes nothing.
-        session_id: nil,
+        # `jti` when the issuer stated one, and `nil` otherwise — this shard requires `jti`
+        # only when a revocation store is configured, so an unnamed token is a legitimate
+        # configuration rather than an error here. Worth knowing what `nil` costs: a
+        # credential that cannot be named is one an audit line cannot attribute and an
+        # operator cannot revoke on its own.
+        #
+        # No session id: a bearer token is presented per request and establishes nothing.
+        credential: CredentialRef.new(
+          kind: CredentialKind::Jwt,
+          id: claims["jti"]?.try(&.as_s?),
+          expires_at: expires_at,
+        ),
       )
 
       Validated.new(principal: principal, claims: claims)

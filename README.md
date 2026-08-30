@@ -350,6 +350,38 @@ end
   API request becomes a write.
 - `revoke_all(account_id)` is what a "revoke all my tokens" button calls.
 
+### Which credential proved the request
+
+`env.auth.require!` answers *who*. `env.auth.credential` answers *what proved it*:
+
+```crystal
+delete "/api/tokens/current" do |env|
+  env.auth.require!
+  credential = env.auth.credential
+
+  if credential && credential.kind.api_token? && (id = credential.id)
+    KemalIdentity.app.api!.revoke(id)
+  else
+    env.status(400).text("This endpoint revokes the token it was called with")
+  end
+end
+```
+
+`CredentialRef` carries the credential's `kind`, its `id`, a display `name`, `expires_at` and
+`scopes`. It never carries the token itself, the digest or a signature, so it is safe to put in
+a log line or hand to a template.
+
+- **Two tokens for one account are distinguishable.** Before v0.8 they were not: the token id
+  was known at the moment the token authenticated and then discarded, so a token issued for
+  reading reports could perform any write its owner was permitted. Per-token policy is now
+  something an application can write.
+- **`principal.session_id` still works** and is derived from this. A bearer credential answers
+  `nil` there — there is no session to spare on "log out everywhere else" and none to anchor
+  CSRF on — while still being named on `credential`.
+- **`scopes` is `nil` until v0.8's second half lands**, and `nil` means *unrestricted*, not
+  *permits nothing*. The distinction matters: a session has no scopes either, and reading their
+  absence as an empty set would deny every signed-in browser.
+
 ### JWT
 
 Off unless you pass a validator, and second on purpose: **a JWT cannot be revoked before its

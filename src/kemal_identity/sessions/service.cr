@@ -256,7 +256,14 @@ module KemalIdentity::Sessions
         subject: record.account_id,
         assurance: record.assurance,
         authenticated_at: record.authenticated_at,
-        session_id: record.id,
+        # A session is unattenuated: scopes are a token concept, and reading their absence as
+        # "permits nothing" would deny every signed-in browser. `CredentialRef#scopes` says
+        # why `nil` and `[]` are not the same answer.
+        credential: CredentialRef.new(
+          kind: CredentialKind::Session,
+          id: record.id,
+          expires_at: record.absolute_expires_at,
+        ),
         mfa_verified_at: record.mfa_verified_at,
         tenant_id: record.tenant_id,
       )

@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased — v0.8.0
+
+The last breaking release before the v1.0 API freeze. `blueprints/0020-api-freeze-blockers.md`
+records the scan that decided what belongs here: the contracts that cannot reach their targets
+once frozen, and nothing else.
+
+### ⚠ Breaking: `Principal` names the credential that proved the request
+
+`Principal.new`'s `session_id:` argument is replaced by `credential : CredentialRef?`.
+`#session_id` remains as a reader, derived from it, so `logout!`, `mfa_verified!`, CSRF
+anchoring and `redeem_recovery_code(except_session_id:)` are unaffected. Code that *constructed*
+a `Principal` with `session_id:` — a custom `RequestAuthenticator`, a test double — passes a
+`CredentialRef` instead.
+
+Two personal access tokens issued to one account used to produce indistinguishable principals.
+`ApiTokens::Service` had the token id in hand when it authenticated and dropped it, so an
+application could not tell which token was asking, and a token created for reading reports could
+perform a write its owner happened to be permitted. Closing that from outside the shard meant
+either a second digest-and-query on every authenticated request or a copy of the whole
+validation path.
+
+```crystal
+credential = env.auth.credential
+credential.try(&.kind)   # Session | ApiToken | Jwt | Custom
+credential.try(&.id)     # the session id, the token id, or the JWT's jti
+```
+
+`CredentialRef` carries `kind`, `id`, `name`, `expires_at` and `scopes`, and never the token,
+the digest or a signature — so it is safe in a log line, and `authz.denied` now records which
+credential was refused rather than only whose account.
+
+`scopes` is `nil` everywhere for now, and `nil` means **unrestricted**, not *permits nothing*: a
+session has no scopes either, and reading their absence as an empty set would deny every
+signed-in browser. Per-token scopes and their intersection with account permissions are the
+second half of `blueprints/0021-credential-reference.md` and land in this same release.
+
+No new query anywhere. Every value comes from a row that was already read to authenticate the
+request.
+
 ## v0.7.0 — 2026-08-29
 
 Adoption. The migration path `docs/06-roadmap.md` has described since v0.1, made real, plus one

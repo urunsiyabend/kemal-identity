@@ -76,6 +76,16 @@ describe KemalIdentity::Sessions::Service do
       principal.subject.should eq("a1")
       principal.session_id.should eq(issued.record.id)
       principal.assurance.should eq(KemalIdentity::AssuranceLevel::MFA)
+
+      # The credential behind the session, named. A session is unattenuated — scopes are a
+      # token concept, and reading their absence as "permits nothing" would deny every
+      # signed-in browser.
+      credential = principal.credential.should_not be_nil
+      credential.kind.should eq(KemalIdentity::CredentialKind::Session)
+      credential.id.should eq(issued.record.id)
+      credential.expires_at.should eq(issued.record.absolute_expires_at)
+      credential.unrestricted?.should be_true
+
       principal.tenant_id.should eq("t1")
       principal.mfa_verified_at.should eq(KemalIdentity::SpecHelper::FIXED_NOW)
     end

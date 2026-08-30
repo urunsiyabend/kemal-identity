@@ -126,8 +126,18 @@ module KemalIdentity::ApiTokens
           # reachable with a token in the first place.
           assurance: AssuranceLevel::ApiToken,
           authenticated_at: now,
-          # No session: a bearer token is presented per request and establishes nothing.
-          session_id: nil,
+          # The token that proved this request, named. `record` is already in hand from the
+          # lookup above, so this costs no second query — which is the whole point, since
+          # rediscovering the token id from the header would mean digesting and querying
+          # again on every authenticated request.
+          #
+          # No session id: a bearer token is presented per request and establishes nothing.
+          credential: CredentialRef.new(
+            kind: CredentialKind::ApiToken,
+            id: record.id,
+            name: record.name,
+            expires_at: record.expires_at,
+          ),
         )
       )
     end

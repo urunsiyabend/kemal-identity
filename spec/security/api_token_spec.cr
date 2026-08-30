@@ -52,6 +52,50 @@ describe "a personal access token" do
       .session_id.should be_nil
   end
 
+  # `blueprints/0021-credential-reference.md` opens on this failure: the token id is in hand
+  # when the token is authenticated, and used to be dropped, so an application had no way to
+  # tell which of an account's tokens was asking.
+  it "names the token that proved the request" do
+    service, _, accounts, _ = token_harness
+    issued = issue(service, accounts, "deploy-token")
+
+    principal = KemalIdentity::SpecHelper.should_authenticate(service.authenticate(issued.token.reveal))
+    credential = principal.credential.should_not be_nil
+
+    credential.kind.should eq(KemalIdentity::CredentialKind::ApiToken)
+    credential.id.should eq(issued.record.id)
+    credential.name.should eq("deploy-token")
+  end
+
+  # The property the whole change exists for. Two tokens for one account used to produce two
+  # byte-identical principals, so a token issued for reading could perform a write its owner
+  # happened to be permitted.
+  it "distinguishes two tokens belonging to the same account" do
+    service, _, accounts, _ = token_harness
+    reporting = issue(service, accounts, "reporting-token")
+    deploying = issue(service, accounts, "deploy-token")
+
+    one = KemalIdentity::SpecHelper.should_authenticate(service.authenticate(reporting.token.reveal))
+    two = KemalIdentity::SpecHelper.should_authenticate(service.authenticate(deploying.token.reveal))
+
+    one.subject.should eq(two.subject)
+    one.credential.try(&.id).should_not eq(two.credential.try(&.id))
+  end
+
+  # Unattenuated until scopes exist. `nil` is not an empty set: reading it as one would deny
+  # every request a token makes, which is the fail-closed edge of `CredentialRef#scopes`.
+  it "is unattenuated, since no scope has been issued to it" do
+    service, _, accounts, _ = token_harness
+    issued = issue(service, accounts)
+
+    principal = KemalIdentity::SpecHelper.should_authenticate(service.authenticate(issued.token.reveal))
+    credential = principal.credential.should_not be_nil
+
+    credential.scopes.should be_nil
+    credential.unrestricted?.should be_true
+    credential.permits?("releases:write").should be_true
+  end
+
   # A fixed, searchable prefix is what lets a secret scanner recognise one of these in a commit
   # or a paste. A bare base64 blob is indistinguishable from any other base64 blob.
   it "carries a searchable prefix so a leaked token can be recognised" do

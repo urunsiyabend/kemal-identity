@@ -236,8 +236,8 @@ is. `blueprints/0020-api-freeze-blockers.md` records the scan that separated the
 
 | Deliverable | State |
 |---|---|
-| `Principal` carries a reference to the credential that proved the request | **not started** — `blueprints/0021-credential-reference.md`. Two tokens for one account are indistinguishable today, so a read-only token can perform a write the account is permitted |
-| Per-token scopes, intersected with account permissions | **not started** — the second half of 0021. Reverses the v0.4 deferral, which was correct while there was no authorizer for a scope to intersect with |
+| `Principal` carries a reference to the credential that proved the request | **done** — `blueprints/0021-credential-reference.md`. `CredentialRef` on `Principal`, filled from the row already read at every producer, so no query was added. `session_id` survives as a derived reader |
+| Per-token scopes, intersected with account permissions | **not started** — the second half of 0021. `CredentialRef#scopes` is in place and nothing populates it yet. Reverses the v0.4 deferral, which was correct while there was no authorizer for a scope to intersect with |
 | `Authorizer#decide` receives a resource and a context | **not started** — `blueprints/0022-authorization-context-and-denials.md`. An application implementing ownership rules can subclass the authorizer today, but `env.auth.authorize!` can only ever call the three-argument form, so the route has to bypass `env.auth` and loses the audit line, the step-up mapping and the uniform 403 |
 | A denial names its own reason, and says whether re-authenticating would help | **not started** — the second half of 0022. A custom authorizer cannot name its own denial, and cannot ask for step-up without borrowing `InsufficientAssurance` and distorting it |
 | `RateLimiter` can report that its store is unavailable | **not started** — a shared-store limiter whose store is down can only fail open, take the endpoint down, or raise into a 500. OPS-01 requires that choice to be per endpoint |

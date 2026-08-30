@@ -13,6 +13,36 @@ describe KemalIdentity::Principal do
     end
   end
 
+  describe "#session_id" do
+    # Derived from `#credential` rather than stored beside it. These examples are what stops
+    # the two drifting apart again.
+    it "reports the id of a session credential" do
+      principal = KemalIdentity::SpecHelper.principal(session_id: "sess-7")
+      principal.session_id.should eq("sess-7")
+      principal.credential.try(&.kind).should eq(KemalIdentity::CredentialKind::Session)
+    end
+
+    it "is nil for a bearer credential that has an id of its own" do
+      principal = KemalIdentity::SpecHelper.principal(
+        credential: KemalIdentity::CredentialRef.new(
+          kind: KemalIdentity::CredentialKind::ApiToken,
+          id: "tok-9",
+        )
+      )
+
+      # There is no session to spare on "log out everywhere else" and none to anchor CSRF on,
+      # which is exactly what nil says. The token is still named, on `#credential`.
+      principal.session_id.should be_nil
+      principal.credential.try(&.id).should eq("tok-9")
+    end
+
+    it "is nil when no credential produced the principal" do
+      principal = KemalIdentity::SpecHelper.principal(session_id: nil)
+      principal.credential.should be_nil
+      principal.session_id.should be_nil
+    end
+  end
+
   describe "#fresh?" do
     it "is fresh inside the window" do
       principal = KemalIdentity::SpecHelper.principal(authenticated_at: now - 1.minute)
