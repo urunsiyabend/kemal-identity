@@ -242,14 +242,15 @@ is. `blueprints/0020-api-freeze-blockers.md` records the scan that separated the
 | A denial names its own reason, and says whether re-authenticating would help | **done** — the second half of 0022. `DenialReason::Custom` plus a free-form `code`, and `step_up?` split off as the single authority for the control flow. Named constructors fix the flag, so `RBAC` cannot forget it |
 | `RateLimiter` can report that its store is unavailable | **done** — `blueprints/0023-rate-limiter-store-failure.md`. `Verdict.unavailable`, fail-closed at all five call sites, and `FailOpenRateLimiter` for a path that would rather stay up — per endpoint, since each service takes its own limiter |
 | `IdentityProvider` is written, or removed from the freeze list | **not started** — the type is named in the freeze list below and does not exist. `OIDC::Provider` is a struct with a fixed constructor and no abstract ancestor |
-| `AuthenticatorChain` stops foreclosing a request-aware authenticator | **not started** — DPoP and trusted-proxy identity need request attributes, which the catalogue itself says belong in a sibling contract added later. The chain's element type has to allow one |
+| ~~`AuthenticatorChain` stops foreclosing a request-aware authenticator~~ | **withdrawn** — it was never a blocker. A defaulted overload carrying request attributes can be added to `RequestAuthenticator` after 1.0 without breaking any implementor, measured rather than assumed, so DPoP and trusted-proxy identity stay reachable. `blueprints/0020` decision 7 records what the reasoning got wrong |
 
 Deliberately **not** in v0.8, because none of it requires a frozen signature to move: the
 missing `WWW-Authenticate` header, a declared API-only mode, republishing the contract specs
 for consumers, an injectable security-event sink, credential-kind declarations on `PathGuard`,
-token lifetime policy, and an assurance level above `MFA` for phishing-resistant proof. All of
-those are real gaps against the catalogue's targets and all of them can land after 1.0 without
-breaking anybody. `blueprints/0020` lists them so that missing them stays a decision.
+token lifetime policy, an assurance level above `MFA` for phishing-resistant proof, and — once
+it was measured rather than assumed — request attributes for DPoP and trusted-proxy identity.
+All of those are real gaps against the catalogue's targets and all of them can land after 1.0
+without breaking anybody. `blueprints/0020` lists them so that missing them stays a decision.
 
 ## v1.0 — API freeze
 

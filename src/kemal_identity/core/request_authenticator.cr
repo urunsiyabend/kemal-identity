@@ -29,6 +29,35 @@ module KemalIdentity
   # Implementations **must not raise** for anything a client controls. A two-megabyte header is
   # a `Failed`, not a 500. Shape is checked before hashing and before any I/O, so a hostile
   # value costs a length comparison rather than a database round trip.
+  # ### One abstract method, and why that is load-bearing
+  #
+  # A credential is all this sees. That is deliberate — it is what keeps the contract
+  # framework-independent — but some credentials cannot be judged from their own value alone: a
+  # DPoP proof covers the request's method and URI, and a trusted-proxy or mTLS identity means
+  # nothing without the peer address behind it.
+  #
+  # Those need more input, and the road to giving it to them stays open after v1.0 freezes this
+  # class, because a **defaulted concrete overload** breaks no implementor:
+  #
+  # ```
+  # def authenticate(credential : String?, request : RequestAttributes?) : Outcome
+  #   authenticate(credential)
+  # end
+  # ```
+  #
+  # Measured rather than assumed (`blueprints/0020` decision 7): an authenticator written
+  # against today's shape keeps compiling and routes through its own one-argument method, and
+  # one-argument call sites still resolve. `AuthenticatorChain`, `AuthenticationHandler` and
+  # `Application` are all outside the freeze list, so the plumbing can follow.
+  #
+  # What must not happen is a **second abstract method** here. That would freeze at v1.0 and
+  # force every consumer's authenticator to implement it, and it would also remove the useful
+  # part of the arrangement above: a request-aware authenticator has to implement the
+  # one-argument form too, so it cannot leave *"what if no request attributes were supplied"*
+  # implicit. For DPoP that answer is a rejection.
+  #
+  # `spec/unit/authenticator_chain_spec.cr` holds a fixture implementing exactly this one
+  # method, so a second one does not fail an example — it stops the suite compiling.
   abstract class RequestAuthenticator
     # Resolves `credential` to an outcome. `nil` or empty means nothing was presented.
     abstract def authenticate(credential : String?) : Outcome

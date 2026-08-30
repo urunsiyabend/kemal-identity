@@ -137,20 +137,72 @@ before the freeze rather than after. Settled in
 `code` for the audit trail, and "would authenticating again help" split off as its own axis so
 that control flow has one authority instead of two.
 
-### 7. `AuthenticatorChain` must not foreclose a request-aware authenticator
+### 7. ~~`AuthenticatorChain` must not foreclose a request-aware authenticator~~ — withdrawn
 
-`RequestAuthenticator#authenticate(credential : String?)` sees a string and nothing else. DPoP
-(TOK-11) needs the method, URI, time and access-token hash; a trusted-proxy or mTLS
-authenticator (HTTP-06) needs the peer address and TLS state. Neither is reachable.
+**This was wrong, and measuring it before implementing is what found that out.** It is left in
+place rather than deleted because the reasoning that produced it is the kind worth being able
+to recognise again.
 
-The catalogue supplies the escape itself: TOK-11 asks for this "through a deliberate
-HTTP-facing adapter without infecting framework-independent credential contracts". A sibling
-contract added after 1.0 satisfies that and leaves `RequestAuthenticator` alone.
+The problem it names is real. `RequestAuthenticator#authenticate(credential : String?)` sees a
+string and nothing else, so DPoP (TOK-11) cannot check the method, URI and access-token hash its
+proof covers, and a trusted-proxy or mTLS authenticator (HTTP-06) cannot see the peer address or
+TLS state. The catalogue supplies the escape — TOK-11 asks for it "through a deliberate
+HTTP-facing adapter without infecting framework-independent credential contracts".
 
-Except that `AuthenticatorChain#initialize` takes `Array(RequestAuthenticator)`, so a sibling
-type could not be registered in the chain. Widening that element type post-freeze is breaking;
-widening it now is not. No new contract is written in v0.8 — only the chain is made able to
-hold one later.
+The mistake was the mechanism. This assumed the escape had to be a **sibling** contract, which
+`Array(RequestAuthenticator)` could not hold, and concluded that the element type had to widen
+before the freeze. Both halves fall apart on contact:
+
+- Nothing requires a sibling. A request-aware contract can subclass `RequestAuthenticator`, or
+  `RequestAuthenticator` can simply gain the overload — and either way the array's element type
+  never changes. You also cannot widen an `Array` to admit a type that does not exist yet, so
+  the prescribed fix was not expressible in the first place.
+- What is actually missing is a way for request attributes to *reach* an authenticator, and that
+  road stays open. Adding a **defaulted concrete overload** to the frozen abstract class after
+  1.0 is additive:
+
+```crystal
+abstract class RequestAuthenticator
+  abstract def authenticate(credential : String?) : Outcome
+
+  # Addable after 1.0 without breaking anybody.
+  def authenticate(credential : String?, request : RequestAttributes?) : Outcome
+    authenticate(credential)
+  end
+end
+```
+
+Measured, not assumed. An implementor written against the 1.0 shape keeps compiling and routes
+through its own one-argument method; one-argument call sites still resolve; and even a consumer
+that had defined its own two-argument `authenticate` with a different second type resolves both
+overloads correctly rather than colliding.
+
+The abstract one-argument form also survives, which turns out to be worth having: a request-aware
+authenticator is forced to implement it too, so it must answer *"what if no request attributes
+were supplied"* explicitly. For DPoP that answer is a rejection, and being unable to leave it
+implicit is the right kind of friction.
+
+`AuthenticatorChain`, `AuthenticationHandler` and `Application` are all outside the freeze list,
+so the plumbing that would carry the attributes can change whenever the contract does.
+
+**Residual risk, stated rather than dismissed.** If the eventual contract genuinely cannot be a
+`RequestAuthenticator` — because it needs to return something other than an `Outcome`, say —
+then it would be a sibling after all and the chain would need widening. Nothing in TOK-11 or
+HTTP-06 suggests that: both answer the same question ("who is making this request?") with the
+same three outcomes, and only need more input to answer it.
+
+Nothing ships for this in v0.8. `RequestAttributes` is deliberately not written now: designing
+and freezing the input type of a contract with no implementation is the same mistake
+`blueprints/0021` decision 7 refused when it declined to ship a scope field nothing populated.
+
+What does ship is a guard for the one thing that *would* close the road: a second `abstract def`
+on `RequestAuthenticator`, which would freeze at 1.0 and force every consumer's authenticator to
+implement it. `spec/unit/authenticator_chain_spec.cr` holds a fixture implementing exactly the
+one method, so adding a second does not fail an example — it stops the suite compiling. Verified
+by adding one, which halts the build at `AuthenticatorChain` (this shard's own subclass guards it
+before the fixture is reached) with `abstract def
+KemalIdentity::RequestAuthenticator#kind() must be implemented by
+KemalIdentity::AuthenticatorChain`.
 
 ### 8. Everything else the catalogue wants is additive, and waits
 

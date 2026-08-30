@@ -39,8 +39,36 @@ private def failing(reason : KemalIdentity::FailureReason)
   StubAuthenticator.new(KemalIdentity::Failed.new(reason))
 end
 
+# The whole of the contract, implemented. `blueprints/0020` decision 7 rests on this staying
+# true: request attributes can reach an authenticator after 1.0 through a *defaulted* overload,
+# which breaks nobody — but only while `authenticate(credential)` is the single abstract method.
+#
+# A second `abstract def` added here would freeze at 1.0 and force every consumer's
+# authenticator to implement it. That would not fail an example; it would stop this file
+# compiling, which is the point of the fixture.
+private class MinimalAuthenticator < KemalIdentity::RequestAuthenticator
+  def authenticate(credential : String?) : KemalIdentity::Outcome
+    KemalIdentity::Anonymous.new
+  end
+end
+
 private def chain(*authenticators : KemalIdentity::RequestAuthenticator)
   KemalIdentity::AuthenticatorChain.new(authenticators.to_a.map(&.as(KemalIdentity::RequestAuthenticator)))
+end
+
+describe KemalIdentity::RequestAuthenticator do
+  it "is satisfied by implementing one method" do
+    MinimalAuthenticator.new.authenticate("anything").should be_a(KemalIdentity::Anonymous)
+  end
+
+  # A consumer's own authenticator goes in the chain beside the built-in ones, which is what
+  # keeps a future request-aware subclass registrable without the element type moving.
+  it "composes into a chain alongside the shipped authenticators" do
+    KemalIdentity::AuthenticatorChain
+      .new([MinimalAuthenticator.new] of KemalIdentity::RequestAuthenticator)
+      .authenticate("anything")
+      .should be_a(KemalIdentity::Anonymous)
+  end
 end
 
 describe KemalIdentity::AuthenticatorChain do
