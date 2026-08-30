@@ -223,12 +223,64 @@ Counting what is left to migrate is a query against the application's own table,
 `AccountRepository`: adding an abstract method would break every existing implementor for a
 reporting convenience, weeks before the contracts freeze.
 
+## v0.8 — The last breaking release
+
+Everything that has to change *before* the contracts freeze, and nothing that does not.
+
+`blueprints/maturity-validation-scenarios.md` is the catalogue this project will be judged
+against, and working through it in order turned out to be the wrong first move. Most of the
+gaps it finds are closed by **adding** something — a header, a package path, an event sink —
+and adding is not a breaking change. A minority are closed only by changing a signature that
+v1.0 is about to freeze. Those are the ones with a deadline, and they are what this milestone
+is. `blueprints/0020-api-freeze-blockers.md` records the scan that separated the two.
+
+| Deliverable | State |
+|---|---|
+| `Principal` carries a reference to the credential that proved the request | **not started** — `blueprints/0021-credential-reference.md`. Two tokens for one account are indistinguishable today, so a read-only token can perform a write the account is permitted |
+| Per-token scopes, intersected with account permissions | **not started** — the second half of 0021. Reverses the v0.4 deferral, which was correct while there was no authorizer for a scope to intersect with |
+| `Authorizer#decide` receives a resource and a context | **not started** — `blueprints/0022-authorization-context-and-denials.md`. An application implementing ownership rules can subclass the authorizer today, but `env.auth.authorize!` can only ever call the three-argument form, so the route has to bypass `env.auth` and loses the audit line, the step-up mapping and the uniform 403 |
+| A denial names its own reason, and says whether re-authenticating would help | **not started** — the second half of 0022. A custom authorizer cannot name its own denial, and cannot ask for step-up without borrowing `InsufficientAssurance` and distorting it |
+| `RateLimiter` can report that its store is unavailable | **not started** — a shared-store limiter whose store is down can only fail open, take the endpoint down, or raise into a 500. OPS-01 requires that choice to be per endpoint |
+| `IdentityProvider` is written, or removed from the freeze list | **not started** — the type is named in the freeze list below and does not exist. `OIDC::Provider` is a struct with a fixed constructor and no abstract ancestor |
+| `AuthenticatorChain` stops foreclosing a request-aware authenticator | **not started** — DPoP and trusted-proxy identity need request attributes, which the catalogue itself says belong in a sibling contract added later. The chain's element type has to allow one |
+
+Deliberately **not** in v0.8, because none of it requires a frozen signature to move: the
+missing `WWW-Authenticate` header, a declared API-only mode, republishing the contract specs
+for consumers, an injectable security-event sink, credential-kind declarations on `PathGuard`,
+token lifetime policy, and an assurance level above `MFA` for phishing-resistant proof. All of
+those are real gaps against the catalogue's targets and all of them can land after 1.0 without
+breaking anybody. `blueprints/0020` lists them so that missing them stays a decision.
+
 ## v1.0 — API freeze
 
-The criterion is contract stability, not feature count. `Principal`,
-`RequestAuthenticator`, `Hasher`, `SessionRepository`, `AccountRepository`,
-`IdentityProvider`, `RateLimiter`, `Notifier`, `Clock`, `Authorizer` and `env.auth` are
-frozen. Provider lists, ORM adapters and TOTP internals stay free to evolve behind them.
+The criterion is contract stability, not feature count.
+
+**Frozen.** The contracts an application implements or calls:
+
+| | |
+|---|---|
+| Identity and credentials | `Principal`, `CredentialRef`, `CredentialKind`, `AssuranceLevel` |
+| Authentication | `RequestAuthenticator`, `Outcome` and its three variants, `FailureReason` |
+| Passwords | `Hasher`, `Secret` |
+| Persistence | `AccountRepository`, `Accounts::Account`, `SessionRepository`, `Sessions::Record`, `Sessions::Lookup` |
+| Authorization | `Authorizer`, `Authz::Decision` and its two variants, the denial-reason model |
+| Supporting contracts | `RateLimiter` and `Verdict`, `Notifier`, `Clock`, `RandomSource` |
+| Federation | `IdentityProvider`, if v0.8 writes it |
+| HTTP | `env.auth` |
+
+A frozen method freezes its argument and return types with it, which is why the argument and
+return types are named here rather than left implied. The original list in this section was
+shorter and named `IdentityProvider`, which did not exist — see `blueprints/0020` decision 1.
+
+**Not frozen, on purpose.** Provider lists, ORM and driver adapters, TOTP internals, the
+shipped `RBAC` implementation, migration files, and everything under `KemalIdentity::Kemal`
+apart from `env.auth` itself. These are where the shard is expected to keep moving.
+
+The catalogue is validated against a v1.0 release candidate, after v0.8 has landed. Recording
+maturity levels against contracts that are about to change would produce results that expire
+the day they are written, and the results go in their own document so
+`blueprints/maturity-validation-scenarios.md` stays what it says it is: a catalogue carrying no
+result for this library.
 
 ## Migration path for existing Kemal apps
 

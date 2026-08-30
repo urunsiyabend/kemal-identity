@@ -16,8 +16,14 @@ there. Authorization is a separate, opt-in contract that carries nothing into a 
 >
 > **v0.7.0 is a breaking packaging change:** `pg` and `sqlite3` are no longer dependencies of
 > this shard, so an application requiring `kemal_identity/postgres` or `kemal_identity/sqlite`
-> declares that driver itself. Next is the v1.0 API freeze, whose criterion is contract
-> stability rather than feature count. **The API is not frozen until v1.0.**
+> declares that driver itself.
+>
+> **Next is v0.8, the last breaking release.** A scan of every contract v1.0 would freeze found
+> a handful that cannot reach their targets in their current shape — most visibly `Principal`,
+> which does not record *which* credential proved a request, so two personal access tokens for
+> one account are indistinguishable and a read-only token can perform a write the account is
+> permitted. Those signatures change in v0.8 and then v1.0 freezes them; see
+> `blueprints/0020-api-freeze-blockers.md`. **The API is not frozen until v1.0.**
 
 ## What it is not
 
