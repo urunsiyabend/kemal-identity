@@ -32,6 +32,57 @@ def it_behaves_like_an_api_token_repository(&build : Array(KemalIdentity::Accoun
       found.or_fail.token.name.should eq("token t1")
     end
 
+    # The fail-open hazard of adding scopes to an existing contract, asserted rather than
+    # documented: an adapter written before v0.8 keeps compiling — the field is defaulted — and
+    # silently drops the column, so an attenuated token comes back unrestricted. Only a contract
+    # example catches that, which is why these three states are here and not in a paragraph.
+    describe "scopes" do
+      scoped = ->(id : String, raw : String, scopes : Array(String)?) do
+        KemalIdentity::ApiTokens::Token.new(
+          id: id,
+          account_id: "a1",
+          name: "token #{id}",
+          token_digest: digest.call(raw),
+          created_at: now,
+          scopes: scopes,
+        )
+      end
+
+      it "round trips an attenuated token" do
+        repo = build.call(one_account)
+        repo.create(scoped.call("t1", "raw-1", ["invoices.read", "invoices.refund"]))
+
+        repo.find_by_digest(digest.call("raw-1")).or_fail.token.scopes
+          .should eq(["invoices.read", "invoices.refund"])
+      end
+
+      # nil means "not attenuated". Every token issued before scopes existed reads back this
+      # way, and reading it as an empty set would deny all of them.
+      it "round trips a token with no attenuation as nil, not as an empty list" do
+        repo = build.call(one_account)
+        repo.create(scoped.call("t1", "raw-1", nil))
+
+        repo.find_by_digest(digest.call("raw-1")).or_fail.token.scopes.should be_nil
+      end
+
+      # The other edge, and the dangerous one: an empty list means "permits nothing". An adapter
+      # that stores it as NULL turns a deliberately powerless token into an unrestricted one.
+      it "keeps an empty scope list distinct from no scopes at all" do
+        repo = build.call(one_account)
+        repo.create(scoped.call("t1", "raw-1", [] of String))
+
+        repo.find_by_digest(digest.call("raw-1")).or_fail.token.scopes
+          .or_fail("an empty scope list must not read back as nil").should be_empty
+      end
+
+      it "carries scopes through the management listing as well as the lookup" do
+        repo = build.call(one_account)
+        repo.create(scoped.call("t1", "raw-1", ["invoices.read"]))
+
+        repo.list_for_account("a1").first.scopes.should eq(["invoices.read"])
+      end
+    end
+
     it "preserves an expiry when there is one, and none when there is not" do
       repo = build.call(one_account)
       repo.create(token.call("t1", "a1", "raw-1", 30.days))

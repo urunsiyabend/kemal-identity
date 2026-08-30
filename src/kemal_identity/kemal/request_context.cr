@@ -127,7 +127,7 @@ module KemalIdentity::Kemal
     ) : Principal
       principal = require!
 
-      case decision = @app.authorizer!.decide(principal, permission, context_for(principal, tenant, resource, attributes))
+      case decision = @app.authorizer!.decide(principal, permission, context_for(tenant, resource, attributes))
       in Authz::Permitted
         principal
       in Authz::Forbidden
@@ -173,7 +173,7 @@ module KemalIdentity::Kemal
 
       return Authz::Forbidden.not_permitted(permission, tenant) if principal.nil?
 
-      @app.authorizer!.decide(principal, permission, context_for(principal, tenant, resource, attributes))
+      @app.authorizer!.decide(principal, permission, context_for(tenant, resource, attributes))
     end
 
     # Whether the current request may perform `permission`. For a template deciding whether to
@@ -187,20 +187,12 @@ module KemalIdentity::Kemal
       authorize(permission, tenant, resource, attributes).permitted?
     end
 
-    # The credential travels on the context as well as on the principal, so an authorizer
-    # written against `Authz::Context` reads one object rather than two.
     private def context_for(
-      principal : Principal,
       tenant : String?,
       resource : Authz::Authorizable?,
       attributes : Hash(String, String)?,
     ) : Authz::Context
-      Authz::Context.new(
-        tenant_id: tenant,
-        resource: resource,
-        attributes: attributes,
-        credential: principal.credential,
-      )
+      Authz::Context.new(tenant_id: tenant, resource: resource, attributes: attributes)
     end
 
     # Mints a session for `principal` and sets the cookie.

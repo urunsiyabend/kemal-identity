@@ -200,6 +200,23 @@ OPS-02 its credential correlation.
 `ApiTokens::Service#issue`, and decision 6's attenuation in `RBAC`. This closes TOK-01 and
 AUT-03.
 
+**Two things implementation surfaced that this document did not anticipate.**
+
+`Permission#minimum_assurance` defaults to `Password`, and `AssuranceLevel::ApiToken` sits below
+it, so a permission left at the default is unreachable by *any* token however wide its scopes.
+That is coherent once seen — the assurance answers "may a machine do this at all" and the scope
+answers "may this particular token", and both have to say yes — but it makes scopes look broken
+until it is written down, so it is written down in the README and asserted in
+`spec/security/authorization_spec.cr`.
+
+And adding a defaulted field to `ApiTokens::Token` is non-breaking in exactly the direction that
+is dangerous: an adapter written before v0.8 keeps compiling, silently drops the column, and
+reads back `nil` — which means *unrestricted*. No type can catch that. The shared contract suite
+can, so `spec/contract/api_token_repository_contract.cr` grew three examples asserting the
+round trip of all three scope states, verified by deliberately reverting the PostgreSQL adapter
+and watching them fail. It is also one more argument for DEV-02: a contract suite only protects
+the adapters that can run it.
+
 Only the first is strictly forced by the freeze — once `CredentialRef#scopes` exists, filling
 it later is additive. They ship together anyway, because a scope field that nothing populates
 is a contract nobody has exercised, and freezing an unexercised contract is how a field ends up

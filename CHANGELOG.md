@@ -39,6 +39,38 @@ second half of `blueprints/0021-credential-reference.md` and land in this same r
 No new query anywhere. Every value comes from a row that was already read to authenticate the
 request.
 
+### Per-token scopes, intersected with account permissions
+
+`ApiTokens::Service#issue` takes `scopes:`, `auth_api_tokens` gains a nullable `scopes` column,
+and `RBAC` refuses a permission the presenting credential does not carry:
+
+```crystal
+KemalIdentity.app.api!.issue(account, "reporting", scopes: ["reports.read"])
+```
+
+Additive — no frozen contract moved, and `ApiTokens` is not on the freeze list. `Token#scopes`
+and `Service#issue(scopes:)` are defaulted, so existing calls are unchanged, and a token issued
+without scopes reads back `nil`, which means *unrestricted*.
+
+The account's grant is checked first and the scope only ever narrows: naming a permission its
+owner was never given grants nothing. There is no wildcard — `["*"]` is a scope named `*` and
+matches nothing, for the same reason `Permission` refuses `*`. An out-of-scope denial does not
+ask for step-up, because re-authenticating does not widen a token that was issued narrow.
+
+This reverses the v0.4 position that "scopes are deliberately absent: a token authenticates, it
+does not authorize". That was right while there was no authorizer for a scope to intersect
+with; v0.6 shipped one.
+
+⚠ **A permission left at the default assurance is unreachable by any token.**
+`Permission#minimum_assurance` defaults to `Password` and `AssuranceLevel::ApiToken` is below
+it, so declare the permissions automation may perform at `ApiToken` assurance. The assurance
+answers "may a machine do this at all"; the scope answers "may this token".
+
+⚠ **If you implement `ApiTokens::Repository`, persist the new column.** The field is defaulted,
+so an adapter written before v0.8 keeps compiling and silently drops it — and a dropped scope
+reads back as `nil`, which means unrestricted. The shared contract suite has three examples that
+fail on exactly this.
+
 ### ⚠ Breaking: `Authorizer#decide` takes a context, and a denial is built by name
 
 `Authorizer#decide`'s abstract form is now
@@ -46,8 +78,10 @@ request.
 concrete overload, so every existing **call site** is unchanged; an existing **implementation**
 overrides the new signature and reads `context.tenant_id`.
 
-`Authz::Context` carries the tenant, the object being acted on, environment attributes and the
-credential. A context object rather than more parameters because this method freezes at v1.0:
+`Authz::Context` carries the tenant, the object being acted on and environment attributes. It
+does **not** carry the credential: `Principal#credential` is the single source, and a copy on
+the context made the tenant-only overload skip scope attenuation while it existed. A context
+object rather than more parameters because this method freezes at v1.0:
 the last time it needed something new — a resource — there was nowhere to put it, so a route
 with per-object rules had to bypass `env.auth` and re-implement the audit line, the step-up
 mapping and the uniform 403 for itself.

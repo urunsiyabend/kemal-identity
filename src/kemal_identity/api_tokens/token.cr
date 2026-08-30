@@ -40,6 +40,18 @@ module KemalIdentity::ApiTokens
 
     getter revoked_at : Time?
 
+    # What this token may do, or `nil` for no restriction.
+    #
+    # **`nil` and `[] of String` are opposites and the difference is load-bearing.** `nil` means
+    # the token is not attenuated and carries whatever its owner holds; `[]` means it is
+    # attenuated to nothing and permits nothing. Reading `nil` as an empty set would break every
+    # token issued before scopes existed; reading `[]` as unset would hand a deliberately
+    # powerless token the run of the application. See `CredentialRef#scopes`.
+    #
+    # These are permission names, matched exactly against what the authorizer is asked about.
+    # There is no wildcard: unrestricted is `nil`.
+    getter scopes : Array(String)?
+
     def initialize(
       @id : String,
       @account_id : String,
@@ -49,6 +61,7 @@ module KemalIdentity::ApiTokens
       @expires_at : Time? = nil,
       @last_used_at : Time? = nil,
       @revoked_at : Time? = nil,
+      @scopes : Array(String)? = nil,
     )
       raise ArgumentError.new("id must not be empty") if @id.empty?
       raise ArgumentError.new("account_id must not be empty") if @account_id.empty?
@@ -58,6 +71,38 @@ module KemalIdentity::ApiTokens
       if expires_at && expires_at <= @created_at
         raise ArgumentError.new("expires_at must be after created_at")
       end
+
+      Token.validate_scopes!(@scopes)
+    end
+
+    # Scopes are stored space-delimited, which is also how RFC 6749 encodes them, so a scope
+    # containing whitespace could not survive a round trip and is refused where it is cheapest
+    # to notice.
+    #
+    # Nothing else about their shape is checked. Permission names in the shipped `RBAC` are
+    # lowercase dotted segments, but an application running its own `Authorizer` names its
+    # permissions however it likes, and this must not quietly constrain that.
+    def self.validate_scopes!(scopes : Array(String)?) : Nil
+      return if scopes.nil?
+
+      scopes.each do |scope|
+        raise ArgumentError.new("a scope must not be empty") if scope.empty?
+
+        if scope.each_char.any?(&.whitespace?)
+          raise ArgumentError.new("a scope must not contain whitespace, got #{scope.inspect}")
+        end
+      end
+    end
+
+    # The stored form: `nil` for unrestricted, `""` for attenuated-to-nothing, otherwise
+    # space-delimited. Both shipped adapters use this so they cannot drift apart.
+    def self.encode_scopes(scopes : Array(String)?) : String?
+      scopes.try(&.join(' '))
+    end
+
+    # :ditto:
+    def self.decode_scopes(stored : String?) : Array(String)?
+      stored.try(&.split(' ', remove_empty: true))
     end
 
     def revoked? : Bool

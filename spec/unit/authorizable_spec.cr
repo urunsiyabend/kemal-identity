@@ -89,7 +89,13 @@ describe KemalIdentity::Authz::Context do
     context.tenant_id.should be_nil
     context.resource.should be_nil
     context.attributes.should be_nil
-    context.credential.should be_nil
+  end
+
+  # The credential is deliberately absent: `Principal#credential` is the single source, and a
+  # copy here is what made the tenant-only `decide` overload skip scope attenuation while it
+  # existed. See the note in `Authz::Context`.
+  it "does not carry the credential" do
+    KemalIdentity::Authz::Context.new.responds_to?(:credential).should be_false
   end
 
   it "answers nil for an environment attribute that was not supplied" do

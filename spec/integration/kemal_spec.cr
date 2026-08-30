@@ -56,10 +56,20 @@ AUTHORIZER = KemalIdentity::Authz::RBAC.new(
       KemalIdentity::Authz::Permission.new(
         "invoices.refund", minimum_assurance: KemalIdentity::AssuranceLevel::MFA
       ),
+      # Declared at `ApiToken` assurance: a permission automation is allowed to reach at all.
+      # The default is `Password`, which no token reaches however wide its scopes.
+      KemalIdentity::Authz::Permission.new(
+        "reports.read", minimum_assurance: KemalIdentity::AssuranceLevel::ApiToken
+      ),
+      KemalIdentity::Authz::Permission.new(
+        "reports.export", minimum_assurance: KemalIdentity::AssuranceLevel::ApiToken
+      ),
     ]),
     [
       KemalIdentity::Authz::Role.new("reader", ["invoices.read"]),
-      KemalIdentity::Authz::Role.new("finance", ["invoices.read", "invoices.refund"]),
+      KemalIdentity::Authz::Role.new(
+        "finance", ["invoices.read", "invoices.refund", "reports.read", "reports.export"]
+      ),
     ]
   ),
   store: AUTHZ_STORE,
@@ -332,6 +342,17 @@ get "/invoices/export/:device" do |env|
     resource: KemalIdentity::Authz::Resource.new("invoice", "invoice-1", {"owner_id" => "a1"}),
     attributes: {"device" => env.params.url["device"]},
   )
+  "exported"
+end
+
+# Two permissions a token may hold. The scope decides which of them *this* token reaches.
+get "/reports" do |env|
+  env.auth.authorize!("reports.read")
+  "report"
+end
+
+get "/reports/export" do |env|
+  env.auth.authorize!("reports.export")
   "exported"
 end
 
@@ -993,6 +1014,10 @@ private def issue_api_token(name : String = "ci") : KemalIdentity::ApiTokens::Is
   KemalIdentity.app.api!.issue(ACCOUNTS.find_by_id("a1").or_fail, name)
 end
 
+private def issue_scoped_token(scopes : Array(String)?) : KemalIdentity::ApiTokens::Issued
+  KemalIdentity.app.api!.issue(ACCOUNTS.find_by_id("a1").or_fail, "scoped", scopes: scopes)
+end
+
 private def bearer(token : String) : HTTP::Headers
   HTTP::Headers{"Authorization" => "Bearer #{token}"}
 end
@@ -1320,6 +1345,71 @@ describe "authorization over HTTP" do
 
     response.status_code.should eq(200)
     response.body.should eq("invoices ok")
+  end
+
+  # TOK-01 and AUT-03, over real HTTP. Two tokens for one account, same role behind both.
+  describe "a token narrower than the account that owns it" do
+    it "serves the permission its scope names" do
+      AUTHORIZER.grant("a1", "finance")
+      token = issue_scoped_token(["reports.read"]).token.reveal
+
+      get "/reports", headers: bearer(token)
+
+      response.status_code.should eq(200)
+      response.body.should eq("report")
+    end
+
+    # The one that used to succeed. Same account, same grant, same role — only the scope
+    # differs, and it is what refuses.
+    it "refuses a permission its scope does not name, though the account holds it" do
+      AUTHORIZER.grant("a1", "finance")
+      token = issue_scoped_token(["reports.read"]).token.reveal
+
+      get "/reports/export", headers: bearer(token)
+
+      response.status_code.should eq(403)
+    end
+
+    it "serves both when the scope names both" do
+      AUTHORIZER.grant("a1", "finance")
+      token = issue_scoped_token(["reports.read", "reports.export"]).token.reveal
+
+      get "/reports/export", headers: bearer(token)
+
+      response.status_code.should eq(200)
+    end
+
+    # A scope is not a grant. Without the role, naming the permission changes nothing.
+    it "does not let a scope stand in for the grant" do
+      token = issue_scoped_token(["reports.read"]).token.reveal
+
+      get "/reports", headers: bearer(token)
+
+      response.status_code.should eq(403)
+    end
+
+    # Every token issued before v0.8 reads back with nil scopes, and nil is "unattenuated".
+    it "leaves a token issued without scopes carrying whatever its owner holds" do
+      AUTHORIZER.grant("a1", "finance")
+      token = issue_scoped_token(nil).token.reveal
+
+      get "/reports/export", headers: bearer(token)
+
+      response.status_code.should eq(200)
+    end
+
+    # An out-of-scope denial is not a step-up: no amount of re-authenticating widens a token
+    # that was issued narrow. The body is the plain 403, not the freshness one.
+    it "does not ask for stronger authentication when the scope is what refused" do
+      AUTHORIZER.grant("a1", "finance")
+      token = issue_scoped_token([] of String).token.reveal
+
+      get "/reports", headers: bearer(token)
+
+      response.status_code.should eq(403)
+      response.body.should contain("not permitted")
+      response.body.should_not contain("fresh authentication required")
+    end
   end
 
   # `blueprints/0022`. Before it, a route needing a per-object rule had to reach past

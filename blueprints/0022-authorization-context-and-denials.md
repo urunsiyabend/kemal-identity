@@ -199,8 +199,13 @@ injected, as `RBAC` already does — `src/CLAUDE.md` bans `Time.utc` outside `Sy
 `spec/unit/source_hygiene_spec.cr` enforces it. A timestamp on the context would be a second
 source of "now" that no injected clock controls.
 
-`credential` is on the context as well as on `Principal`. It is the same reference; carrying it
-here means an authorizer written against `AuthzContext` reads one object rather than two.
+**Amended during implementation: the credential is not on the context.** It was, for exactly
+that convenience, and it was wrong. The tenant-only `decide` overload built a context without
+one, so every call through that form skipped scope attenuation and an attenuated token came back
+unrestricted — a fail-open, produced by a field with two homes and no rule keeping them equal.
+The same objection this document raises against two authorities for step-up, missed once and
+caught by a failing example. `Principal#credential` is the single source, and the principal is
+the first argument to `decide`, so it is never further away than the copy would have been.
 
 ### 5. A denial names its own reason, for the audit trail and not for the client
 

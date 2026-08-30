@@ -350,6 +350,47 @@ end
   API request becomes a write.
 - `revoke_all(account_id)` is what a "revoke all my tokens" button calls.
 
+#### Scopes: a token narrower than its owner
+
+An administrator holds `reports.export`. Their reporting token should not.
+
+```crystal
+KemalIdentity.app.api!.issue(account, "reporting", scopes: ["reports.read"])
+```
+
+The route is unchanged — `env.auth.authorize!("reports.export")` — and now answers 403 for that
+token while still answering 200 for the same person's browser session.
+
+- **Effective permission is the intersection, never the union.** The account's grant is checked
+  first, so a scope can only ever *narrow*: naming a permission its owner was never given
+  grants nothing.
+- **`scopes: nil` means unrestricted**, which is what every token issued before v0.8 reads back
+  as, and what a browser session carries. `[] of String` means *permits nothing* — a different
+  answer, and never conflated with `nil`.
+- **There is no wildcard.** `["*"]` is a scope named `*` and matches nothing; unrestricted is
+  `nil`. Same reason `Permission` refuses `*`: a wildcard grants permissions that do not exist
+  yet.
+- **An out-of-scope denial is not a step-up.** Re-authenticating does not widen a token that was
+  issued narrow; issuing a new one does. The response is a plain 403, not a freshness prompt.
+
+⚠ **A permission left at the default assurance is unreachable by any token, however wide its
+scopes.** `Permission#minimum_assurance` defaults to `Password`, and `AssuranceLevel::ApiToken`
+sits below it. Declare the permissions automation is allowed to perform:
+
+```crystal
+KemalIdentity::Authz::Permission.new(
+  "reports.read", minimum_assurance: KemalIdentity::AssuranceLevel::ApiToken
+)
+```
+
+Two questions, both of which must say yes: the assurance answers *may a machine do this at
+all*, the scope answers *may this particular token*.
+
+⚠ **If you implement `ApiTokens::Repository` yourself, persist the new column.** `Token#scopes`
+is a defaulted field, so an adapter written before v0.8 keeps compiling and silently drops it —
+and a dropped scope reads back as `nil`, which means *unrestricted*. Run the shared contract
+suite; it has three examples that fail on exactly this.
+
 ### Which credential proved the request
 
 `env.auth.require!` answers *who*. `env.auth.credential` answers *what proved it*:

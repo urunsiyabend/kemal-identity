@@ -9,6 +9,18 @@ module KemalIdentity::Authz
   # assumed (`blueprints/0022-authorization-context-and-denials.md`). This is the pressure valve
   # that keeps `Authorizable` at two methods and `decide` at one shape.
   #
+  # ### The credential is not here
+  #
+  # It was, in the first draft, so that an authorizer would read one object instead of two. That
+  # was wrong, and testing caught it: the tenant-only `decide` overload built a context without
+  # one, so every call through that form silently skipped scope attenuation and an attenuated
+  # token came back unrestricted. A fail-open, from a field that had two homes and no rule
+  # keeping them equal.
+  #
+  # `Principal#credential` is the single source. An authorizer that needs it reads it there —
+  # the principal is the first argument to `decide`, so it is never further away than this
+  # would have been.
+  #
   # ### There is no `at : Time` here
   #
   # An authorizer that reasons about time has a `Clock` injected, as `RBAC` does. A timestamp on
@@ -29,19 +41,10 @@ module KemalIdentity::Authz
     # keys, so a new one needs no type change anywhere.
     getter attributes : Hash(String, String)?
 
-    # The credential that proved the request.
-    #
-    # The same reference `Principal#credential` carries. It is repeated here so that an
-    # authorizer written against this context reads one object rather than two, and so that
-    # attenuation — a token permitting less than its owner holds — is expressible without
-    # reaching back through the principal.
-    getter credential : CredentialRef?
-
     def initialize(
       @tenant_id : String? = nil,
       @resource : Authorizable? = nil,
       @attributes : Hash(String, String)? = nil,
-      @credential : CredentialRef? = nil,
     )
     end
 

@@ -64,6 +64,21 @@ module KemalIdentity::Authz
         return Forbidden.insufficient_assurance(permission, tenant_id)
       end
 
+      # Last, and the order is the security property.
+      #
+      # The account's grant has already been established, so a scope can only ever *remove*.
+      # A token cannot introduce a permission its owner does not hold, because that check
+      # already ran and denied; and an account cannot escape its token's attenuation, because
+      # this one runs after. Effective permission is the intersection, never the union.
+      #
+      # An unattenuated credential — a browser session, a token issued without scopes — has
+      # `scopes` nil and `#permits?` answers true, so this is a no-op for it rather than a
+      # denial. `CredentialRef#scopes` says why nil and [] must not be conflated.
+      credential = principal.credential
+      if credential && !credential.permits?(permission)
+        return Forbidden.out_of_scope(permission, tenant_id)
+      end
+
       Permitted.new(permission, via, tenant_id)
     end
 

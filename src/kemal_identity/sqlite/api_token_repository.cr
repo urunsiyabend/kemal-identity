@@ -7,10 +7,10 @@ module KemalIdentity::SQLite
   class ApiTokenRepository < ApiTokens::Repository
     TOKEN_COLUMNS = <<-SQL
       t.id, t.account_id, t.name, t.token_digest, t.created_at, t.expires_at,
-      t.last_used_at, t.revoked_at
+      t.last_used_at, t.revoked_at, t.scopes
       SQL
 
-    COLUMNS = "id, account_id, name, token_digest, created_at, expires_at, last_used_at, revoked_at"
+    COLUMNS = "id, account_id, name, token_digest, created_at, expires_at, last_used_at, revoked_at, scopes"
 
     def initialize(@db : DB::Database, @accounts_table : String = "auth_accounts")
     end
@@ -21,11 +21,12 @@ module KemalIdentity::SQLite
       # `rescue` around the insert never sees it. See blueprints/0014-sqlite-adapter.md.
       result = @db.exec(<<-SQL,
         INSERT INTO auth_api_tokens (#{COLUMNS})
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT DO NOTHING
         SQL
         token.id, token.account_id, token.name, token.token_digest,
-        token.created_at, token.expires_at, token.last_used_at, token.revoked_at)
+        token.created_at, token.expires_at, token.last_used_at, token.revoked_at,
+        ApiTokens::Token.encode_scopes(token.scopes))
 
       raise InfrastructureError.new("api token already exists") if result.rows_affected.zero?
     end
@@ -99,6 +100,10 @@ module KemalIdentity::SQLite
         expires_at: row.read(Time?),
         last_used_at: row.read(Time?),
         revoked_at: row.read(Time?),
+        # NULL is unrestricted and '' is attenuated-to-nothing. Coercing one into the other
+        # here would be a lockout in one direction and a privilege escalation in the other, so
+        # both adapters go through the same codec.
+        scopes: ApiTokens::Token.decode_scopes(row.read(String?)),
       )
     end
   end

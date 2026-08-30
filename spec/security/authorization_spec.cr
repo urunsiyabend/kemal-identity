@@ -8,12 +8,23 @@ require "../spec_helper"
 
 private ROLES = [
   KemalIdentity::Authz::Role.new("reader", ["invoices.read"]),
-  KemalIdentity::Authz::Role.new("finance", ["invoices.read", "invoices.refund"]),
+  KemalIdentity::Authz::Role.new("finance", ["invoices.read", "invoices.refund", "reports.read", "reports.export"]),
   KemalIdentity::Authz::Role.new("operator", ["invoices.read", "tenants.administer"]),
 ]
 
 private PERMISSIONS = [
   KemalIdentity::Authz::Permission.new("invoices.read"),
+  # Declared at `ApiToken` assurance, which is what a permission automation is allowed to reach
+  # at all looks like. `Permission#minimum_assurance` defaults to `Password`, and
+  # `AssuranceLevel::ApiToken` sits below it, so a token cannot reach a default permission
+  # however wide its scopes are — the assurance answers "may a machine do this", the scope
+  # answers "may *this* token". Both have to say yes.
+  KemalIdentity::Authz::Permission.new(
+    "reports.read", minimum_assurance: KemalIdentity::AssuranceLevel::ApiToken
+  ),
+  KemalIdentity::Authz::Permission.new(
+    "reports.export", minimum_assurance: KemalIdentity::AssuranceLevel::ApiToken
+  ),
   KemalIdentity::Authz::Permission.new(
     "invoices.refund", minimum_assurance: KemalIdentity::AssuranceLevel::MFA
   ),
@@ -52,6 +63,122 @@ private def denied_because(decision : KemalIdentity::Authz::Decision) : KemalIde
 end
 
 describe "authorization" do
+  # AUT-03 and TOK-01 in `blueprints/maturity-validation-scenarios.md`, both very high. The
+  # property is that effective permission is the *intersection* of what the account holds and
+  # what the credential carries — never the union, in either direction.
+  describe "a token that is narrower than its owner" do
+    scoped = ->(scopes : Array(String)?) do
+      KemalIdentity::SpecHelper.principal(
+        subject: "a1",
+        session_id: nil,
+        assurance: KemalIdentity::AssuranceLevel::ApiToken,
+        credential: KemalIdentity::CredentialRef.new(
+          kind: KemalIdentity::CredentialKind::ApiToken, id: "tok-1", scopes: scopes
+        ),
+      )
+    end
+
+    # The whole point. Same account, same role, two tokens.
+    it "refuses a permission the account holds but the token does not carry" do
+      h = harness
+      h.rbac.grant("a1", "finance")
+
+      denied_because(h.rbac.decide(scoped.call(["reports.read"]), "reports.export"))
+        .should eq(KemalIdentity::Authz::DenialReason::OutOfScope)
+    end
+
+    it "allows a permission both the account and the token carry" do
+      h = harness
+      h.rbac.grant("a1", "finance")
+
+      h.rbac.decide(scoped.call(["reports.read"]), "reports.read").permitted?.should be_true
+    end
+
+    # The other direction, and the one that would be an escalation: a scope is not a grant. A
+    # token naming a permission its owner was never given still gets nothing.
+    it "does not let a scope grant what the account was never given" do
+      h = harness
+
+      denied_because(h.rbac.decide(scoped.call(["reports.read"]), "reports.read"))
+        .should eq(KemalIdentity::Authz::DenialReason::NotPermitted)
+    end
+
+    # nil is "unattenuated", not "an empty set". Every token issued before scopes existed reads
+    # back this way, and so does every browser session.
+    it "leaves an unattenuated credential alone" do
+      h = harness
+      h.rbac.grant("a1", "finance")
+
+      h.rbac.decide(scoped.call(nil), "reports.export").permitted?.should be_true
+    end
+
+    # And the fail-closed edge: an empty list permits nothing, even for an account that holds
+    # everything.
+    it "refuses everything for a credential attenuated to nothing" do
+      h = harness
+      h.rbac.grant("a1", "finance")
+
+      denied_because(h.rbac.decide(scoped.call([] of String), "reports.read"))
+        .should eq(KemalIdentity::Authz::DenialReason::OutOfScope)
+    end
+
+    # The interaction worth stating out loud, because it makes scopes look broken until you see
+    # it: `Permission#minimum_assurance` defaults to `Password`, and `AssuranceLevel::ApiToken`
+    # is below that. A permission left at the default is unreachable by *any* token, however
+    # wide its scopes. Assurance answers "may a machine do this at all"; the scope answers "may
+    # this particular token". A scope cannot overrule the first question.
+    it "cannot reach a permission left at the default assurance, however wide the scope" do
+      h = harness
+      h.rbac.grant("a1", "finance")
+
+      denied_because(h.rbac.decide(scoped.call(["invoices.refund"]), "invoices.refund"))
+        .should eq(KemalIdentity::Authz::DenialReason::InsufficientAssurance)
+    end
+
+    # A session carries no scopes and must not be denied for it.
+    it "leaves a browser session alone" do
+      h = harness
+      h.rbac.grant("a1", "finance")
+
+      session = KemalIdentity::SpecHelper.principal(
+        subject: "a1", assurance: KemalIdentity::AssuranceLevel::MFA
+      )
+
+      h.rbac.decide(session, "invoices.refund").permitted?.should be_true
+    end
+
+    # `blueprints/0018` refuses `*` in a permission because a wildcard grants permissions that
+    # do not exist yet. A wildcard scope is that hazard aimed at tokens: `*` is a scope named
+    # `*` and matches nothing. Unrestricted is nil.
+    it "treats a star scope as a literal, never as a wildcard" do
+      h = harness
+      h.rbac.grant("a1", "finance")
+
+      denied_because(h.rbac.decide(scoped.call(["*"]), "reports.read"))
+        .should eq(KemalIdentity::Authz::DenialReason::OutOfScope)
+    end
+
+    # Attenuation runs last, so a denial for weak assurance is still reported as such rather
+    # than being masked by the scope check — the trail keeps saying which wall was hit first.
+    it "reports insufficient assurance ahead of a scope that would also have denied" do
+      h = harness
+      h.rbac.grant("a1", "finance")
+
+      weak = KemalIdentity::SpecHelper.principal(
+        subject: "a1",
+        session_id: nil,
+        assurance: KemalIdentity::AssuranceLevel::ApiToken,
+        credential: KemalIdentity::CredentialRef.new(
+          kind: KemalIdentity::CredentialKind::ApiToken, id: "tok-1", scopes: ["reports.read"]
+        ),
+      )
+
+      # invoices.refund needs MFA, and the token neither reaches it nor carries the scope.
+      denied_because(h.rbac.decide(weak, "invoices.refund"))
+        .should eq(KemalIdentity::Authz::DenialReason::InsufficientAssurance)
+    end
+  end
+
   describe "horizontal privilege escalation" do
     # The identifier in the URL swapped for somebody else's. Refused on the principal's own
     # binding, before membership is read, so it cannot be defeated by a wrong row.

@@ -56,7 +56,16 @@ module KemalIdentity::ApiTokens
     #
     # `expires_at` of `nil` means it never expires — a real choice for a deploy key and a poor
     # one for a laptop, so it is the caller's to make.
-    def issue(account : Accounts::Account, name : String, expires_at : Time? = nil) : Issued
+    #
+    # `scopes` of `nil` means the token is not attenuated: it carries whatever its owner holds,
+    # which is what every token issued before v0.8 does. An empty array means it permits
+    # nothing — valid, and not the same answer. There is no wildcard; unrestricted is `nil`.
+    def issue(
+      account : Accounts::Account,
+      name : String,
+      expires_at : Time? = nil,
+      scopes : Array(String)? = nil,
+    ) : Issued
       raise ArgumentError.new("cannot issue a token for a disabled account") if account.disabled?
       raise ArgumentError.new("name must not be empty") if name.blank?
 
@@ -75,12 +84,19 @@ module KemalIdentity::ApiTokens
         token_digest: OpaqueToken.digest(secret),
         created_at: now,
         expires_at: expires_at,
+        scopes: scopes,
       )
 
       @tokens.create(record)
 
       Log.info &.emit(
-        "api_token.issued", subject: account.id, token: record.id, expires_at: expires_at.to_s
+        "api_token.issued",
+        subject: account.id,
+        token: record.id,
+        expires_at: expires_at.to_s,
+        # How wide the credential is, for whoever reviews what was handed out. The scope names
+        # themselves are permission names, not secrets.
+        scopes: scopes.try(&.join(' ')),
       )
 
       Issued.new(token: secret, record: record)
@@ -137,6 +153,10 @@ module KemalIdentity::ApiTokens
             id: record.id,
             name: record.name,
             expires_at: record.expires_at,
+            # Carried, not consulted. Whether a scope permits the action is the authorizer's
+            # question, and it asks it after the account's own grant — a scope can only ever
+            # narrow (`blueprints/0021-credential-reference.md`).
+            scopes: record.scopes,
           ),
         )
       )

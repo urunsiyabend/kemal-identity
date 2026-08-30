@@ -9,10 +9,10 @@ module KemalIdentity::Postgres
 
     TOKEN_COLUMNS = <<-SQL
       t.id, t.account_id, t.name, t.token_digest, t.created_at, t.expires_at,
-      t.last_used_at, t.revoked_at
+      t.last_used_at, t.revoked_at, t.scopes
       SQL
 
-    COLUMNS = "id, account_id, name, token_digest, created_at, expires_at, last_used_at, revoked_at"
+    COLUMNS = "id, account_id, name, token_digest, created_at, expires_at, last_used_at, revoked_at, scopes"
 
     def initialize(@db : DB::Database, @accounts_table : String = "auth_accounts")
     end
@@ -20,10 +20,11 @@ module KemalIdentity::Postgres
     def create(token : ApiTokens::Token) : Nil
       @db.exec(<<-SQL,
         INSERT INTO auth_api_tokens (#{COLUMNS})
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         SQL
         token.id, token.account_id, token.name, token.token_digest,
-        token.created_at, token.expires_at, token.last_used_at, token.revoked_at)
+        token.created_at, token.expires_at, token.last_used_at, token.revoked_at,
+        ApiTokens::Token.encode_scopes(token.scopes))
     rescue error : PQ::PQError
       raise error unless error.field_message(:code) == UNIQUE_VIOLATION
 
@@ -99,6 +100,10 @@ module KemalIdentity::Postgres
         expires_at: row.read(Time?),
         last_used_at: row.read(Time?),
         revoked_at: row.read(Time?),
+        # NULL is unrestricted and '' is attenuated-to-nothing. Coercing one into the other
+        # here would be a lockout in one direction and a privilege escalation in the other, so
+        # both adapters go through the same codec.
+        scopes: ApiTokens::Token.decode_scopes(row.read(String?)),
       )
     end
   end
