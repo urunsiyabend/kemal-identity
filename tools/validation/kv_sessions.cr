@@ -102,7 +102,7 @@ class KVSessionRepository < KemalIdentity::Sessions::Repository
 
   def revoke(id : String, at : Time) : Bool
     with_record(id) do |record|
-      next nil unless record.revoked_at.nil?   # already revoked reports false, never re-stamps
+      next nil unless record.revoked_at.nil? # already revoked reports false, never re-stamps
       rebuild(record, revoked_at: at)
     end
   end

@@ -5,7 +5,7 @@ describe KemalIdentity::Testing::MemoryAccountRepository do
     KemalIdentity::Testing::MemoryAccountRepository.new(accounts)
   end
 
-  now = KemalIdentity::SpecHelper::FIXED_NOW
+  now = KemalIdentity::Testing::FIXED_NOW
 
   build = ->(id : String, login : String, tenant : String?) do
     KemalIdentity::Accounts::Account.new(

@@ -13,12 +13,12 @@ private PASSWORD = "correct horse battery staple"
 private def build(disabled_at : Time? = nil, digest : String? = nil)
   hasher = KemalIdentity::Testing::FastTestHasher.new
   repo = KemalIdentity::Testing::MemoryAccountRepository.new([
-    KemalIdentity::SpecHelper.account(
+    KemalIdentity::Testing.account(
       disabled_at: disabled_at,
       password_digest: digest || hasher.hash_secret(KemalIdentity::Secret.new(PASSWORD)),
     ),
   ])
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
   {repo, hasher, KemalIdentity::Passwords::Authenticator.new(accounts: repo, hasher: hasher, clock: clock)}
 end
 
@@ -70,7 +70,7 @@ describe "the audit trail" do
 
   # The distinction the response is forbidden to make is exactly the one the log must.
   it "records a disabled account distinctly from a wrong password" do
-    _, _, auth = build(disabled_at: KemalIdentity::SpecHelper::FIXED_NOW)
+    _, _, auth = build(disabled_at: KemalIdentity::Testing::FIXED_NOW)
 
     Log.capture("kemal_identity") do |logs|
       auth.authenticate(login: "ada@example.com", password: PASSWORD)
@@ -183,7 +183,7 @@ describe "secret material in error messages" do
   end
 
   it "keeps the digest out of a session lookup failure" do
-    h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+    h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
     issued = h.service.start(h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
 
     error = expect_raises(KemalIdentity::InfrastructureError) do

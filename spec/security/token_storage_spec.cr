@@ -5,7 +5,7 @@ require "../spec_helper"
 # rows hold no value a browser could present.
 describe "session token storage" do
   it "stores only the digest, never the raw token" do
-    h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+    h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
     issued = h.service.start(h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
 
     stored = h.sessions.find_by_digest(issued.record.token_digest).or_fail.session
@@ -18,7 +18,7 @@ describe "session token storage" do
   end
 
   it "cannot be resolved from the digest, only from the token" do
-    h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+    h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
     issued = h.service.start(h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
 
     # Someone holding the row cannot turn it back into a cookie.
@@ -27,7 +27,7 @@ describe "session token storage" do
   end
 
   it "redacts the token in inspect and interpolation" do
-    h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+    h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
     issued = h.service.start(h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
     raw = issued.token.reveal
 
@@ -37,7 +37,7 @@ describe "session token storage" do
   end
 
   it "redacts the digest when a session record is inspected" do
-    h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+    h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
     issued = h.service.start(h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
 
     issued.record.inspect.should contain("[REDACTED]")
@@ -45,7 +45,7 @@ describe "session token storage" do
   end
 
   it "gives every session a distinct token and digest" do
-    h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+    h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
     account = h.accounts.find_by_id("a1").or_fail
 
     issued = Array.new(10) { h.service.start(account, KemalIdentity::AssuranceLevel::Password) }

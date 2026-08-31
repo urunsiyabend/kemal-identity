@@ -5,9 +5,9 @@ require "../spec_helper"
 #
 # Named for the properties that matter rather than for the methods.
 private def token_harness(touch_interval : Time::Span = KemalIdentity::ApiTokens::Service::DEFAULT_TOUCH_INTERVAL)
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
   random = KemalIdentity::Testing::DeterministicRandom.new
-  accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+  accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
   repo = KemalIdentity::Testing::MemoryApiTokenRepository.new(accounts)
 
   service = KemalIdentity::ApiTokens::Service.new(
@@ -26,7 +26,7 @@ describe "a personal access token" do
     service, _, accounts, _ = token_harness
     issued = issue(service, accounts)
 
-    principal = KemalIdentity::SpecHelper.should_authenticate(service.authenticate(issued.token.reveal))
+    principal = KemalIdentity::Testing.should_authenticate(service.authenticate(issued.token.reveal))
     principal.subject.should eq("a1")
   end
 
@@ -36,7 +36,7 @@ describe "a personal access token" do
     service, _, accounts, clock = token_harness
     issued = issue(service, accounts)
 
-    principal = KemalIdentity::SpecHelper.should_authenticate(service.authenticate(issued.token.reveal))
+    principal = KemalIdentity::Testing.should_authenticate(service.authenticate(issued.token.reveal))
 
     principal.assurance.should eq(KemalIdentity::AssuranceLevel::ApiToken)
     principal.at_least?(KemalIdentity::AssuranceLevel::Password).should be_false
@@ -48,7 +48,7 @@ describe "a personal access token" do
     service, _, accounts, _ = token_harness
     issued = issue(service, accounts)
 
-    KemalIdentity::SpecHelper.should_authenticate(service.authenticate(issued.token.reveal))
+    KemalIdentity::Testing.should_authenticate(service.authenticate(issued.token.reveal))
       .session_id.should be_nil
   end
 
@@ -59,7 +59,7 @@ describe "a personal access token" do
     service, _, accounts, _ = token_harness
     issued = issue(service, accounts, "deploy-token")
 
-    principal = KemalIdentity::SpecHelper.should_authenticate(service.authenticate(issued.token.reveal))
+    principal = KemalIdentity::Testing.should_authenticate(service.authenticate(issued.token.reveal))
     credential = principal.credential.should_not be_nil
 
     credential.kind.should eq(KemalIdentity::CredentialKind::ApiToken)
@@ -75,8 +75,8 @@ describe "a personal access token" do
     reporting = issue(service, accounts, "reporting-token")
     deploying = issue(service, accounts, "deploy-token")
 
-    one = KemalIdentity::SpecHelper.should_authenticate(service.authenticate(reporting.token.reveal))
-    two = KemalIdentity::SpecHelper.should_authenticate(service.authenticate(deploying.token.reveal))
+    one = KemalIdentity::Testing.should_authenticate(service.authenticate(reporting.token.reveal))
+    two = KemalIdentity::Testing.should_authenticate(service.authenticate(deploying.token.reveal))
 
     one.subject.should eq(two.subject)
     one.credential.try(&.id).should_not eq(two.credential.try(&.id))
@@ -88,7 +88,7 @@ describe "a personal access token" do
     service, _, accounts, _ = token_harness
     issued = issue(service, accounts)
 
-    principal = KemalIdentity::SpecHelper.should_authenticate(service.authenticate(issued.token.reveal))
+    principal = KemalIdentity::Testing.should_authenticate(service.authenticate(issued.token.reveal))
     credential = principal.credential.should_not be_nil
 
     credential.scopes.should be_nil
@@ -142,7 +142,7 @@ describe "revoking an API token" do
 
     service.revoke(issued.record.id).should be_true
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       service.authenticate(issued.token.reveal), KemalIdentity::FailureReason::Revoked
     )
   end
@@ -172,11 +172,11 @@ end
 describe "an API token that should not authenticate" do
   it "is rejected once it has expired" do
     service, _, accounts, clock = token_harness
-    issued = issue(service, accounts, expires_at: KemalIdentity::SpecHelper::FIXED_NOW + 30.days)
+    issued = issue(service, accounts, expires_at: KemalIdentity::Testing::FIXED_NOW + 30.days)
 
     clock.advance(31.days)
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       service.authenticate(issued.token.reveal), KemalIdentity::FailureReason::Expired
     )
   end
@@ -198,7 +198,7 @@ describe "an API token that should not authenticate" do
 
     accounts.disable("a1", clock.now)
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       service.authenticate(issued.token.reveal), KemalIdentity::FailureReason::DisabledAccount
     )
   end
@@ -239,7 +239,7 @@ describe "an API token that should not authenticate" do
     issued = issue(service, accounts)
     without_prefix = issued.token.reveal.sub("ki_", "")
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       service.authenticate(without_prefix), KemalIdentity::FailureReason::MalformedCredential
     )
   end
@@ -270,7 +270,7 @@ describe "recording when a token was last used" do
     service.authenticate(issued.token.reveal)
 
     repo.find_by_digest(issued.record.token_digest).or_fail
-      .token.last_used_at.should eq(KemalIdentity::SpecHelper::FIXED_NOW + 6.minutes)
+      .token.last_used_at.should eq(KemalIdentity::Testing::FIXED_NOW + 6.minutes)
   end
 end
 
@@ -286,7 +286,7 @@ describe "issuing" do
     service, _, accounts, _ = token_harness
 
     expect_raises(ArgumentError) do
-      issue(service, accounts, expires_at: KemalIdentity::SpecHelper::FIXED_NOW - 1.hour)
+      issue(service, accounts, expires_at: KemalIdentity::Testing::FIXED_NOW - 1.hour)
     end
   end
 

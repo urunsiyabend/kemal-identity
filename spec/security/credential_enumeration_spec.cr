@@ -7,7 +7,7 @@ require "../spec_helper"
 
 private def build(hasher : KemalIdentity::Passwords::Hasher, accounts : Array(KemalIdentity::Accounts::Account))
   repo = KemalIdentity::Testing::MemoryAccountRepository.new(accounts)
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
   {repo, KemalIdentity::Passwords::Authenticator.new(accounts: repo, hasher: hasher, clock: clock)}
 end
 
@@ -18,7 +18,7 @@ private def account_with_password(
   login : String = "ada@example.com",
   disabled_at : Time? = nil,
 )
-  KemalIdentity::SpecHelper.account(
+  KemalIdentity::Testing.account(
     id: id,
     login: login,
     disabled_at: disabled_at,
@@ -34,22 +34,22 @@ describe "account enumeration through the response" do
     unknown = auth.authenticate(login: "nobody@example.com", password: "correct horse battery")
     wrong = auth.authenticate(login: "ada@example.com", password: "wrong password entirely")
 
-    KemalIdentity::SpecHelper.should_fail_with(unknown, KemalIdentity::FailureReason::InvalidCredential)
-    KemalIdentity::SpecHelper.should_fail_with(wrong, KemalIdentity::FailureReason::InvalidCredential)
+    KemalIdentity::Testing.should_fail_with(unknown, KemalIdentity::FailureReason::InvalidCredential)
+    KemalIdentity::Testing.should_fail_with(wrong, KemalIdentity::FailureReason::InvalidCredential)
 
     # Byte-for-byte the same value, so nothing downstream can branch on it even by accident.
     unknown.should eq(wrong)
   end
 
   it "gives an empty password the same outcome as a wrong one" do
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       auth.authenticate(login: "ada@example.com", password: ""),
       KemalIdentity::FailureReason::InvalidCredential
     )
   end
 
   it "does not confirm a login through a wrong-tenant lookup" do
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       auth.authenticate(login: "ada@example.com", password: "correct horse battery", tenant_id: "t1"),
       KemalIdentity::FailureReason::InvalidCredential
     )
@@ -60,10 +60,10 @@ describe "account enumeration through the response" do
   # and — the part that matters — cannot be logged into by supplying nothing.
   it "cannot be logged into when the account has no password credential" do
     hasher = KemalIdentity::Testing::FastTestHasher.new
-    _, auth = build(hasher, [KemalIdentity::SpecHelper.account(password_digest: nil)])
+    _, auth = build(hasher, [KemalIdentity::Testing.account(password_digest: nil)])
 
     ["", "any password", "null"].each do |attempt|
-      KemalIdentity::SpecHelper.should_fail_with(
+      KemalIdentity::Testing.should_fail_with(
         auth.authenticate(login: "ada@example.com", password: attempt),
         KemalIdentity::FailureReason::InvalidCredential
       )
@@ -75,10 +75,10 @@ describe "account enumeration through the response" do
   it "distinguishes a disabled account only in the reason, for the log" do
     hasher = KemalIdentity::Testing::FastTestHasher.new
     _, auth = build(hasher, [
-      account_with_password(hasher, "correct horse battery", disabled_at: KemalIdentity::SpecHelper::FIXED_NOW),
+      account_with_password(hasher, "correct horse battery", disabled_at: KemalIdentity::Testing::FIXED_NOW),
     ])
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       auth.authenticate(login: "ada@example.com", password: "correct horse battery"),
       KemalIdentity::FailureReason::DisabledAccount
     )
@@ -108,7 +108,7 @@ describe "account enumeration through timing" do
   _, auth = build(hasher, [
     account_with_password(hasher, "correct horse battery"),
     account_with_password(hasher, "correct horse battery", id: "a2", login: "dis@example.com",
-      disabled_at: KemalIdentity::SpecHelper::FIXED_NOW),
+      disabled_at: KemalIdentity::Testing::FIXED_NOW),
   ])
 
   samples = 11
@@ -151,7 +151,7 @@ describe "over-length passwords at the login boundary" do
   _, auth = build(hasher, [account_with_password(hasher, "a" * 71)])
 
   it "refuses a longer password rather than truncating into a match" do
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       auth.authenticate(login: "ada@example.com", password: "a" * 72),
       KemalIdentity::FailureReason::InvalidCredential
     )
@@ -160,7 +160,7 @@ describe "over-length passwords at the login boundary" do
   # A hostile length must be a value, not a 500. docs/02's documented login snippet calls
   # verify with no length check in front of it.
   it "answers a megabyte-long password without raising" do
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       auth.authenticate(login: "ada@example.com", password: "a" * 1_000_000),
       KemalIdentity::FailureReason::InvalidCredential
     )

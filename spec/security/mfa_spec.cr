@@ -14,9 +14,9 @@ private def mfa_harness(
   recovery_code_count : Int32 = 10,
   sessions : KemalIdentity::Sessions::Service? = nil,
 )
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
   random = KemalIdentity::Testing::DeterministicRandom.new
-  accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+  accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
   repo = KemalIdentity::Testing::MemoryMfaRepository.new
 
   service = KemalIdentity::MFA::Service.new(
@@ -36,9 +36,9 @@ end
 
 # A harness whose MFA service can also end sessions, for the recovery-code case.
 private def mfa_harness_with_sessions
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
   random = KemalIdentity::Testing::DeterministicRandom.new
-  accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+  accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
   session_repo = KemalIdentity::Testing::MemorySessionRepository.new(accounts)
 
   sessions = KemalIdentity::Sessions::Service.new(
@@ -135,7 +135,7 @@ describe "enrolling a second factor" do
   it "refuses to confirm the same factor twice, without spending any quota" do
     limiter = KemalIdentity::FixedWindowRateLimiter.new(
       limit: 2, window: 15.minutes, clock: KemalIdentity::Testing::TestClock.new(
-      KemalIdentity::SpecHelper::FIXED_NOW
+      KemalIdentity::Testing::FIXED_NOW
     )
     )
     service, _, accounts, clock = mfa_harness(rate_limiter: limiter)
@@ -325,7 +325,7 @@ describe "guessing codes in a loop" do
   it "is throttled, and says when to come back" do
     limiter = KemalIdentity::FixedWindowRateLimiter.new(
       limit: 3, window: 15.minutes, clock: KemalIdentity::Testing::TestClock.new(
-      KemalIdentity::SpecHelper::FIXED_NOW
+      KemalIdentity::Testing::FIXED_NOW
     )
     )
     service, _, accounts, clock = mfa_harness(rate_limiter: limiter)
@@ -346,7 +346,7 @@ describe "guessing codes in a loop" do
   it "throttles a correct code too, once the quota is spent" do
     limiter = KemalIdentity::FixedWindowRateLimiter.new(
       limit: 2, window: 15.minutes, clock: KemalIdentity::Testing::TestClock.new(
-      KemalIdentity::SpecHelper::FIXED_NOW
+      KemalIdentity::Testing::FIXED_NOW
     )
     )
     service, _, accounts, clock = mfa_harness(rate_limiter: limiter)
@@ -364,7 +364,7 @@ describe "guessing codes in a loop" do
   it "clears the quota once a code verifies" do
     limiter = KemalIdentity::FixedWindowRateLimiter.new(
       limit: 3, window: 15.minutes, clock: KemalIdentity::Testing::TestClock.new(
-      KemalIdentity::SpecHelper::FIXED_NOW
+      KemalIdentity::Testing::FIXED_NOW
     )
     )
     service, _, accounts, clock = mfa_harness(rate_limiter: limiter)
@@ -390,7 +390,7 @@ describe "guessing codes in a loop" do
   it "throttles confirmation attempts too" do
     limiter = KemalIdentity::FixedWindowRateLimiter.new(
       limit: 2, window: 15.minutes, clock: KemalIdentity::Testing::TestClock.new(
-      KemalIdentity::SpecHelper::FIXED_NOW
+      KemalIdentity::Testing::FIXED_NOW
     )
     )
     service, _, accounts, clock = mfa_harness(rate_limiter: limiter)
@@ -480,7 +480,7 @@ describe "recovery codes" do
   it "are throttled like any other code submission" do
     limiter = KemalIdentity::FixedWindowRateLimiter.new(
       limit: 2, window: 15.minutes, clock: KemalIdentity::Testing::TestClock.new(
-      KemalIdentity::SpecHelper::FIXED_NOW
+      KemalIdentity::Testing::FIXED_NOW
     )
     )
     service, _, accounts, clock = mfa_harness(rate_limiter: limiter)
@@ -679,7 +679,7 @@ describe "configuring the service" do
         secret_box: KemalIdentity::MFA::AesSecretBox.new(
           BOX_KEY, KemalIdentity::Testing::DeterministicRandom.new
         ),
-        clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW),
+        clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW),
         random: KemalIdentity::Testing::DeterministicRandom.new,
         issuer: "Acme:Corp",
       )

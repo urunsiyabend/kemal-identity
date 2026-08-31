@@ -7,7 +7,7 @@ require "kemal_identity/sqlite"
 require "sqlite3"
 require "http/server"
 
-DBF = "/tmp/claude-1000/-home-urunsiyabend-personal-development-kemal-identity/9df7d08f-9594-41d3-ab1d-58a460f591ea/scratchpad/consumer/dev03.db"
+DBF      = "/tmp/claude-1000/-home-urunsiyabend-personal-development-kemal-identity/9df7d08f-9594-41d3-ab1d-58a460f591ea/scratchpad/consumer/dev03.db"
 File.delete?(DBF)
 DATABASE = DB.open("sqlite3://#{DBF}")
 Dir.glob("/home/urunsiyabend/personal/development/kemal_identity/migrations/sqlite/*.sql").sort.each do |path|
@@ -48,7 +48,7 @@ private def resolve(request : HTTP::Request) : KemalIdentity::Outcome
   SESSIONS.resolve(COOKIE.extract(request.cookies))
 end
 
-TOKEN = API.issue(ACCOUNTS.find_by_id("u-1").not_nil!, "raw-cli")
+TOKEN          = API.issue(ACCOUNTS.find_by_id("u-1").not_nil!, "raw-cli")
 ISSUED_SESSION = SESSIONS.start(
   ACCOUNTS.find_by_id("u-1").not_nil!, KemalIdentity::AssuranceLevel::Password
 )

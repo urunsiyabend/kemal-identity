@@ -52,7 +52,7 @@ private def oidc_provider(client_secret : KemalIdentity::Secret? = nil)
 end
 
 private def oidc_harness(client_secret : KemalIdentity::Secret? = nil)
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
   endpoint = FakeTokenEndpoint.new
 
   client = KemalIdentity::OIDC::Client.new(

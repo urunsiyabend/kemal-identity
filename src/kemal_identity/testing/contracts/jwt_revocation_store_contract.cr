@@ -1,6 +1,6 @@
 # Shared spec for `KemalIdentity::JWT::RevocationStore`. Every implementation runs it.
 def it_behaves_like_a_revocation_store(&build : -> KemalIdentity::JWT::RevocationStore)
-  now = KemalIdentity::SpecHelper::FIXED_NOW
+  now = KemalIdentity::Testing::FIXED_NOW
 
   describe "#revoked? and #revoke" do
     it "refuses a jti from the moment it is revoked" do

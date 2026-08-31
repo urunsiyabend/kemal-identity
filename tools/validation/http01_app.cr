@@ -4,7 +4,7 @@ require "kemal_identity/kemal"
 require "kemal_identity/sqlite"
 require "sqlite3"
 
-DB_FILE = "/tmp/claude-1000/-home-urunsiyabend-personal-development-kemal-identity/9df7d08f-9594-41d3-ab1d-58a460f591ea/scratchpad/consumer/http01.db"
+DB_FILE  = "/tmp/claude-1000/-home-urunsiyabend-personal-development-kemal-identity/9df7d08f-9594-41d3-ab1d-58a460f591ea/scratchpad/consumer/http01.db"
 File.delete?(DB_FILE)
 DATABASE = DB.open("sqlite3://#{DB_FILE}")
 Dir.glob("/home/urunsiyabend/personal/development/kemal_identity/migrations/sqlite/*.sql").sort.each do |path|

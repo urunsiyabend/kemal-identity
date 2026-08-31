@@ -17,8 +17,8 @@ describe "OPS-04: what a key-value store costs" do
   # Pass condition: "account disabled state remains promptly available". SQL joins it; a
   # key-value store has to read it, and reading it is what keeps it fresh.
   it "sees an account disabled after the session was minted" do
-    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     sessions = KemalIdentity::Sessions::Service.new(
       sessions: KVSessionRepository.new(KVStore.new, accounts),
       clock: clock, random: KemalIdentity::Testing::DeterministicRandom.new,
@@ -38,8 +38,8 @@ describe "OPS-04: what a key-value store costs" do
   # Pass condition: "TTL cleanup is an optimisation rather than the only expiry check."
   # Nothing was swept, and the expired session still fails on read.
   it "expires a session on read, with no sweeper having run" do
-    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     store = KVStore.new
     repo = KVSessionRepository.new(store, accounts)
     sessions = KemalIdentity::Sessions::Service.new(
@@ -59,8 +59,8 @@ describe "OPS-04: what a key-value store costs" do
 
   # Pass condition: "Required atomic operations are expressible in the contract."
   it "revokes concurrently without double-counting" do
-    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     repo = KVSessionRepository.new(KVStore.new, accounts)
 
     record = KemalIdentity::Sessions::Record.new(

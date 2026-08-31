@@ -242,11 +242,11 @@ is. `blueprints/0020-api-freeze-blockers.md` records the scan that separated the
 | A denial names its own reason, and says whether re-authenticating would help | **done** — the second half of 0022. `DenialReason::Custom` plus a free-form `code`, and `step_up?` split off as the single authority for the control flow. Named constructors fix the flag, so `RBAC` cannot forget it |
 | `RateLimiter` can report that its store is unavailable | **done** — `blueprints/0023-rate-limiter-store-failure.md`. `Verdict.unavailable`, fail-closed at all five call sites, and `FailOpenRateLimiter` for a path that would rather stay up — per endpoint, since each service takes its own limiter |
 | `IdentityProvider` is written, or removed from the freeze list | **done** — removed, and the protocol-neutral half of federation moved out of the `OIDC` namespace instead. `blueprints/0024-federation-namespace.md`: a second protocol added after 1.0 is purely additive, so no interface had to be invented for one that does not exist yet |
+| The test doubles and shared contracts become published API | **done** — `require "kemal_identity/testing"`. Not a freeze blocker; brought forward because validation measured it as the root of three other findings, and because it makes the rest of the catalogue pass answerable by adapter authors rather than only from inside this repository |
 | ~~`AuthenticatorChain` stops foreclosing a request-aware authenticator~~ | **withdrawn** — it was never a blocker. A defaulted overload carrying request attributes can be added to `RequestAuthenticator` after 1.0 without breaking any implementor, measured rather than assumed, so DPoP and trusted-proxy identity stay reachable. `blueprints/0020` decision 7 records what the reasoning got wrong |
 
 Deliberately **not** in v0.8, because none of it requires a frozen signature to move: the
-missing `WWW-Authenticate` header, a declared API-only mode, republishing the contract specs
-for consumers, an injectable security-event sink, credential-kind declarations on `PathGuard`,
+missing `WWW-Authenticate` header, a declared API-only mode, an injectable security-event sink, credential-kind declarations on `PathGuard`,
 token lifetime policy, an assurance level above `MFA` for phishing-resistant proof, and — once
 it was measured rather than assumed — request attributes for DPoP and trusted-proxy identity.
 All of those are real gaps against the catalogue's targets and all of them can land after 1.0

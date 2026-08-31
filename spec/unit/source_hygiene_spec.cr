@@ -13,8 +13,27 @@ require "../spec_helper"
 # false negative on a line that both interpolates and violates a rule.
 private SRC_ROOT = File.expand_path("../../src", __DIR__)
 
+# `src/kemal_identity/testing` is excluded, and the exclusion is the narrow kind: it is where the
+# banned constructs are the *product*. `Testing::TestClock` exists to be the only thing that reads
+# a wall clock, `Testing::DeterministicRandom` exists to be seeded rather than secure, and the
+# shared contracts use `or_fail` because that is what a spec helper does. Scanning them would
+# demand they lie about what they are.
+#
+# It is scoped to that one directory rather than to a pattern, so a violation anywhere else in
+# `src/` — including a production file that happens to have "testing" in its name — is still
+# caught. The tree is not required by `kemal_identity` itself, so none of it reaches an
+# application that does not ask for it.
+private TESTING_ROOT = File.join(SRC_ROOT, "kemal_identity", "testing")
+
 private def source_files : Array(String)
-  Dir.glob(File.join(SRC_ROOT, "**", "*.cr")).sort
+  Dir.glob(File.join(SRC_ROOT, "**", "*.cr"))
+    .reject(&.starts_with?(TESTING_ROOT + File::SEPARATOR))
+    .sort!
+end
+
+# The excluded tree, so a typo in the path above cannot silently disable the scan.
+private def testing_files : Array(String)
+  Dir.glob(File.join(TESTING_ROOT, "**", "*.cr")).sort
 end
 
 private def relative(path : String) : String
@@ -45,6 +64,29 @@ private def offences(pattern : Regex, allow : Array(String) = [] of String) : Ar
 end
 
 describe "src/ source hygiene" do
+  it "excludes the testing tree, and finds it" do
+    # If this path ever stops matching, the exclusion becomes a no-op and the three rules below
+    # start failing on the doubles -- loudly, which is the right direction. This asserts the
+    # other one: that the exclusion is not silently swallowing all of `src/`.
+    testing_files.should_not be_empty
+    source_files.none?(&.includes?("/testing/")).should be_true
+  end
+
+  # The testing tree carries `require "spec"` and the in-memory doubles. If `kemal_identity.cr`
+  # ever reaches it, every production consumer starts compiling both -- and the exclusion above
+  # would hide the wall-clock and RNG reads that came with them. Measured from the consumer side
+  # in blueprints/0025 (OPS-07): a production binary has zero `Spec::` symbols, and this keeps it
+  # that way without needing a linked binary to check.
+  it "never requires the testing tree from the production entry points" do
+    %w[kemal_identity.cr kemal_identity/kemal.cr kemal_identity/postgres.cr
+      kemal_identity/sqlite.cr].each do |entry|
+      path = File.join(SRC_ROOT, entry)
+      next unless File.exists?(path)
+
+      File.read(path).should_not match(/require\s+"[^"]*testing/)
+    end
+  end
+
   it "finds source files to scan" do
     # Guards against the whole spec silently passing because the glob broke.
     source_files.should_not be_empty

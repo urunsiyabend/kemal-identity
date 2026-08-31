@@ -27,7 +27,7 @@ end
 
 describe "account enumeration through the reset endpoint" do
   it "returns nothing at all, for a known and an unknown address alike" do
-    h = KemalIdentity::SpecHelper.account_harness
+    h = KemalIdentity::Testing.account_harness
 
     # `Nil` is the entire API. There is no outcome to branch on, so a caller cannot leak what
     # it was never told.
@@ -36,7 +36,7 @@ describe "account enumeration through the reset endpoint" do
   end
 
   it "sends a link only to an address that exists" do
-    h = KemalIdentity::SpecHelper.account_harness
+    h = KemalIdentity::Testing.account_harness
 
     h.service.request_password_reset("nobody@example.com")
     h.notifier.delivered.should be_empty
@@ -46,7 +46,7 @@ describe "account enumeration through the reset endpoint" do
   end
 
   it "stores a token only for an address that exists" do
-    h = KemalIdentity::SpecHelper.account_harness
+    h = KemalIdentity::Testing.account_harness
 
     h.service.request_password_reset("nobody@example.com")
     h.tokens.size.should eq(0)
@@ -61,7 +61,7 @@ describe "account enumeration through the reset endpoint" do
   # Distributions with a tolerance, never single samples for equality — the same discipline as
   # the login-path timing spec.
   it "spends comparable time on a known and an unknown address" do
-    h = KemalIdentity::SpecHelper.account_harness
+    h = KemalIdentity::Testing.account_harness
     samples = 15
     tolerance = 3.0
 
@@ -85,7 +85,7 @@ describe "account enumeration through the reset endpoint" do
     # branch, so the unknown-address path is not short by that much work. Counting the draws is
     # how this is observable at all.
     random = KemalIdentity::Testing::DeterministicRandom.new
-    h = KemalIdentity::SpecHelper.account_harness
+    h = KemalIdentity::Testing.account_harness
     service = KemalIdentity::Accounts::Service.new(
       accounts: h.accounts, tokens: h.tokens, notifier: h.notifier,
       sessions: h.session_service, hasher: h.hasher,
@@ -98,8 +98,8 @@ describe "account enumeration through the reset endpoint" do
   end
 
   it "says nothing different for a disabled account" do
-    h = KemalIdentity::SpecHelper.account_harness(accounts: [
-      KemalIdentity::SpecHelper.account(disabled_at: KemalIdentity::SpecHelper::FIXED_NOW),
+    h = KemalIdentity::Testing.account_harness(accounts: [
+      KemalIdentity::Testing.account(disabled_at: KemalIdentity::Testing::FIXED_NOW),
     ])
 
     h.service.request_password_reset("ada@example.com").should be_nil
@@ -109,7 +109,7 @@ describe "account enumeration through the reset endpoint" do
   end
 
   it "normalizes the address, so spelling is not a way to miss an account" do
-    h = KemalIdentity::SpecHelper.account_harness
+    h = KemalIdentity::Testing.account_harness
 
     ["ADA@EXAMPLE.COM", "  ada@example.com  ", "Ada@Example.Com"].each do |variant|
       h.notifier.clear
@@ -119,7 +119,7 @@ describe "account enumeration through the reset endpoint" do
   end
 
   it "does not send to the same address in a different tenant" do
-    h = KemalIdentity::SpecHelper.account_harness
+    h = KemalIdentity::Testing.account_harness
     h.service.request_password_reset("ada@example.com", tenant_id: "t1")
     h.notifier.delivered.should be_empty
   end
@@ -130,9 +130,9 @@ describe "using the reset endpoint to flood an inbox" do
   it "stops sending once the limit is reached" do
     limiter = KemalIdentity::FixedWindowRateLimiter.new(
       limit: 3, window: 1.hour,
-      clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+      clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     )
-    h = KemalIdentity::SpecHelper.account_harness(rate_limiter: limiter)
+    h = KemalIdentity::Testing.account_harness(rate_limiter: limiter)
 
     10.times { h.service.request_password_reset("ada@example.com") }
 
@@ -142,9 +142,9 @@ describe "using the reset endpoint to flood an inbox" do
   it "throttles by address, so rotating source addresses does not help" do
     limiter = KemalIdentity::FixedWindowRateLimiter.new(
       limit: 2, window: 1.hour,
-      clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+      clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     )
-    h = KemalIdentity::SpecHelper.account_harness(rate_limiter: limiter)
+    h = KemalIdentity::Testing.account_harness(rate_limiter: limiter)
 
     5.times { |i| h.service.request_password_reset("ada@example.com", ip: "10.0.0.#{i}") }
 
@@ -154,9 +154,9 @@ describe "using the reset endpoint to flood an inbox" do
   it "is silent about being throttled" do
     limiter = KemalIdentity::FixedWindowRateLimiter.new(
       limit: 1, window: 1.hour,
-      clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+      clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     )
-    h = KemalIdentity::SpecHelper.account_harness(rate_limiter: limiter)
+    h = KemalIdentity::Testing.account_harness(rate_limiter: limiter)
 
     # A denial that looked different from an acceptance would be an oracle in its own right,
     # and a louder one: it would confirm the address by refusing to talk about it.
@@ -167,11 +167,11 @@ describe "using the reset endpoint to flood an inbox" do
   it "does not throttle a different address" do
     limiter = KemalIdentity::FixedWindowRateLimiter.new(
       limit: 1, window: 1.hour,
-      clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+      clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     )
-    h = KemalIdentity::SpecHelper.account_harness(accounts: [
-      KemalIdentity::SpecHelper.account(id: "a1", login: "ada@example.com"),
-      KemalIdentity::SpecHelper.account(id: "a2", login: "bob@example.com"),
+    h = KemalIdentity::Testing.account_harness(accounts: [
+      KemalIdentity::Testing.account(id: "a1", login: "ada@example.com"),
+      KemalIdentity::Testing.account(id: "a2", login: "bob@example.com"),
     ], rate_limiter: limiter)
 
     2.times { h.service.request_password_reset("ada@example.com") }
@@ -183,7 +183,7 @@ end
 
 describe "what the reset audit trail records" do
   it "never contains the reset token" do
-    h = KemalIdentity::SpecHelper.account_harness
+    h = KemalIdentity::Testing.account_harness
 
     entries = captured { h.service.request_password_reset("ada@example.com") }
     token = h.notifier.last_reset_token.or_fail
@@ -192,14 +192,14 @@ describe "what the reset audit trail records" do
   end
 
   it "never contains the address that was asked about" do
-    h = KemalIdentity::SpecHelper.account_harness
+    h = KemalIdentity::Testing.account_harness
 
     entries = captured { h.service.request_password_reset("ada@example.com") }
     rendered(entries).should_not contain("ada@example.com")
   end
 
   it "records whether the address was known, which the response does not" do
-    h = KemalIdentity::SpecHelper.account_harness
+    h = KemalIdentity::Testing.account_harness
 
     entries = captured { h.service.request_password_reset("nobody@example.com") }
     rendered(entries).should contain("password_reset.requested")

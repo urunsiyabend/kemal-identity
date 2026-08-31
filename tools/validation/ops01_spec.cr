@@ -19,7 +19,7 @@ end
 require "../lib/kemal_identity/spec/contract/rate_limiter_contract"
 
 it_behaves_like_a_rate_limiter(limit: 5, window: 1.minute) do
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
   File.delete?(OPS01_DB)
   db = DB.open("sqlite3://#{OPS01_DB}")
   SharedStoreRateLimiter.prepare!(db)
@@ -47,7 +47,7 @@ describe "OPS-01: a limiter over a shared store" do
 
   # Pass condition: "retry_after is stable".
   it "reports a retry_after that does not grow with further attempts" do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     db = fresh_store
     limiter = SharedStoreRateLimiter.new(db, limit: 1, window: 10.minutes, clock: clock)
 
@@ -103,7 +103,7 @@ describe "OPS-01: a limiter over a shared store" do
     #
     # Dropping the table is a real store-level failure that reaches the query, which is where
     # the contract says the adapter has to convert it rather than raise.
-    broken = ->do
+    broken = -> do
       db = fresh_store
       limiter = SharedStoreRateLimiter.new(db, limit: 5, window: 1.hour)
       limiter.consume("warmup").allowed?.should be_true
@@ -138,7 +138,7 @@ describe "OPS-01: a limiter over a shared store" do
     end
 
     it "carries on for an endpoint the application chose to keep available" do
-      accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+      accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
       auth = KemalIdentity::Passwords::Authenticator.new(
         accounts: accounts,
         hasher: KemalIdentity::Testing::FastTestHasher.new,

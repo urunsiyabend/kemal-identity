@@ -40,7 +40,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | TOK-01 | Very high | M4 | **M3** | Ships and works; no packaged contract test or worked example for a consumer |
 | AUT-03 | Very high | M4 | **M3** | As TOK-01 — same machinery, same gap |
 | HTTP-01 | Very high | M4 | **M3** | `WWW-Authenticate` is not sent, and cannot be sent *correctly* by a consumer |
-| DEV-02 | Very high | M4 | **M2** | Contract suite and doubles reachable only through the shard's private `spec/` tree |
+| DEV-02 | Very high | M4 | **M2 → M4** | Fixed after measurement: `require "kemal_identity/testing"` |
 | OPS-02 | Very high | M4 | **M2** | No typed sink; two undocumented failure modes when the sink throws |
 | OPS-01 | Very high | M4 | **M3** | The shared contract's concurrency example passes for an adapter that over-allows across processes |
 | IDP-03 | Very high | M4 | **M3** | The shared `AccountRepository` contract cannot be run by a single-tenant adapter |
@@ -225,6 +225,59 @@ source.
 **Smallest change that would reach M3:** move the contracts and the doubles under
 `src/kemal_identity/testing/`, reachable as `require "kemal_identity/testing"`. M4 additionally
 wants the block contracts documented.
+
+### Fixed — re-measured at M4
+
+That change landed, and this scenario was re-run against it. From the consumer project, with no
+path reaching into the shard's `spec/` tree:
+
+```crystal
+require "kemal_identity/testing"            # doubles, fixtures, assertions
+require "kemal_identity/testing/contracts"  # the shared contract specs
+
+it_behaves_like_an_api_token_repository { |accounts| MyAdapter.new(fresh_db(accounts)) }
+```
+
+**35 examples, 0 failures.** The doubles are reachable by published name — `Testing::MemoryAccountRepository`,
+`Testing::TestClock`, `Testing::FIXED_NOW`, `Testing.account`, `Testing.principal`,
+`Testing.should_authenticate` — and the contracts run against a consumer's own adapter.
+
+`KemalIdentity::SpecHelper` was renamed to `KemalIdentity::Testing` in the same pass, 446
+references across 50 files: a published API should not be called after this repository's spec
+scaffolding, and the doubles were already in `Testing`.
+
+The three attempts quoted above no longer run, because the fix deleted the paths they used. They
+are kept in `tools/validation/before-dev02-fix/` rather than deleted, with a note saying so — a
+quoted error message whose source has been removed is worth less than one a reader can go and
+look at.
+
+**And it costs a production consumer nothing**, which was the thing to check rather than assume.
+The core-only project from OPS-07 was rebuilt and its symbols counted:
+
+| Symbol | Count |
+|---|---|
+| `KemalIdentity` | 53 |
+| `Spec::` | **0** |
+| `KemalIdentity::Testing` | **0** |
+
+`src/kemal_identity.cr` does not require the testing tree, and `spec/unit/source_hygiene_spec.cr`
+now asserts that for all four production entry points — a compile-free check, so it holds without
+needing a linked binary.
+
+**One consequence worth recording, because it was the right kind of failure.** Moving the doubles
+into `src/` immediately broke three examples in `source_hygiene_spec.cr`, which enforces
+`src/CLAUDE.md`'s bans across `src/`: `Testing::TestClock` reads `Time.utc`,
+`Testing::DeterministicRandom` calls `Random.new`, and the contracts use `or_fail`. All three are
+what those files exist to be. The scan now excludes `src/kemal_identity/testing` specifically —
+one directory, not a pattern, so a violation anywhere else is still caught — and a new example
+asserts the exclusion is neither empty nor swallowing all of `src/`.
+
+**What DEV-02 still does not have**, and why M4 is claimed anyway: the block signatures are
+documented in the contracts' own comments and now in the README, but there is no compile-time
+statement of them. An adapter author still learns that `it_behaves_like_an_api_token_repository`
+wants its accounts persisted *with* `disabled_at` from a failing example, as this validation did.
+That is a documentation refinement rather than a reachability problem, which is what the level
+turned on.
 
 ---
 

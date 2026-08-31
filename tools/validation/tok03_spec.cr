@@ -37,11 +37,11 @@ private class GatewayAuthenticator < KemalIdentity::RequestAuthenticator
 end
 
 describe "TOK-03: the credential behind the request" do
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
 
   # Pass condition: "Credential kind and stable ID are available separately from the identity."
   it "reports a session credential separately from who it belongs to" do
-    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
     sessions = KemalIdentity::Sessions::Service.new(
       sessions: KemalIdentity::Testing::MemorySessionRepository.new(accounts),
       clock: clock,
@@ -54,8 +54,8 @@ describe "TOK-03: the credential behind the request" do
     credential = principal.credential.or_fail
     credential.kind.should eq(KemalIdentity::CredentialKind::Session)
     credential.id.should eq(issued.record.id)
-    principal.subject.should eq("a1")           # identity
-    credential.id.should_not eq(principal.subject)  # ...and the credential, separately
+    principal.subject.should eq("a1")              # identity
+    credential.id.should_not eq(principal.subject) # ...and the credential, separately
   end
 
   # Pass condition: "session, opaque token and JWT credentials have an explicit representation."

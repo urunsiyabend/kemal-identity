@@ -9,11 +9,11 @@ private PASSWORD = "correct horse battery"
 
 private def build(limit : Int32 = 3, window : Time::Span = 1.minute, hasher = nil)
   hasher ||= KemalIdentity::Testing::FastTestHasher.new
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
   limiter = KemalIdentity::FixedWindowRateLimiter.new(limit: limit, window: window, clock: clock)
 
   repo = KemalIdentity::Testing::MemoryAccountRepository.new([
-    KemalIdentity::SpecHelper.account(
+    KemalIdentity::Testing.account(
       password_digest: hasher.hash_secret(KemalIdentity::Secret.new(PASSWORD))
     ),
   ])
@@ -42,10 +42,10 @@ end
 
 private def build_with(limiter : KemalIdentity::RateLimiter, hasher = nil)
   hasher ||= KemalIdentity::Testing::FastTestHasher.new
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
 
   repo = KemalIdentity::Testing::MemoryAccountRepository.new([
-    KemalIdentity::SpecHelper.account(
+    KemalIdentity::Testing.account(
       password_digest: hasher.hash_secret(KemalIdentity::Secret.new(PASSWORD))
     ),
   ])
@@ -63,7 +63,7 @@ describe "a rate limiter whose store is unavailable" do
 
     outcome = auth.authenticate(login: "ada@example.com", password: PASSWORD)
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       outcome, KemalIdentity::FailureReason::RateLimiterUnavailable
     )
   end
@@ -105,7 +105,7 @@ describe "a rate limiter whose store is unavailable" do
     it "carries on when wrapped in FailOpenRateLimiter" do
       auth = build_with(KemalIdentity::FailOpenRateLimiter.new(UnavailableRateLimiter.new))
 
-      principal = KemalIdentity::SpecHelper.should_authenticate(
+      principal = KemalIdentity::Testing.should_authenticate(
         auth.authenticate(login: "ada@example.com", password: PASSWORD)
       )
 
@@ -115,14 +115,14 @@ describe "a rate limiter whose store is unavailable" do
     # Only the unavailable case is converted. A real denial still denies, or the wrapper would
     # be an off switch rather than an outage policy.
     it "still honours a genuine denial" do
-      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
       inner = KemalIdentity::FixedWindowRateLimiter.new(limit: 1, window: 1.minute, clock: clock)
       auth = build_with(KemalIdentity::FailOpenRateLimiter.new(inner))
 
       auth.authenticate(login: "ada@example.com", password: "wrong")
       outcome = auth.authenticate(login: "ada@example.com", password: PASSWORD)
 
-      KemalIdentity::SpecHelper.should_fail_with(outcome, KemalIdentity::FailureReason::RateLimited)
+      KemalIdentity::Testing.should_fail_with(outcome, KemalIdentity::FailureReason::RateLimited)
     end
   end
 end
@@ -133,7 +133,7 @@ end
 describe "the other paths a broken limiter would leave unmetered" do
   it "refuses to verify a second factor" do
     limiter = UnavailableRateLimiter.new
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     random = KemalIdentity::Testing::DeterministicRandom.new
 
     service = KemalIdentity::MFA::Service.new(
@@ -158,7 +158,7 @@ describe "the other paths a broken limiter would leave unmetered" do
   # by answering differently when the limiter is down.
   it "declines to send a password reset" do
     limiter = UnavailableRateLimiter.new
-    h = KemalIdentity::SpecHelper.account_harness(rate_limiter: limiter)
+    h = KemalIdentity::Testing.account_harness(rate_limiter: limiter)
 
     h.service.request_password_reset("ada@example.com")
 
@@ -172,13 +172,13 @@ describe "throttling the password verification path" do
     auth, _, _, _ = build(limit: 3)
 
     3.times do
-      KemalIdentity::SpecHelper.should_fail_with(
+      KemalIdentity::Testing.should_fail_with(
         auth.authenticate(login: "ada@example.com", password: "wrong"),
         KemalIdentity::FailureReason::InvalidCredential
       )
     end
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       auth.authenticate(login: "ada@example.com", password: "wrong"),
       KemalIdentity::FailureReason::RateLimited
     )
@@ -188,7 +188,7 @@ describe "throttling the password verification path" do
     auth, _, _, _ = build(limit: 1)
     auth.authenticate(login: "ada@example.com", password: "wrong")
 
-    denied = KemalIdentity::SpecHelper.should_fail_with(
+    denied = KemalIdentity::Testing.should_fail_with(
       auth.authenticate(login: "ada@example.com", password: "wrong"),
       KemalIdentity::FailureReason::RateLimited
     )
@@ -203,7 +203,7 @@ describe "throttling the password verification path" do
     auth, _, _, _ = build(limit: 2)
     2.times { auth.authenticate(login: "ada@example.com", password: "wrong") }
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       auth.authenticate(login: "ada@example.com", password: PASSWORD),
       KemalIdentity::FailureReason::RateLimited
     )
@@ -239,7 +239,7 @@ describe "a denial does no hashing work" do
   it "does not touch the account repository either" do
     _, _, _, repo = build(limit: 2)
     counting = CountingAccountRepository.new(repo)
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     limiter = KemalIdentity::FixedWindowRateLimiter.new(limit: 2, window: 1.minute, clock: clock)
 
     limited = KemalIdentity::Passwords::Authenticator.new(
@@ -278,7 +278,7 @@ describe "a success resets the count" do
 
     # Back to a full allowance, rather than one attempt away from being locked out.
     3.times do
-      KemalIdentity::SpecHelper.should_fail_with(
+      KemalIdentity::Testing.should_fail_with(
         auth.authenticate(login: "ada@example.com", password: "wrong"),
         KemalIdentity::FailureReason::InvalidCredential
       )
@@ -294,7 +294,7 @@ describe "an account-keyed denial" do
 
     3.times { |i| auth.authenticate(login: "ada@example.com", password: "wrong", ip: "10.0.0.#{i}") }
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       auth.authenticate(login: "ada@example.com", password: "wrong", ip: "203.0.113.99"),
       KemalIdentity::FailureReason::RateLimited
     )
@@ -307,7 +307,7 @@ describe "an account-keyed denial" do
     auth.authenticate(login: "  ada@example.com ", password: "wrong")
     auth.authenticate(login: "Ada@Example.Com", password: "wrong")
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       auth.authenticate(login: "ada@example.com", password: "wrong"),
       KemalIdentity::FailureReason::RateLimited
     )
@@ -317,7 +317,7 @@ describe "an account-keyed denial" do
     auth, _, _, _ = build(limit: 2)
     3.times { auth.authenticate(login: "ada@example.com", password: "wrong") }
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       auth.authenticate(login: "someone-else@example.com", password: "wrong"),
       KemalIdentity::FailureReason::InvalidCredential
     )
@@ -330,7 +330,7 @@ describe "an account-keyed denial" do
 
     3.times { |i| auth.authenticate(login: "victim-#{i}@example.com", password: "wrong", ip: "203.0.113.7") }
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       auth.authenticate(login: "victim-99@example.com", password: "wrong", ip: "203.0.113.7"),
       KemalIdentity::FailureReason::RateLimited
     )
@@ -340,7 +340,7 @@ describe "an account-keyed denial" do
     auth, _, _, _ = build(limit: 3)
     4.times { |i| auth.authenticate(login: "victim-#{i}@example.com", password: "wrong", ip: "203.0.113.7") }
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       auth.authenticate(login: "someone@example.com", password: "wrong", ip: "198.51.100.4"),
       KemalIdentity::FailureReason::InvalidCredential
     )
@@ -352,8 +352,8 @@ describe "the keys a limiter is given" do
   # retaining the address somebody typed.
   it "never contains the login in plain text" do
     recording = RecordingRateLimiter.new
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
-    repo = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
+    repo = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
 
     auth = KemalIdentity::Passwords::Authenticator.new(
       accounts: repo, hasher: KemalIdentity::Testing::FastTestHasher.new,
@@ -369,7 +369,7 @@ describe "the keys a limiter is given" do
 
   it "separates the same login in different tenants" do
     recording = RecordingRateLimiter.new
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     repo = KemalIdentity::Testing::MemoryAccountRepository.new([] of KemalIdentity::Accounts::Account)
 
     auth = KemalIdentity::Passwords::Authenticator.new(

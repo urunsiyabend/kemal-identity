@@ -29,7 +29,7 @@ private def authenticated(subject : String = "a1")
       KemalIdentity::Principal.new(
         subject: subject,
         assurance: KemalIdentity::AssuranceLevel::ApiToken,
-        authenticated_at: KemalIdentity::SpecHelper::FIXED_NOW,
+        authenticated_at: KemalIdentity::Testing::FIXED_NOW,
       )
     )
   )
@@ -78,7 +78,7 @@ describe KemalIdentity::AuthenticatorChain do
 
     outcome = chain(first, second).authenticate("anything")
 
-    KemalIdentity::SpecHelper.should_authenticate(outcome).subject.should eq("first")
+    KemalIdentity::Testing.should_authenticate(outcome).subject.should eq("first")
     second.calls.should eq(0)
   end
 
@@ -115,7 +115,7 @@ describe KemalIdentity::AuthenticatorChain do
     ].each do |reason|
       never_reached = authenticated
 
-      KemalIdentity::SpecHelper.should_fail_with(
+      KemalIdentity::Testing.should_fail_with(
         chain(failing(reason), never_reached).authenticate("x"), reason
       )
 
@@ -124,7 +124,7 @@ describe KemalIdentity::AuthenticatorChain do
   end
 
   it "reports the last refusal when nobody recognised the credential" do
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       chain(malformed, malformed).authenticate("x"),
       KemalIdentity::FailureReason::MalformedCredential
     )

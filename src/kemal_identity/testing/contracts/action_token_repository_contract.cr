@@ -3,7 +3,7 @@
 #
 # The block is handed the tokens to seed and returns a repository containing exactly those.
 def it_behaves_like_an_action_token_repository(&build : Array(KemalIdentity::Accounts::ActionToken) -> KemalIdentity::Accounts::ActionTokenRepository)
-  now = KemalIdentity::SpecHelper::FIXED_NOW
+  now = KemalIdentity::Testing::FIXED_NOW
   reset = KemalIdentity::Accounts::ActionPurpose::Reset
   confirm = KemalIdentity::Accounts::ActionPurpose::Confirm
 

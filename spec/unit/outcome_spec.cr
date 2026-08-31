@@ -7,7 +7,7 @@ describe "KemalIdentity::Outcome" do
   it "is exhaustively matchable over all three variants" do
     outcomes = [
       KemalIdentity::Anonymous.new,
-      KemalIdentity::Authenticated.new(KemalIdentity::SpecHelper.principal),
+      KemalIdentity::Authenticated.new(KemalIdentity::Testing.principal),
       KemalIdentity::Failed.new(KemalIdentity::FailureReason::InvalidCredential),
     ] of KemalIdentity::Outcome
 

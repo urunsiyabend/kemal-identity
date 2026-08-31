@@ -15,9 +15,10 @@ Excluded:
   - tools/validation/
 
 Lint/SpecFilename:
-  # spec/contract holds shared examples that unit and integration specs call into, and
-  # spec/support holds the test doubles. Neither is a runnable spec file: naming them
-  # `_spec.cr` would have `crystal spec` collect a file that defines zero examples.
+  # The shared contracts and the test doubles moved to `src/kemal_identity/testing` in v0.8, so
+  # that a consumer can reach them without touching this repository's spec tree
+  # (blueprints/0025, DEV-02). They are not runnable spec files -- naming them `_spec.cr` would
+  # have `crystal spec` collect files that define zero examples -- and they are not under
+  # `spec/` any more either, so this exclusion now names where they live.
   Excluded:
-    - spec/contract/**
-    - spec/support/**
+    - src/kemal_identity/testing/**

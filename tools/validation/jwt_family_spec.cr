@@ -24,7 +24,7 @@ private def validator_for(
     issuer: issuer,
     audience: audience,
     algorithms: ["HS256"],
-    clock: clock || KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW),
+    clock: clock || KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW),
     revocations: revocations,
   )
 end
@@ -38,7 +38,7 @@ private def token_from(
   extra : Hash(String, ::JSON::Any) = {} of String => ::JSON::Any,
 )
   claims = KemalIdentity::Testing::JWTForge.claims(
-    now: KemalIdentity::SpecHelper::FIXED_NOW,
+    now: KemalIdentity::Testing::FIXED_NOW,
     subject: subject,
     issuer: issuer,
     audience: ::JSON::Any.new(audience),
@@ -47,7 +47,6 @@ private def token_from(
   extra.each { |k, v| claims[k] = v }
   KemalIdentity::Testing::JWTForge.encode(claims, secret)
 end
-
 
 # The routing a consumer has to write themselves: read `iss` from an unverified token, pick the
 # validator, and only then validate. Every bound on that parse is the consumer's problem.
@@ -184,7 +183,7 @@ describe "JWT-02: claim mapping without weakening validation" do
     mapped = KemalIdentity::Principal.new(
       subject: claims["uid"].as_s,
       assurance: KemalIdentity::AssuranceLevel::ApiToken,
-      authenticated_at: KemalIdentity::SpecHelper::FIXED_NOW,
+      authenticated_at: KemalIdentity::Testing::FIXED_NOW,
       tenant_id: claims["tenant"].as_s,
     )
     mapped.subject.should eq("legacy-4711")
@@ -229,7 +228,7 @@ describe "JWT-03: audience-specific validation" do
   # array, and what a verifier does with one it is only *one of* is the subtle part.
   it "accepts a token whose aud array contains this audience" do
     claims = KemalIdentity::Testing::JWTForge.claims(
-      now: KemalIdentity::SpecHelper::FIXED_NOW,
+      now: KemalIdentity::Testing::FIXED_NOW,
       subject: "a1", issuer: ISSUER_A,
       audience: ::JSON::Any.new([::JSON::Any.new("billing"), ::JSON::Any.new("admin")]),
     )
@@ -243,7 +242,7 @@ describe "JWT-03: audience-specific validation" do
 
   it "refuses a token whose aud array does not contain this audience" do
     claims = KemalIdentity::Testing::JWTForge.claims(
-      now: KemalIdentity::SpecHelper::FIXED_NOW,
+      now: KemalIdentity::Testing::FIXED_NOW,
       subject: "a1", issuer: ISSUER_A,
       audience: ::JSON::Any.new([::JSON::Any.new("billing")]),
     )
@@ -262,11 +261,11 @@ end
 
 describe "JWT-04: revocation policy per issuer" do
   it "denylists a jti for one issuer without touching the other" do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     store_a = KemalIdentity::Testing::MemoryRevocationStore.new
 
     alpha = validator_for(ISSUER_A, SECRET_A, revocations: store_a, clock: clock)
-    beta = validator_for(ISSUER_B, SECRET_B, clock: clock)   # expiry only, no denylist
+    beta = validator_for(ISSUER_B, SECRET_B, clock: clock) # expiry only, no denylist
 
     token_a = token_from(ISSUER_A, SECRET_A, jti: "jti-a")
     token_b = token_from(ISSUER_B, SECRET_B, jti: "jti-b")
@@ -274,7 +273,7 @@ describe "JWT-04: revocation policy per issuer" do
     alpha.authenticate(token_a).should be_a(KemalIdentity::Authenticated)
     beta.authenticate(token_b).should be_a(KemalIdentity::Authenticated)
 
-    store_a.revoke("jti-a", KemalIdentity::SpecHelper::FIXED_NOW + 1.hour)
+    store_a.revoke("jti-a", KemalIdentity::Testing::FIXED_NOW + 1.hour)
 
     outcome = alpha.authenticate(token_a)
     outcome.as(KemalIdentity::Failed).reason.should eq(KemalIdentity::FailureReason::Revoked)

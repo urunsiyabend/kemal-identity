@@ -6,28 +6,28 @@ describe KemalIdentity::Sessions::Service do
     # response action, while a request whose cookie did not resolve needs that cookie
     # cleared. A handler cannot tell those apart from a nilable principal.
     it "is anonymous when there is no cookie at all" do
-      h = KemalIdentity::SpecHelper.harness
+      h = KemalIdentity::Testing.harness
       h.service.resolve(nil).should be_a(KemalIdentity::Anonymous)
       h.service.resolve("").should be_a(KemalIdentity::Anonymous)
     end
 
     it "fails rather than going anonymous when a cookie is present but unusable" do
-      h = KemalIdentity::SpecHelper.harness
+      h = KemalIdentity::Testing.harness
       h.service.resolve("garbage").should be_a(KemalIdentity::Failed)
     end
 
     describe "the shape check that runs before any I/O" do
       it "rejects a value of the wrong length" do
-        h = KemalIdentity::SpecHelper.harness
-        KemalIdentity::SpecHelper.should_fail_with(h.service.resolve("a" * 42), KemalIdentity::FailureReason::MalformedCredential)
+        h = KemalIdentity::Testing.harness
+        KemalIdentity::Testing.should_fail_with(h.service.resolve("a" * 42), KemalIdentity::FailureReason::MalformedCredential)
       end
 
       it "rejects a value outside the base64url alphabet" do
-        h = KemalIdentity::SpecHelper.harness
-        KemalIdentity::SpecHelper.should_fail_with(
+        h = KemalIdentity::Testing.harness
+        KemalIdentity::Testing.should_fail_with(
           h.service.resolve("a" * 42 + "!"), KemalIdentity::FailureReason::MalformedCredential
         )
-        KemalIdentity::SpecHelper.should_fail_with(
+        KemalIdentity::Testing.should_fail_with(
           h.service.resolve("a" * 42 + "="), KemalIdentity::FailureReason::MalformedCredential
         )
       end
@@ -35,19 +35,19 @@ describe KemalIdentity::Sessions::Service do
       # A client sending a two-megabyte cookie should be turned away by a length comparison,
       # not by the database.
       it "rejects an oversized value without touching the repository" do
-        h = KemalIdentity::SpecHelper.harness
+        h = KemalIdentity::Testing.harness
         counting = CountingSessionRepository.new(h.sessions)
         service = KemalIdentity::Sessions::Service.new(
           sessions: counting, clock: h.clock, random: h.random
         )
 
-        KemalIdentity::SpecHelper.should_fail_with(service.resolve("a" * 2_000_000), KemalIdentity::FailureReason::MalformedCredential)
+        KemalIdentity::Testing.should_fail_with(service.resolve("a" * 2_000_000), KemalIdentity::FailureReason::MalformedCredential)
 
         counting.lookups.should eq(0)
       end
 
       it "accepts a well-shaped value and does query for it" do
-        h = KemalIdentity::SpecHelper.harness
+        h = KemalIdentity::Testing.harness
         counting = CountingSessionRepository.new(h.sessions)
         service = KemalIdentity::Sessions::Service.new(
           sessions: counting, clock: h.clock, random: h.random
@@ -59,17 +59,17 @@ describe KemalIdentity::Sessions::Service do
     end
 
     it "fails with InvalidCredential for a well-shaped token nobody issued" do
-      h = KemalIdentity::SpecHelper.harness
-      KemalIdentity::SpecHelper.should_fail_with(h.service.resolve("a" * 43), KemalIdentity::FailureReason::InvalidCredential)
+      h = KemalIdentity::Testing.harness
+      KemalIdentity::Testing.should_fail_with(h.service.resolve("a" * 43), KemalIdentity::FailureReason::InvalidCredential)
     end
 
     it "builds a principal carrying the session's security context" do
-      h = KemalIdentity::SpecHelper.harness(
-        accounts: [KemalIdentity::SpecHelper.account(tenant_id: "t1")]
+      h = KemalIdentity::Testing.harness(
+        accounts: [KemalIdentity::Testing.account(tenant_id: "t1")]
       )
       issued = h.service.start(
         h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::MFA,
-        mfa_verified_at: KemalIdentity::SpecHelper::FIXED_NOW
+        mfa_verified_at: KemalIdentity::Testing::FIXED_NOW
       )
 
       principal = h.service.resolve(issued.token.reveal).as(KemalIdentity::Authenticated).principal
@@ -87,33 +87,33 @@ describe KemalIdentity::Sessions::Service do
       credential.unrestricted?.should be_true
 
       principal.tenant_id.should eq("t1")
-      principal.mfa_verified_at.should eq(KemalIdentity::SpecHelper::FIXED_NOW)
+      principal.mfa_verified_at.should eq(KemalIdentity::Testing::FIXED_NOW)
     end
 
     # The order in docs/02-security-model.md. Revocation is reported ahead of expiry, so a
     # session that is both reports the deliberate action rather than the passive one.
     it "reports revocation ahead of expiry" do
-      h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
       issued = h.service.start(h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
 
       h.service.revoke(issued.record.id)
       h.clock.advance(13.hours)
 
-      KemalIdentity::SpecHelper.should_fail_with(h.service.resolve(issued.token.reveal), KemalIdentity::FailureReason::Revoked)
+      KemalIdentity::Testing.should_fail_with(h.service.resolve(issued.token.reveal), KemalIdentity::FailureReason::Revoked)
     end
 
     it "reports expiry ahead of account status" do
-      h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
       issued = h.service.start(h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
 
       h.clock.advance(13.hours)
       h.accounts.disable("a1", h.clock.now)
 
-      KemalIdentity::SpecHelper.should_fail_with(h.service.resolve(issued.token.reveal), KemalIdentity::FailureReason::Expired)
+      KemalIdentity::Testing.should_fail_with(h.service.resolve(issued.token.reveal), KemalIdentity::FailureReason::Expired)
     end
 
     it "does not write on a read inside the touch interval" do
-      h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
       counting = CountingSessionRepository.new(h.sessions)
       service = KemalIdentity::Sessions::Service.new(
         sessions: counting, clock: h.clock, random: h.random
@@ -126,7 +126,7 @@ describe KemalIdentity::Sessions::Service do
     end
 
     it "writes once the touch interval has passed" do
-      h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
       counting = CountingSessionRepository.new(h.sessions)
       service = KemalIdentity::Sessions::Service.new(
         sessions: counting, clock: h.clock, random: h.random
@@ -142,8 +142,8 @@ describe KemalIdentity::Sessions::Service do
 
   describe "#start" do
     it "stamps the account's current auth_version onto the session" do
-      h = KemalIdentity::SpecHelper.harness(
-        accounts: [KemalIdentity::SpecHelper.account(auth_version: 5)]
+      h = KemalIdentity::Testing.harness(
+        accounts: [KemalIdentity::Testing.account(auth_version: 5)]
       )
       issued = h.service.start(h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
 
@@ -151,8 +151,8 @@ describe KemalIdentity::Sessions::Service do
     end
 
     it "carries the account's tenant onto the session" do
-      h = KemalIdentity::SpecHelper.harness(
-        accounts: [KemalIdentity::SpecHelper.account(tenant_id: "t1")]
+      h = KemalIdentity::Testing.harness(
+        accounts: [KemalIdentity::Testing.account(tenant_id: "t1")]
       )
       h.service.start(h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
         .record.tenant_id.should eq("t1")
@@ -160,13 +160,13 @@ describe KemalIdentity::Sessions::Service do
 
     it "sets both deadlines from the configured windows" do
       config = KemalIdentity::Sessions::Config.new(idle_timeout: 15.minutes, absolute_timeout: 8.hours)
-      h = KemalIdentity::SpecHelper.harness(config: config, accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(config: config, accounts: [KemalIdentity::Testing.account])
       record = h.service.start(
         h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password
       ).record
 
-      record.idle_expires_at.should eq(KemalIdentity::SpecHelper::FIXED_NOW + 15.minutes)
-      record.absolute_expires_at.should eq(KemalIdentity::SpecHelper::FIXED_NOW + 8.hours)
+      record.idle_expires_at.should eq(KemalIdentity::Testing::FIXED_NOW + 15.minutes)
+      record.absolute_expires_at.should eq(KemalIdentity::Testing::FIXED_NOW + 8.hours)
     end
   end
 
@@ -174,7 +174,7 @@ describe KemalIdentity::Sessions::Service do
     # Correctness never depends on this having run, which is exactly why it must not remove
     # anything resolve still considers live.
     it "leaves live sessions alone" do
-      h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
       h.service.start(h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
 
       h.service.delete_expired.should eq(0)
@@ -182,7 +182,7 @@ describe KemalIdentity::Sessions::Service do
     end
 
     it "removes rows past their absolute deadline" do
-      h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
       h.service.start(h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
 
       h.clock.advance(13.hours)

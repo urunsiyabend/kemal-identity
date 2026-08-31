@@ -118,7 +118,7 @@ end
 
 describe KemalIdentity::Authz::Cache do
   it "serves a cached answer inside the ttl and reloads after it" do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     cache = KemalIdentity::Authz::Cache.new(clock, ttl: 5.seconds)
     loads = 0
 
@@ -137,7 +137,7 @@ describe KemalIdentity::Authz::Cache do
   end
 
   it "keeps the tenants of one account apart" do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     cache = KemalIdentity::Authz::Cache.new(clock)
 
     cache.fetch("a1", "acme") { KemalIdentity::Authz::Grants.new(tenant_roles: ["finance"]) }
@@ -149,7 +149,7 @@ describe KemalIdentity::Authz::Cache do
   # Length-prefixed keys: an account id containing the separator must not reach another
   # account's entry.
   it "does not let one account's id collide with another's" do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     cache = KemalIdentity::Authz::Cache.new(clock)
 
     cache.fetch("a", "1:b") { KemalIdentity::Authz::Grants.new(global_roles: ["admin"]) }
@@ -159,7 +159,7 @@ describe KemalIdentity::Authz::Cache do
   end
 
   it "drops one account's entries on invalidation and leaves the rest" do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     cache = KemalIdentity::Authz::Cache.new(clock)
 
     cache.fetch("a1", "acme") { KemalIdentity::Authz::Grants.new(global_roles: ["reader"]) }
@@ -173,7 +173,7 @@ describe KemalIdentity::Authz::Cache do
   # Anybody signed in can ask about a tenant that does not exist, so the key space is
   # attacker-influenced and the map has to be bounded.
   it "clears itself rather than growing past the limit" do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     cache = KemalIdentity::Authz::Cache.new(clock, max_entries: 4)
 
     10.times { |i| cache.fetch("a1", "tenant-#{i}") { KemalIdentity::Authz::Grants.new } }
@@ -184,7 +184,7 @@ describe KemalIdentity::Authz::Cache do
   # The ttl is how long a revoked grant keeps working. A ten-minute cache is a ten-minute
   # window in which a compromised account still works after somebody has revoked it.
   it "refuses a ttl longer than the ceiling" do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
 
     expect_raises(KemalIdentity::ConfigurationError, /ttl/) do
       KemalIdentity::Authz::Cache.new(clock, ttl: 10.minutes)
@@ -192,7 +192,7 @@ describe KemalIdentity::Authz::Cache do
   end
 
   it "refuses a zero or negative ttl" do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
 
     expect_raises(KemalIdentity::ConfigurationError, /positive/) do
       KemalIdentity::Authz::Cache.new(clock, ttl: Time::Span.zero)

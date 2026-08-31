@@ -68,8 +68,8 @@ else
     it_behaves_like_an_action_token_repository do |tokens|
       reset_schema!
       # Every token needs an account to belong to, and the contract seeds tokens for a1 and a2.
-      insert(KemalIdentity::SpecHelper.account(id: "a1", login: "a1@example.com"))
-      insert(KemalIdentity::SpecHelper.account(id: "a2", login: "a2@example.com"))
+      insert(KemalIdentity::Testing.account(id: "a1", login: "a1@example.com"))
+      insert(KemalIdentity::Testing.account(id: "a2", login: "a2@example.com"))
 
       repo = KemalIdentity::Postgres::ActionTokenRepository.new(database)
       tokens.each { |token| repo.create(token) }
@@ -80,8 +80,8 @@ else
   describe KemalIdentity::Postgres::RememberRepository do
     it_behaves_like_a_remember_repository do |tokens|
       reset_schema!
-      insert(KemalIdentity::SpecHelper.account(id: "a1", login: "a1@example.com"))
-      insert(KemalIdentity::SpecHelper.account(id: "a2", login: "a2@example.com"))
+      insert(KemalIdentity::Testing.account(id: "a1", login: "a1@example.com"))
+      insert(KemalIdentity::Testing.account(id: "a2", login: "a2@example.com"))
 
       repo = KemalIdentity::Postgres::RememberRepository.new(database)
       tokens.each { |token| repo.create(token) }
@@ -130,24 +130,24 @@ else
   # them, because the in-memory double reaches them by a different route -- a mutex rather than
   # an index.
   describe "what PostgreSQL enforces that the double emulates" do
-    now = KemalIdentity::SpecHelper::FIXED_NOW
+    now = KemalIdentity::Testing::FIXED_NOW
 
     it "rejects a duplicate normalized_login for a null tenant" do
       reset_schema!
-      insert(KemalIdentity::SpecHelper.account(id: "a1", login: "ada@example.com"))
+      insert(KemalIdentity::Testing.account(id: "a1", login: "ada@example.com"))
 
       # The partial unique index from docs/03-data-model.md. Without it, two null-tenant rows
       # with the same login do not collide under a plain UNIQUE (tenant_id, normalized_login),
       # because NULLs are distinct.
       expect_raises(PQ::PQError) do
-        insert(KemalIdentity::SpecHelper.account(id: "a2", login: "ada@example.com"))
+        insert(KemalIdentity::Testing.account(id: "a2", login: "ada@example.com"))
       end
     end
 
     it "allows the same login in different tenants" do
       reset_schema!
-      insert(KemalIdentity::SpecHelper.account(id: "a1", login: "ada@example.com", tenant_id: "t1"))
-      insert(KemalIdentity::SpecHelper.account(id: "a2", login: "ada@example.com", tenant_id: "t2"))
+      insert(KemalIdentity::Testing.account(id: "a1", login: "ada@example.com", tenant_id: "t1"))
+      insert(KemalIdentity::Testing.account(id: "a2", login: "ada@example.com", tenant_id: "t2"))
 
       KemalIdentity::Postgres::AccountRepository.new(database)
         .find_by_login("ada@example.com", "t2").or_fail.id.should eq("a2")
@@ -155,7 +155,7 @@ else
 
     it "stores the session token as bytes, not as text" do
       reset_schema!
-      insert(KemalIdentity::SpecHelper.account)
+      insert(KemalIdentity::Testing.account)
 
       digest = KemalIdentity::Secret.new("a-token").digest
       repo = KemalIdentity::Postgres::SessionRepository.new(database)
@@ -174,7 +174,7 @@ else
 
     it "round trips the assurance level through a SMALLINT" do
       reset_schema!
-      insert(KemalIdentity::SpecHelper.account)
+      insert(KemalIdentity::Testing.account)
 
       digest = KemalIdentity::Secret.new("mfa-token").digest
       repo = KemalIdentity::Postgres::SessionRepository.new(database)
@@ -190,7 +190,7 @@ else
 
     it "preserves timestamps to the precision the contract compares them at" do
       reset_schema!
-      insert(KemalIdentity::SpecHelper.account)
+      insert(KemalIdentity::Testing.account)
 
       digest = KemalIdentity::Secret.new("time-token").digest
       repo = KemalIdentity::Postgres::SessionRepository.new(database)
@@ -204,7 +204,7 @@ else
     # The unique index on token_digest, doing the job the double's mutex does in memory.
     it "raises InfrastructureError rather than a driver error on a duplicate digest" do
       reset_schema!
-      insert(KemalIdentity::SpecHelper.account)
+      insert(KemalIdentity::Testing.account)
 
       digest = KemalIdentity::Secret.new("contested").digest
       repo = KemalIdentity::Postgres::SessionRepository.new(database)
@@ -220,7 +220,7 @@ else
 
     it "leaves the winning row in place when a duplicate is refused" do
       reset_schema!
-      insert(KemalIdentity::SpecHelper.account)
+      insert(KemalIdentity::Testing.account)
 
       digest = KemalIdentity::Secret.new("contested-2").digest
       repo = KemalIdentity::Postgres::SessionRepository.new(database)
@@ -239,7 +239,7 @@ else
     # increment -- which would leave one of them not invalidating the sessions it was meant to.
     it "increments auth_version atomically under concurrency" do
       reset_schema!
-      insert(KemalIdentity::SpecHelper.account)
+      insert(KemalIdentity::Testing.account)
 
       repo = KemalIdentity::Postgres::AccountRepository.new(database)
       results = Channel(Int32?).new
@@ -253,7 +253,7 @@ else
   end
 
   describe KemalIdentity::Postgres::AuthzRepository do
-    now = KemalIdentity::SpecHelper::FIXED_NOW
+    now = KemalIdentity::Testing::FIXED_NOW
 
     # A plain unique index does not collide on NULL, so without the partial
     # `WHERE tenant_id IS NULL` index every one of these would insert its own row and the

@@ -15,10 +15,10 @@ require "../../src/kemal_identity/kemal"
 PASSWORD    = "correct horse battery"
 CSRF_COOKIE = "kemal_identity_csrf"
 TEST_HASHER = KemalIdentity::Testing::FastTestHasher.new
-TEST_CLOCK  = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+TEST_CLOCK  = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
 
 ACCOUNTS = KemalIdentity::Testing::MemoryAccountRepository.new([
-  KemalIdentity::SpecHelper.account(
+  KemalIdentity::Testing.account(
     password_digest: TEST_HASHER.hash_secret(KemalIdentity::Secret.new(PASSWORD))
   ),
 ])
@@ -153,13 +153,13 @@ KemalIdentity.configure(
 )
 
 # Somebody the old system still has a session for and this one has disabled.
-ACCOUNTS.insert(KemalIdentity::SpecHelper.account(
-  id: "a-disabled", login: "banned@example.com", disabled_at: KemalIdentity::SpecHelper::FIXED_NOW
+ACCOUNTS.insert(KemalIdentity::Testing.account(
+  id: "a-disabled", login: "banned@example.com", disabled_at: KemalIdentity::Testing::FIXED_NOW
 ))
 
 # A second live account, so "the old cookie does not override a live session" can name somebody
 # the legacy path would otherwise happily adopt.
-ACCOUNTS.insert(KemalIdentity::SpecHelper.account(id: "a2", login: "grace@example.com"))
+ACCOUNTS.insert(KemalIdentity::Testing.account(id: "a2", login: "grace@example.com"))
 
 # ErrorHandler outermost, so it catches what a route or a guard raises. CSRFHandler after
 # authentication, because the token binds to the session. Never at position 0.
@@ -810,7 +810,7 @@ describe "ErrorHandler" do
     response.status_code.should eq(403)
     response.body.should contain("fresh authentication")
 
-    TEST_CLOCK.travel_to(KemalIdentity::SpecHelper::FIXED_NOW)
+    TEST_CLOCK.travel_to(KemalIdentity::Testing::FIXED_NOW)
   end
 
   it "allows a step-up route while the authentication is still fresh" do
@@ -1582,7 +1582,7 @@ describe "adopting a session from the system being migrated off" do
 
     cleared = HTTP::Cookies.from_server_headers(response.headers)[LEGACY_COOKIE]?.or_fail
     cleared.value.should eq("")
-    cleared.expires.or_fail.should be < KemalIdentity::SpecHelper::FIXED_NOW
+    cleared.expires.or_fail.should be < KemalIdentity::Testing::FIXED_NOW
   end
 
   # The old cookie proves somebody authenticated at some point, to a system this one cannot

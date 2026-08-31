@@ -2,7 +2,7 @@ require "../spec_helper"
 
 describe KemalIdentity::FixedWindowRateLimiter do
   it_behaves_like_a_rate_limiter(limit: 5, window: 1.minute) do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     {
       KemalIdentity::FixedWindowRateLimiter.new(limit: 5, window: 1.minute, clock: clock)
         .as(KemalIdentity::RateLimiter),
@@ -12,7 +12,7 @@ describe KemalIdentity::FixedWindowRateLimiter do
 
   describe "the retry_after it reports" do
     it "shrinks as the window elapses" do
-      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
       limiter = KemalIdentity::FixedWindowRateLimiter.new(limit: 1, window: 60.seconds, clock: clock)
 
       limiter.consume("key")
@@ -33,7 +33,7 @@ describe KemalIdentity::FixedWindowRateLimiter do
     # the moment it opens. Six attempts land within three seconds of each other against a limit
     # of three.
     it "can allow up to twice the limit across a boundary" do
-      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
       limiter = KemalIdentity::FixedWindowRateLimiter.new(limit: 3, window: 60.seconds, clock: clock)
 
       # One attempt opens the window.
@@ -55,7 +55,7 @@ describe KemalIdentity::FixedWindowRateLimiter do
     # An attacker can otherwise mint one key per login guessed until the process runs out of
     # memory, turning the defence into the vulnerability.
     it "bounds the number of tracked keys" do
-      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
       limiter = KemalIdentity::FixedWindowRateLimiter.new(
         limit: 5, window: 60.seconds, clock: clock, max_keys: 100
       )
@@ -66,7 +66,7 @@ describe KemalIdentity::FixedWindowRateLimiter do
     end
 
     it "reclaims keys whose window has elapsed" do
-      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
       limiter = KemalIdentity::FixedWindowRateLimiter.new(
         limit: 5, window: 60.seconds, clock: clock, max_keys: 100
       )

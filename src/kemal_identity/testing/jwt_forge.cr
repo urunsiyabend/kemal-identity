@@ -21,7 +21,7 @@ module KemalIdentity::Testing
     AUDIENCE = "https://api.example.com"
 
     def self.claims(
-      now : Time = KemalIdentity::SpecHelper::FIXED_NOW,
+      now : Time = KemalIdentity::Testing::FIXED_NOW,
       subject : String = "a1",
       expires_in : Time::Span? = 15.minutes,
       issuer : String? = ISSUER,

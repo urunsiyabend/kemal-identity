@@ -35,14 +35,14 @@ private class OwnershipAuthorizer < KemalIdentity::Authz::Authorizer
     return decision unless decision.permitted?
 
     resource = context.resource
-    return decision if resource.nil?   # no object question was asked; the grant decided it
+    return decision if resource.nil? # no object question was asked; the grant decided it
 
-    # Ownership stays in the domain layer: the rule reads the application's own object, and the
-    # authorizer never learned what an invoice is beyond this line.
-    #
-    # The rule was asked about an object, so anything it cannot read an owner from denies. The
-    # obvious `return decision if invoice.nil?` fails *open*, which is what this validation
-    # found in the README's own example.
+                       # Ownership stays in the domain layer: the rule reads the application's own object, and the
+                       # authorizer never learned what an invoice is beyond this line.
+                       #
+                       # The rule was asked about an object, so anything it cannot read an owner from denies. The
+                       # obvious `return decision if invoice.nil?` fails *open*, which is what this validation
+                       # found in the README's own example.
     invoice = resource.as?(Invoice)
     return decision if invoice && invoice.owner_id == principal.subject
 
@@ -108,7 +108,7 @@ private PERMS = [KemalIdentity::Authz::Permission.new("invoices.edit")]
 private ROLES = [KemalIdentity::Authz::Role.new("clerk", ["invoices.edit"])]
 
 private def authz_harness(cached : Bool = true)
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
   store = CountingAuthzRepository.new(KemalIdentity::Testing::MemoryAuthzRepository.new)
   rbac = KemalIdentity::Authz::RBAC.new(
     catalog: KemalIdentity::Authz::RoleCatalog.new(
@@ -123,7 +123,7 @@ private def authz_harness(cached : Bool = true)
 end
 
 describe "AUT-01: object ownership without turning every row into a role" do
-  principal = KemalIdentity::SpecHelper.principal(subject: "a1")
+  principal = KemalIdentity::Testing.principal(subject: "a1")
 
   it "permits the owner and refuses everybody else, for the same permission" do
     authorizer, _ = authz_harness

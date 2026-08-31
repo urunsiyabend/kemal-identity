@@ -1,6 +1,6 @@
 # Shared spec for `KemalIdentity::Federation::LinkRepository`. Every implementation runs it.
 def it_behaves_like_a_link_repository(&build : -> KemalIdentity::Federation::LinkRepository)
-  now = KemalIdentity::SpecHelper::FIXED_NOW
+  now = KemalIdentity::Testing::FIXED_NOW
   google = "https://accounts.google.com"
   okta = "https://acme.okta.com"
 

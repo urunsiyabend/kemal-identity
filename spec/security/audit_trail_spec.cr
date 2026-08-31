@@ -52,10 +52,10 @@ end
 describe "the audit trail" do
   describe "login" do
     it "records a success with the account it authenticated" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       hasher = h.hasher
       repo = KemalIdentity::Testing::MemoryAccountRepository.new([
-        KemalIdentity::SpecHelper.account(
+        KemalIdentity::Testing.account(
           password_digest: hasher.hash_secret(KemalIdentity::Secret.new(PASSWORD))
         ),
       ])
@@ -69,7 +69,7 @@ describe "the audit trail" do
     end
 
     it "records a failure with its reason" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       auth = KemalIdentity::Passwords::Authenticator.new(
         accounts: h.accounts, hasher: h.hasher, clock: h.clock
       )
@@ -83,9 +83,9 @@ describe "the audit trail" do
     it "records a rate-limit denial distinctly from a wrong password" do
       limiter = KemalIdentity::FixedWindowRateLimiter.new(
         limit: 1, window: 1.hour,
-        clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+        clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
       )
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       auth = KemalIdentity::Passwords::Authenticator.new(
         accounts: h.accounts, hasher: h.hasher, clock: h.clock, rate_limiter: limiter
       )
@@ -108,7 +108,7 @@ describe "the audit trail" do
     # what stores it. A trail that reported them the same way would bury the page-worthy one
     # inside the routine one.
     it "records a broken limiter distinctly from a throttle, at error level" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       auth = KemalIdentity::Passwords::Authenticator.new(
         accounts: h.accounts, hasher: h.hasher, clock: h.clock,
         rate_limiter: BrokenStoreRateLimiter.new
@@ -130,7 +130,7 @@ describe "the audit trail" do
 
   describe "sessions" do
     it "records a session being started, from the service rather than the web layer" do
-      h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
       account = h.accounts.find_by_id("a1").or_fail
 
       entries = captured { h.service.start(account, KemalIdentity::AssuranceLevel::Password) }
@@ -147,7 +147,7 @@ describe "the audit trail" do
     # A rotation replaced a session rather than starting one, and an investigator wants those
     # distinguishable.
     it "does not also record a rotation as a start" do
-      h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
       account = h.accounts.find_by_id("a1").or_fail
       before = h.service.start(account, KemalIdentity::AssuranceLevel::Remembered)
 
@@ -160,7 +160,7 @@ describe "the audit trail" do
     # How an investigator sees the session fixation defence actually firing: a login replaced an
     # identifier the client was already holding.
     it "records a rotation, naming the session it replaced" do
-      h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
       account = h.accounts.find_by_id("a1").or_fail
       before = h.service.start(account, KemalIdentity::AssuranceLevel::Remembered)
 
@@ -175,7 +175,7 @@ describe "the audit trail" do
     end
 
     it "records a single revocation" do
-      h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
       issued = h.service.start(
         h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password
       )
@@ -187,7 +187,7 @@ describe "the audit trail" do
     # Revoking an already-revoked session is not an event. Logging it would put a line in the
     # trail for every double-submitted logout.
     it "does not record a revocation that changed nothing" do
-      h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
       issued = h.service.start(
         h.accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password
       )
@@ -200,7 +200,7 @@ describe "the audit trail" do
     # The count is the part that matters: "revoked 4 sessions" tells an investigator four people
     # were signed out.
     it "records a bulk revocation with how many it ended" do
-      h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
       account = h.accounts.find_by_id("a1").or_fail
       3.times { h.service.start(account, KemalIdentity::AssuranceLevel::Password) }
 
@@ -212,7 +212,7 @@ describe "the audit trail" do
     end
 
     it "does not record a bulk revocation that ended nothing" do
-      h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
 
       entries = captured { h.service.revoke_all("a1") }
       messages(entries).should_not contain("session.revoked_all")
@@ -222,9 +222,9 @@ describe "the audit trail" do
   # The most important event here: it reports a suspicion rather than an action somebody took.
   describe "remember-me replay" do
     it "records the detection at warning level, naming the family" do
-      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
       random = KemalIdentity::Testing::DeterministicRandom.new
-      accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+      accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
       sessions = KemalIdentity::Sessions::Service.new(
         sessions: KemalIdentity::Testing::MemorySessionRepository.new(accounts),
         clock: clock, random: random
@@ -251,9 +251,9 @@ describe "the audit trail" do
     it "records a throttled request" do
       limiter = KemalIdentity::FixedWindowRateLimiter.new(
         limit: 1, window: 1.hour,
-        clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+        clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
       )
-      h = KemalIdentity::SpecHelper.account_harness(rate_limiter: limiter)
+      h = KemalIdentity::Testing.account_harness(rate_limiter: limiter)
 
       entries = captured do
         h.service.request_password_reset("ada@example.com")
@@ -264,7 +264,7 @@ describe "the audit trail" do
     end
 
     it "records whether the address was known, which the response does not" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
 
       known = captured { h.service.request_password_reset("ada@example.com") }
       unknown = captured { h.service.request_password_reset("nobody@example.com") }
@@ -278,7 +278,7 @@ describe "the audit trail" do
   # somewhere durable with a single binding rather than hunting for call sites.
   describe "the source they are emitted on" do
     it "is kemal_identity for every event" do
-      h = KemalIdentity::SpecHelper.harness(accounts: [KemalIdentity::SpecHelper.account])
+      h = KemalIdentity::Testing.harness(accounts: [KemalIdentity::Testing.account])
       account = h.accounts.find_by_id("a1").or_fail
 
       entries = captured do

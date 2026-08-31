@@ -1,6 +1,6 @@
 # Shared spec for `KemalIdentity::Authz::Repository`. Every implementation runs it.
 def it_behaves_like_an_authz_repository(&build : -> KemalIdentity::Authz::Repository)
-  now = KemalIdentity::SpecHelper::FIXED_NOW
+  now = KemalIdentity::Testing::FIXED_NOW
 
   membership = ->(id : String, account_id : String, tenant_id : String, at : Time) do
     KemalIdentity::Authz::Membership.new(

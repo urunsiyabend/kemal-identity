@@ -17,7 +17,7 @@ private record MigrationHarness,
   authenticator : KemalIdentity::Passwords::Authenticator
 
 private def migration_harness(digest : String = legacy_digest) : MigrationHarness
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
   counting = KemalIdentity::Testing::CountingHasher.new(KemalIdentity::Testing::FastTestHasher.new)
 
   hasher = KemalIdentity::Passwords::MigratingHasher.new(
@@ -26,7 +26,7 @@ private def migration_harness(digest : String = legacy_digest) : MigrationHarnes
   )
 
   accounts = KemalIdentity::Testing::MemoryAccountRepository.new([
-    KemalIdentity::SpecHelper.account(password_digest: digest),
+    KemalIdentity::Testing.account(password_digest: digest),
   ])
 
   MigrationHarness.new(

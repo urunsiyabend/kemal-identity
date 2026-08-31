@@ -4,7 +4,7 @@ require "kemal_identity/kemal"
 require "kemal_identity/sqlite"
 require "sqlite3"
 
-DBF = "/tmp/claude-1000/-home-urunsiyabend-personal-development-kemal-identity/9df7d08f-9594-41d3-ab1d-58a460f591ea/scratchpad/consumer/http03.db"
+DBF      = "/tmp/claude-1000/-home-urunsiyabend-personal-development-kemal-identity/9df7d08f-9594-41d3-ab1d-58a460f591ea/scratchpad/consumer/http03.db"
 File.delete?(DBF)
 DATABASE = DB.open("sqlite3://#{DBF}")
 Dir.glob("/home/urunsiyabend/personal/development/kemal_identity/migrations/sqlite/*.sql").sort.each do |path|
@@ -49,7 +49,7 @@ get "/whoami" do |env|
     credential = env.auth.credential
     "#{principal.subject} via #{credential.try(&.kind) || "none"}"
   else
-    env.auth.require!   # raises, so the guard's status is what a client sees
+    env.auth.require! # raises, so the guard's status is what a client sees
   end
 end
 

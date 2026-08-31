@@ -37,7 +37,7 @@ private record AuthzHarness,
   rbac : KemalIdentity::Authz::RBAC
 
 private def harness(cache : KemalIdentity::Authz::Cache? = nil) : AuthzHarness
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
   store = KemalIdentity::Testing::MemoryAuthzRepository.new
 
   catalog = KemalIdentity::Authz::RoleCatalog.new(
@@ -68,7 +68,7 @@ describe "authorization" do
   # what the credential carries — never the union, in either direction.
   describe "a token that is narrower than its owner" do
     scoped = ->(scopes : Array(String)?) do
-      KemalIdentity::SpecHelper.principal(
+      KemalIdentity::Testing.principal(
         subject: "a1",
         session_id: nil,
         assurance: KemalIdentity::AssuranceLevel::ApiToken,
@@ -140,7 +140,7 @@ describe "authorization" do
       h = harness
       h.rbac.grant("a1", "finance")
 
-      session = KemalIdentity::SpecHelper.principal(
+      session = KemalIdentity::Testing.principal(
         subject: "a1", assurance: KemalIdentity::AssuranceLevel::MFA
       )
 
@@ -164,7 +164,7 @@ describe "authorization" do
       h = harness
       h.rbac.grant("a1", "finance")
 
-      weak = KemalIdentity::SpecHelper.principal(
+      weak = KemalIdentity::Testing.principal(
         subject: "a1",
         session_id: nil,
         assurance: KemalIdentity::AssuranceLevel::ApiToken,
@@ -187,7 +187,7 @@ describe "authorization" do
       h.rbac.add_member("a1", "globex")
       h.rbac.grant("a1", "finance", tenant_id: "globex")
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1", tenant_id: "acme")
+      principal = KemalIdentity::Testing.principal(subject: "a1", tenant_id: "acme")
 
       denied_because(h.rbac.decide(principal, "invoices.read", "globex"))
         .should eq(KemalIdentity::Authz::DenialReason::TenantMismatch)
@@ -198,7 +198,7 @@ describe "authorization" do
       h.rbac.add_member("a1", "globex")
       h.rbac.grant("a1", "finance", tenant_id: "globex")
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1", tenant_id: "acme")
+      principal = KemalIdentity::Testing.principal(subject: "a1", tenant_id: "acme")
 
       h.rbac.permissions_for(principal, "globex").should be_empty
     end
@@ -210,7 +210,7 @@ describe "authorization" do
       h.rbac.add_member("a1", "acme")
       h.rbac.grant("a1", "reader", tenant_id: "acme")
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1")
+      principal = KemalIdentity::Testing.principal(subject: "a1")
 
       h.rbac.decide(principal, "invoices.read", "acme").permitted?.should be_true
     end
@@ -223,7 +223,7 @@ describe "authorization" do
       h = harness
       h.rbac.grant("a1", "finance", tenant_id: "acme")
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1")
+      principal = KemalIdentity::Testing.principal(subject: "a1")
 
       denied_because(h.rbac.decide(principal, "invoices.read", "acme"))
         .should eq(KemalIdentity::Authz::DenialReason::NotAMember)
@@ -233,7 +233,7 @@ describe "authorization" do
       h = harness
       h.rbac.add_member("a1", "acme")
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1")
+      principal = KemalIdentity::Testing.principal(subject: "a1")
 
       denied_because(h.rbac.decide(principal, "invoices.read", "acme"))
         .should eq(KemalIdentity::Authz::DenialReason::NotPermitted)
@@ -249,7 +249,7 @@ describe "authorization" do
       h.rbac.add_member("a1", "acme")
       h.rbac.grant("a1", "finance", tenant_id: "acme")
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1")
+      principal = KemalIdentity::Testing.principal(subject: "a1")
 
       denied_because(h.rbac.decide(principal, "invoices.read"))
         .should eq(KemalIdentity::Authz::DenialReason::NotPermitted)
@@ -263,7 +263,7 @@ describe "authorization" do
       h = harness
       h.rbac.grant("a1", "operator")
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1")
+      principal = KemalIdentity::Testing.principal(subject: "a1")
       decision = h.rbac.decide(principal, "tenants.administer", "acme")
 
       decision.permitted?.should be_true
@@ -274,7 +274,7 @@ describe "authorization" do
       h = harness
       h.rbac.grant("a1", "operator")
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1", tenant_id: "acme")
+      principal = KemalIdentity::Testing.principal(subject: "a1", tenant_id: "acme")
 
       denied_because(h.rbac.decide(principal, "tenants.administer", "globex"))
         .should eq(KemalIdentity::Authz::DenialReason::TenantMismatch)
@@ -288,7 +288,7 @@ describe "authorization" do
       h = harness
       h.rbac.grant("a1", "finance")
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1")
+      principal = KemalIdentity::Testing.principal(subject: "a1")
 
       denied_because(h.rbac.decide(principal, "invoices.refnud"))
         .should eq(KemalIdentity::Authz::DenialReason::UnknownPermission)
@@ -300,7 +300,7 @@ describe "authorization" do
       h = harness
       h.rbac.grant("a1", "finance")
 
-      principal = KemalIdentity::SpecHelper.principal(
+      principal = KemalIdentity::Testing.principal(
         subject: "a1", assurance: KemalIdentity::AssuranceLevel::Password
       )
 
@@ -312,7 +312,7 @@ describe "authorization" do
       h = harness
       h.rbac.grant("a1", "finance")
 
-      principal = KemalIdentity::SpecHelper.principal(
+      principal = KemalIdentity::Testing.principal(
         subject: "a1", assurance: KemalIdentity::AssuranceLevel::MFA
       )
 
@@ -325,7 +325,7 @@ describe "authorization" do
       h = harness
       h.rbac.grant("a1", "reader")
 
-      principal = KemalIdentity::SpecHelper.principal(
+      principal = KemalIdentity::Testing.principal(
         subject: "a1", assurance: KemalIdentity::AssuranceLevel::Remembered
       )
 
@@ -338,7 +338,7 @@ describe "authorization" do
       h = harness
       h.rbac.grant("a1", "finance")
 
-      principal = KemalIdentity::SpecHelper.principal(
+      principal = KemalIdentity::Testing.principal(
         subject: "a1", assurance: KemalIdentity::AssuranceLevel::Password
       )
 
@@ -353,7 +353,7 @@ describe "authorization" do
       h = harness
       h.rbac.grant("a1", "reader")
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1")
+      principal = KemalIdentity::Testing.principal(subject: "a1")
       h.rbac.decide(principal, "invoices.read").permitted?.should be_true
 
       h.rbac.revoke("a1", "reader")
@@ -366,7 +366,7 @@ describe "authorization" do
       h.rbac.add_member("a1", "acme")
       h.rbac.grant("a1", "reader", tenant_id: "acme")
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1")
+      principal = KemalIdentity::Testing.principal(subject: "a1")
       h.rbac.decide(principal, "invoices.read", "acme").permitted?.should be_true
 
       h.rbac.remove_member("a1", "acme")
@@ -387,7 +387,7 @@ describe "authorization" do
 
       h.rbac.remove_account("a1").should eq(3)
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1")
+      principal = KemalIdentity::Testing.principal(subject: "a1")
       h.rbac.decide(principal, "invoices.read", "acme").permitted?.should be_false
       h.rbac.decide(principal, "tenants.administer").permitted?.should be_false
     end
@@ -395,12 +395,12 @@ describe "authorization" do
 
   describe "a cached grant after revocation" do
     it "is dropped immediately when the revocation goes through the authorizer" do
-      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
       cache = KemalIdentity::Authz::Cache.new(clock, ttl: 5.seconds)
       h = harness(cache)
       h.rbac.grant("a1", "reader")
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1")
+      principal = KemalIdentity::Testing.principal(subject: "a1")
       h.rbac.decide(principal, "invoices.read").permitted?.should be_true
 
       h.rbac.revoke("a1", "reader")
@@ -412,12 +412,12 @@ describe "authorization" do
     # expires, and the ttl is therefore the revocation delay — which is why `Cache::MAX_TTL`
     # exists and why the cache is off by default.
     it "keeps working until the ttl expires when the revocation happened elsewhere" do
-      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
       cache = KemalIdentity::Authz::Cache.new(clock, ttl: 5.seconds)
       h = harness(cache)
       h.rbac.grant("a1", "reader")
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1")
+      principal = KemalIdentity::Testing.principal(subject: "a1")
       h.rbac.decide(principal, "invoices.read").permitted?.should be_true
 
       # Straight to the store, as another process's write would appear.
@@ -431,14 +431,14 @@ describe "authorization" do
     end
 
     it "does not serve one account's grants to another" do
-      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
       h = harness(KemalIdentity::Authz::Cache.new(clock))
       h.rbac.grant("a1", "finance")
 
-      h.rbac.decide(KemalIdentity::SpecHelper.principal(subject: "a1"), "invoices.read")
+      h.rbac.decide(KemalIdentity::Testing.principal(subject: "a1"), "invoices.read")
         .permitted?.should be_true
 
-      h.rbac.decide(KemalIdentity::SpecHelper.principal(subject: "a2"), "invoices.read")
+      h.rbac.decide(KemalIdentity::Testing.principal(subject: "a2"), "invoices.read")
         .permitted?.should be_false
     end
   end
@@ -450,10 +450,10 @@ describe "authorization" do
       h = harness
       h.store.grant(KemalIdentity::Authz::Assignment.new(
         id: "g1", account_id: "a1", role: "beta_tester",
-        granted_at: KemalIdentity::SpecHelper::FIXED_NOW
+        granted_at: KemalIdentity::Testing::FIXED_NOW
       ))
 
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1")
+      principal = KemalIdentity::Testing.principal(subject: "a1")
 
       h.rbac.decide(principal, "invoices.read").permitted?.should be_false
       h.rbac.catalog.undefined_roles(h.store.assignments_for("a1").map(&.role))
@@ -472,7 +472,7 @@ describe "authorization" do
   describe "an unconfigured authorizer" do
     # A wiring mistake must not become an open application.
     it "permits nothing" do
-      principal = KemalIdentity::SpecHelper.principal(subject: "a1")
+      principal = KemalIdentity::Testing.principal(subject: "a1")
 
       KemalIdentity::Authz::DenyAll.new.can?(principal, "invoices.read").should be_false
     end

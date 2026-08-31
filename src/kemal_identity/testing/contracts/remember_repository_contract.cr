@@ -2,7 +2,7 @@
 #
 # The block is handed the tokens to seed and returns a repository containing exactly those.
 def it_behaves_like_a_remember_repository(&build : Array(KemalIdentity::Sessions::RememberToken) -> KemalIdentity::Sessions::RememberRepository)
-  now = KemalIdentity::SpecHelper::FIXED_NOW
+  now = KemalIdentity::Testing::FIXED_NOW
   digest = ->(value : String) { KemalIdentity::Secret.new(value).digest }
 
   token = ->(id : String, account_id : String, family_id : String, raw : String, expires_in : Time::Span) do

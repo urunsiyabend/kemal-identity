@@ -7,13 +7,13 @@ require "../lib/kemal_identity/spec/spec_helper"
 # path with no HTTP request in sight.
 describe "DEV-03: the application object without Kemal" do
   it "configures without the Kemal adapter loaded" do
-    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
 
     KemalIdentity.configure(
       accounts: accounts,
       sessions: KemalIdentity::Testing::MemorySessionRepository.new(accounts),
       hasher: KemalIdentity::Testing::FastTestHasher.new,
-      clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW),
+      clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW),
       random: KemalIdentity::Testing::DeterministicRandom.new,
       cookie: KemalIdentity::Sessions::CookieConfig.new(
         name: "raw_session", secure: false, allow_insecure: true
@@ -35,7 +35,7 @@ describe "HTTP-07: authentication outside an HTTP request" do
   ]
 
   it "builds an execution context with no HTTP::Server::Context and authorises against it" do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     rbac = KemalIdentity::Authz::RBAC.new(
       catalog: KemalIdentity::Authz::RoleCatalog.new(
         KemalIdentity::Authz::PermissionRegistry.new(private_perms),
@@ -66,7 +66,7 @@ describe "HTTP-07: authentication outside an HTTP request" do
   # The shard cannot stop a job constructing any Principal it likes -- so what protects the
   # boundary is that a permission can demand an assurance the job does not have.
   it "cannot reach a permission that demands more assurance than it claims" do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     rbac = KemalIdentity::Authz::RBAC.new(
       catalog: KemalIdentity::Authz::RoleCatalog.new(
         KemalIdentity::Authz::PermissionRegistry.new([
@@ -101,7 +101,7 @@ describe "HTTP-07: authentication outside an HTTP request" do
   end
 
   it "runs a freshness check with an injected clock and no request" do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     actor = KemalIdentity::Principal.new(
       subject: "worker-1", assurance: KemalIdentity::AssuranceLevel::Password,
       authenticated_at: clock.now,

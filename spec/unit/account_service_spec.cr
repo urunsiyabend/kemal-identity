@@ -15,20 +15,20 @@ end
 describe KemalIdentity::Accounts::Service do
   describe "#request_password_reset" do
     it "delivers a link naming the account and its address" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       h.service.request_password_reset("ada@example.com")
 
       requested = h.notifier.resets.first
       requested.account_id.should eq("a1")
       requested.login.should eq("ada@example.com")
-      requested.expires_at.should eq(KemalIdentity::SpecHelper::FIXED_NOW + 1.hour)
+      requested.expires_at.should eq(KemalIdentity::Testing::FIXED_NOW + 1.hour)
     end
 
     # The application cannot build a URL out of a digest, so the raw token has to cross this
     # boundary. It is a Secret, so an accidental interpolation prints [REDACTED] rather than a
     # working password reset.
     it "hands over a raw token that redacts itself" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       h.service.request_password_reset("ada@example.com")
 
       token = h.notifier.resets.first.token
@@ -37,7 +37,7 @@ describe KemalIdentity::Accounts::Service do
     end
 
     it "stores only the digest of that token" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       raw = request_reset(h)
 
       # The stored side is unusable as a link: presenting the digest does not spend the token.
@@ -50,7 +50,7 @@ describe KemalIdentity::Accounts::Service do
     # A link sitting in a mailbox somebody else now controls stops working the moment the real
     # owner asks for a fresh one.
     it "invalidates the previous link when a new one is issued" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       first = request_reset(h)
       second = request_reset(h)
 
@@ -62,7 +62,7 @@ describe KemalIdentity::Accounts::Service do
 
   describe "#reset_password" do
     it "sets the new password" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       raw = request_reset(h)
 
       h.service.reset_password(raw, NEW_PASSWORD).should be_a(KemalIdentity::Accounts::PasswordWasReset)
@@ -72,14 +72,14 @@ describe KemalIdentity::Accounts::Service do
     end
 
     it "records the scheme that produced the digest" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       h.service.reset_password(request_reset(h), NEW_PASSWORD)
 
       h.accounts.find_by_id("a1").or_fail.password_scheme.should eq(h.hasher.scheme)
     end
 
     it "refuses the same link twice" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       raw = request_reset(h)
 
       h.service.reset_password(raw, NEW_PASSWORD).should be_a(KemalIdentity::Accounts::PasswordWasReset)
@@ -91,7 +91,7 @@ describe KemalIdentity::Accounts::Service do
     end
 
     it "refuses an expired link" do
-      h = KemalIdentity::SpecHelper.account_harness(reset_ttl: 1.hour)
+      h = KemalIdentity::Testing.account_harness(reset_ttl: 1.hour)
       raw = request_reset(h)
 
       h.clock.advance(2.hours)
@@ -100,7 +100,7 @@ describe KemalIdentity::Accounts::Service do
     end
 
     it "refuses a token nobody issued, and a malformed one, identically" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
 
       ["", "garbage", "a" * 43, "a" * 100_000].each do |candidate|
         h.service.reset_password(candidate, NEW_PASSWORD)
@@ -111,7 +111,7 @@ describe KemalIdentity::Accounts::Service do
     # A confirmation link must not reset a password, or anybody able to trigger a confirmation
     # message has an account takeover.
     it "refuses a confirmation token" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       confirmation = request_confirmation(h)
 
       h.service.reset_password(confirmation, NEW_PASSWORD)
@@ -120,7 +120,7 @@ describe KemalIdentity::Accounts::Service do
 
     describe "when the new password fails the policy" do
       it "says so specifically, because the holder of the link is choosing it" do
-        h = KemalIdentity::SpecHelper.account_harness
+        h = KemalIdentity::Testing.account_harness
         rejected = h.service.reset_password(request_reset(h), "short").as(KemalIdentity::Accounts::ActionRejected)
 
         rejected.reason.should eq(KemalIdentity::Accounts::ActionRejected::Reason::PasswordUnacceptable)
@@ -128,7 +128,7 @@ describe KemalIdentity::Accounts::Service do
       end
 
       it "leaves the old password in place" do
-        h = KemalIdentity::SpecHelper.account_harness
+        h = KemalIdentity::Testing.account_harness
         before = h.accounts.find_by_id("a1").or_fail.password_digest
         h.service.reset_password(request_reset(h), "short")
 
@@ -138,7 +138,7 @@ describe KemalIdentity::Accounts::Service do
       # docs/02-security-model.md, token rule five: consumed on use even when the surrounding
       # operation then fails. Otherwise one emailed link becomes unlimited attempts.
       it "still spends the link" do
-        h = KemalIdentity::SpecHelper.account_harness
+        h = KemalIdentity::Testing.account_harness
         raw = request_reset(h)
 
         h.service.reset_password(raw, "short").should be_a(KemalIdentity::Accounts::ActionRejected)
@@ -150,7 +150,7 @@ describe KemalIdentity::Accounts::Service do
 
     describe "the sessions it ends" do
       it "revokes every session and reports how many" do
-        h = KemalIdentity::SpecHelper.account_harness
+        h = KemalIdentity::Testing.account_harness
         account = h.accounts.find_by_id("a1").or_fail
         tokens = Array.new(3) do
           h.session_service.start(account, KemalIdentity::AssuranceLevel::Password).token
@@ -168,7 +168,7 @@ describe KemalIdentity::Accounts::Service do
       # Belt as well as braces: revocation handles the sessions that exist, the version bump
       # handles anything created alongside the reset.
       it "bumps auth_version as well as revoking" do
-        h = KemalIdentity::SpecHelper.account_harness
+        h = KemalIdentity::Testing.account_harness
         before = h.accounts.find_by_id("a1").or_fail.auth_version
 
         h.service.reset_password(request_reset(h), NEW_PASSWORD)
@@ -177,9 +177,9 @@ describe KemalIdentity::Accounts::Service do
       end
 
       it "leaves another account's sessions alone" do
-        h = KemalIdentity::SpecHelper.account_harness(accounts: [
-          KemalIdentity::SpecHelper.account(id: "a1", login: "ada@example.com"),
-          KemalIdentity::SpecHelper.account(id: "a2", login: "bob@example.com"),
+        h = KemalIdentity::Testing.account_harness(accounts: [
+          KemalIdentity::Testing.account(id: "a1", login: "ada@example.com"),
+          KemalIdentity::Testing.account(id: "a2", login: "bob@example.com"),
         ])
         other = h.session_service.start(
           h.accounts.find_by_id("a2").or_fail, KemalIdentity::AssuranceLevel::Password
@@ -196,7 +196,7 @@ describe KemalIdentity::Accounts::Service do
     # on their next request -- after the victim reset their password specifically to evict
     # them.
     it "forgets every remembered browser too" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       account = h.accounts.find_by_id("a1").or_fail
       laptop = h.remember_service.remember(account).token.reveal
       phone = h.remember_service.remember(account).token.reveal
@@ -210,7 +210,7 @@ describe KemalIdentity::Accounts::Service do
     # And is not read as theft: the tokens were revoked, not spent, so nobody is told their
     # cookie may have been stolen because they reset their own password.
     it "does not report those forgotten browsers as replays" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       laptop = h.remember_service.remember(h.accounts.find_by_id("a1").or_fail).token.reveal
 
       h.service.reset_password(request_reset(h), NEW_PASSWORD)
@@ -223,7 +223,7 @@ describe KemalIdentity::Accounts::Service do
     # Unsolicited on purpose: it is how somebody learns that an attacker who reached their
     # mailbox has taken the account.
     it "tells the account holder their password changed" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       h.service.reset_password(request_reset(h), NEW_PASSWORD)
 
       changed = h.notifier.password_changes
@@ -233,7 +233,7 @@ describe KemalIdentity::Accounts::Service do
     end
 
     it "sends no such message when the reset was refused" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       h.service.reset_password("garbage", NEW_PASSWORD)
 
       h.notifier.password_changes.should be_empty
@@ -242,24 +242,24 @@ describe KemalIdentity::Accounts::Service do
 
   describe "#request_email_confirmation" do
     it "delivers a link for an account that exists" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       h.service.request_email_confirmation("a1").should be_true
 
       requested = h.notifier.confirmations.first
       requested.account_id.should eq("a1")
-      requested.expires_at.should eq(KemalIdentity::SpecHelper::FIXED_NOW + 1.day)
+      requested.expires_at.should eq(KemalIdentity::Testing::FIXED_NOW + 1.day)
     end
 
     # Unlike a reset request, this takes an account id the application already holds, so there
     # is no untrusted identifier to enumerate with and no reason to be silent.
     it "reports an unknown account plainly" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       h.service.request_email_confirmation("nope").should be_false
       h.notifier.delivered.should be_empty
     end
 
     it "invalidates the previous confirmation link" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       first = request_confirmation(h)
       second = request_confirmation(h)
 
@@ -270,7 +270,7 @@ describe KemalIdentity::Accounts::Service do
 
   describe "#confirm_email" do
     it "marks the address as verified" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       h.accounts.find_by_id("a1").or_fail.email_verified?.should be_false
 
       h.service.confirm_email(request_confirmation(h)).should be_a(KemalIdentity::Accounts::EmailWasConfirmed)
@@ -279,7 +279,7 @@ describe KemalIdentity::Accounts::Service do
     end
 
     it "refuses the same link twice" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       raw = request_confirmation(h)
 
       h.service.confirm_email(raw).should be_a(KemalIdentity::Accounts::EmailWasConfirmed)
@@ -287,14 +287,14 @@ describe KemalIdentity::Accounts::Service do
     end
 
     it "refuses a reset token" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       h.service.confirm_email(request_reset(h)).should be_a(KemalIdentity::Accounts::ActionRejected)
     end
 
     # Proving an address is not a credential change. Logging everybody out would be a surprise
     # with no security benefit.
     it "leaves sessions and auth_version untouched" do
-      h = KemalIdentity::SpecHelper.account_harness
+      h = KemalIdentity::Testing.account_harness
       account = h.accounts.find_by_id("a1").or_fail
       issued = h.session_service.start(account, KemalIdentity::AssuranceLevel::Password)
 
@@ -308,7 +308,7 @@ describe KemalIdentity::Accounts::Service do
   describe "configuration" do
     it "refuses a non-positive reset lifetime" do
       expect_raises(KemalIdentity::ConfigurationError) do
-        KemalIdentity::SpecHelper.account_harness(reset_ttl: Time::Span::ZERO)
+        KemalIdentity::Testing.account_harness(reset_ttl: Time::Span::ZERO)
       end
     end
   end

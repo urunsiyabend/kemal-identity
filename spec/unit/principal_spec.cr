@@ -1,7 +1,7 @@
 require "../spec_helper"
 
 describe KemalIdentity::Principal do
-  now = KemalIdentity::SpecHelper::FIXED_NOW
+  now = KemalIdentity::Testing::FIXED_NOW
 
   it "rejects an empty subject" do
     expect_raises(ArgumentError) do
@@ -17,13 +17,13 @@ describe KemalIdentity::Principal do
     # Derived from `#credential` rather than stored beside it. These examples are what stops
     # the two drifting apart again.
     it "reports the id of a session credential" do
-      principal = KemalIdentity::SpecHelper.principal(session_id: "sess-7")
+      principal = KemalIdentity::Testing.principal(session_id: "sess-7")
       principal.session_id.should eq("sess-7")
       principal.credential.try(&.kind).should eq(KemalIdentity::CredentialKind::Session)
     end
 
     it "is nil for a bearer credential that has an id of its own" do
-      principal = KemalIdentity::SpecHelper.principal(
+      principal = KemalIdentity::Testing.principal(
         credential: KemalIdentity::CredentialRef.new(
           kind: KemalIdentity::CredentialKind::ApiToken,
           id: "tok-9",
@@ -37,7 +37,7 @@ describe KemalIdentity::Principal do
     end
 
     it "is nil when no credential produced the principal" do
-      principal = KemalIdentity::SpecHelper.principal(session_id: nil)
+      principal = KemalIdentity::Testing.principal(session_id: nil)
       principal.credential.should be_nil
       principal.session_id.should be_nil
     end
@@ -45,24 +45,24 @@ describe KemalIdentity::Principal do
 
   describe "#fresh?" do
     it "is fresh inside the window" do
-      principal = KemalIdentity::SpecHelper.principal(authenticated_at: now - 1.minute)
+      principal = KemalIdentity::Testing.principal(authenticated_at: now - 1.minute)
       principal.fresh?(within: 5.minutes, now: now).should be_true
     end
 
     it "is fresh exactly at the window boundary" do
-      principal = KemalIdentity::SpecHelper.principal(authenticated_at: now - 5.minutes)
+      principal = KemalIdentity::Testing.principal(authenticated_at: now - 5.minutes)
       principal.fresh?(within: 5.minutes, now: now).should be_true
     end
 
     it "is stale past the window" do
-      principal = KemalIdentity::SpecHelper.principal(authenticated_at: now - 6.minutes)
+      principal = KemalIdentity::Testing.principal(authenticated_at: now - 6.minutes)
       principal.fresh?(within: 5.minutes, now: now).should be_false
     end
 
     # A remember-me cookie proves possession of a stored token, not the presence of the
     # account holder. Step-up must force a real re-authentication out of `Remembered`.
     it "is never fresh at Remembered assurance, however recent" do
-      principal = KemalIdentity::SpecHelper.principal(
+      principal = KemalIdentity::Testing.principal(
         assurance: KemalIdentity::AssuranceLevel::Remembered,
         authenticated_at: now,
       )
@@ -70,7 +70,7 @@ describe KemalIdentity::Principal do
     end
 
     it "is fresh at MFA assurance inside the window" do
-      principal = KemalIdentity::SpecHelper.principal(
+      principal = KemalIdentity::Testing.principal(
         assurance: KemalIdentity::AssuranceLevel::MFA,
         authenticated_at: now - 1.minute,
       )
@@ -80,9 +80,9 @@ describe KemalIdentity::Principal do
 
   describe "#at_least?" do
     it "orders Remembered below Password below MFA" do
-      remembered = KemalIdentity::SpecHelper.principal(assurance: KemalIdentity::AssuranceLevel::Remembered)
-      password = KemalIdentity::SpecHelper.principal(assurance: KemalIdentity::AssuranceLevel::Password)
-      mfa = KemalIdentity::SpecHelper.principal(assurance: KemalIdentity::AssuranceLevel::MFA)
+      remembered = KemalIdentity::Testing.principal(assurance: KemalIdentity::AssuranceLevel::Remembered)
+      password = KemalIdentity::Testing.principal(assurance: KemalIdentity::AssuranceLevel::Password)
+      mfa = KemalIdentity::Testing.principal(assurance: KemalIdentity::AssuranceLevel::MFA)
 
       remembered.at_least?(KemalIdentity::AssuranceLevel::Password).should be_false
       password.at_least?(KemalIdentity::AssuranceLevel::Password).should be_true

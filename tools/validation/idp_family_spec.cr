@@ -67,7 +67,7 @@ private def response_for(token : String)
 end
 
 describe "IDP-01: several providers with provider-specific options" do
-  clock = -> { KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW) }
+  clock = -> { KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW) }
 
   it "registers several providers, each with its own issuer, client id and redirect" do
     c = clock.call
@@ -218,13 +218,13 @@ describe "IDP-02: safe account linking and conflict resolution" do
   it "cannot store an email on a link even by accident" do
     link = KemalIdentity::Federation::Link.new(
       id: "l-1", account_id: "acct-1", issuer: GOOGLE, subject: "google-sub",
-      created_at: KemalIdentity::SpecHelper::FIXED_NOW,
+      created_at: KemalIdentity::Testing::FIXED_NOW,
     )
 
     link.responds_to?(:email).should be_false
     KemalIdentity::Federation::Link.new(
       id: "l-2", account_id: "acct-1", issuer: GOOGLE, subject: "s",
-      created_at: KemalIdentity::SpecHelper::FIXED_NOW,
+      created_at: KemalIdentity::Testing::FIXED_NOW,
     ).issuer.should eq(GOOGLE)
   end
 
@@ -232,7 +232,7 @@ describe "IDP-02: safe account linking and conflict resolution" do
   # (issuer, subject), so they are simply two identities -- no collision, no merge.
   it "keeps two providers' claims about one email apart" do
     repo = KemalIdentity::Testing::MemoryLinkRepository.new
-    now = KemalIdentity::SpecHelper::FIXED_NOW
+    now = KemalIdentity::Testing::FIXED_NOW
 
     repo.link(KemalIdentity::Federation::Link.new(
       id: "l-1", account_id: "ada", issuer: GOOGLE, subject: "sub-1", created_at: now))
@@ -248,7 +248,7 @@ describe "IDP-02: safe account linking and conflict resolution" do
   # on two local accounts and whichever row is found first decides who signs in.
   it "refuses to relink a pair that is already linked, including to the same account" do
     repo = KemalIdentity::Testing::MemoryLinkRepository.new
-    now = KemalIdentity::SpecHelper::FIXED_NOW
+    now = KemalIdentity::Testing::FIXED_NOW
     repo.link(KemalIdentity::Federation::Link.new(
       id: "l-1", account_id: "ada", issuer: GOOGLE, subject: "sub-1", created_at: now))
 
@@ -267,7 +267,7 @@ describe "IDP-02: safe account linking and conflict resolution" do
   # gives the application what it needs to check -- and leaves the check to it.
   it "reports what an account is linked to, so unlinking the last one can be refused" do
     repo = KemalIdentity::Testing::MemoryLinkRepository.new
-    now = KemalIdentity::SpecHelper::FIXED_NOW
+    now = KemalIdentity::Testing::FIXED_NOW
     repo.link(KemalIdentity::Federation::Link.new(
       id: "l-1", account_id: "ada", issuer: GOOGLE, subject: "sub-1", created_at: now))
 
@@ -282,9 +282,9 @@ end
 
 describe "IDP-04: multi-tenant login discovery" do
   it "resolves the same address to different accounts in different tenants" do
-    ada_acme = KemalIdentity::SpecHelper.account(
+    ada_acme = KemalIdentity::Testing.account(
       id: "ada-acme", login: "ada@example.com", tenant_id: "acme")
-    ada_globex = KemalIdentity::SpecHelper.account(
+    ada_globex = KemalIdentity::Testing.account(
       id: "ada-globex", login: "ada@example.com", tenant_id: "globex")
     accounts = KemalIdentity::Testing::MemoryAccountRepository.new([ada_acme, ada_globex])
 
@@ -295,7 +295,7 @@ describe "IDP-04: multi-tenant login discovery" do
   # Pass condition: "authorization always receives the target tenant." A check that names no
   # tenant is not a wildcard, and this is where a route that forgot the tenant fails closed.
   it "does not treat a missing tenant as any tenant" do
-    ada_acme = KemalIdentity::SpecHelper.account(
+    ada_acme = KemalIdentity::Testing.account(
       id: "ada-acme", login: "ada@example.com", tenant_id: "acme")
     accounts = KemalIdentity::Testing::MemoryAccountRepository.new([ada_acme])
 
@@ -303,7 +303,7 @@ describe "IDP-04: multi-tenant login discovery" do
   end
 
   it "refuses a principal bound to one tenant asking about another" do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     rbac = KemalIdentity::Authz::RBAC.new(
       catalog: KemalIdentity::Authz::RoleCatalog.new(
         KemalIdentity::Authz::PermissionRegistry.new(
@@ -316,7 +316,7 @@ describe "IDP-04: multi-tenant login discovery" do
     rbac.add_member("ada", "globex")
     rbac.grant("ada", "reader", tenant_id: "globex")
 
-    bound_to_acme = KemalIdentity::SpecHelper.principal(subject: "ada", tenant_id: "acme")
+    bound_to_acme = KemalIdentity::Testing.principal(subject: "ada", tenant_id: "acme")
 
     denial = rbac.decide(bound_to_acme, "invoices.read", "globex")
     denial.permitted?.should be_false

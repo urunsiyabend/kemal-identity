@@ -5,7 +5,7 @@
 # a store containing them — the lookup joins session state to account status, so a session
 # repository with no accounts behind it cannot satisfy this contract.
 def it_behaves_like_a_session_repository(&build : Array(KemalIdentity::Accounts::Account) -> KemalIdentity::Sessions::Repository)
-  now = KemalIdentity::SpecHelper::FIXED_NOW
+  now = KemalIdentity::Testing::FIXED_NOW
 
   account = ->(id : String, auth_version : Int32, disabled_at : Time?) do
     KemalIdentity::Accounts::Account.new(

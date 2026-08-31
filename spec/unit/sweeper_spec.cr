@@ -10,11 +10,11 @@ private def sweeper_harness(
   revoked_retention : Time::Span = KemalIdentity::Sweeper::DEFAULT_REVOKED_RETENTION,
   absolute_timeout : Time::Span = 60.days,
 )
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
   random = KemalIdentity::Testing::DeterministicRandom.new
   hasher = KemalIdentity::Testing::FastTestHasher.new
 
-  accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+  accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
   sessions = KemalIdentity::Testing::MemorySessionRepository.new(accounts)
   action_tokens = KemalIdentity::Testing::MemoryActionTokenRepository.new
   remember_tokens = KemalIdentity::Testing::MemoryRememberRepository.new
@@ -156,8 +156,8 @@ describe KemalIdentity::Sweeper do
     # An application that configured neither service has nothing of theirs to sweep, and
     # asking `Application` for a service it never received would raise.
     it "works on an application with no action or remember tokens configured" do
-      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
-      accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
+      accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
       app = KemalIdentity::Application.new(
         accounts: accounts,
         sessions: KemalIdentity::Testing::MemorySessionRepository.new(accounts),
@@ -227,8 +227,8 @@ describe KemalIdentity::Sweeper do
     # that and passed happily with the rescue deleted. The claim is that the loop *keeps
     # sweeping*, so the only honest assertion is that a later sweep actually happened.
     it "keeps sweeping after an infrastructure error" do
-      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
-      accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
+      accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
       failing = FailingSweepRepository.new(
         KemalIdentity::Testing::MemorySessionRepository.new(accounts)
       )
@@ -264,8 +264,8 @@ describe KemalIdentity::Sweeper do
     end
 
     it "still raises when called directly, so a cron job sees the failure" do
-      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
-      accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
+      accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
       app = KemalIdentity::Application.new(
         accounts: accounts,
         sessions: FailingSweepRepository.new(

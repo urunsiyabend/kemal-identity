@@ -8,7 +8,7 @@
 # because an adapter over somebody's existing `users` table has no business inserting rows
 # into it.
 def it_behaves_like_an_account_repository(&build : Array(KemalIdentity::Accounts::Account) -> KemalIdentity::Accounts::Repository)
-  now = KemalIdentity::SpecHelper::FIXED_NOW
+  now = KemalIdentity::Testing::FIXED_NOW
 
   account = ->(id : String, login : String, tenant : String?) do
     KemalIdentity::Accounts::Account.new(

@@ -39,6 +39,34 @@ second half of `blueprints/0021-credential-reference.md` and land in this same r
 No new query anywhere. Every value comes from a row that was already read to authenticate the
 request.
 
+### The test doubles and shared contracts are published API
+
+```crystal
+require "kemal_identity/testing"            # in-memory doubles, fixtures, assertions
+require "kemal_identity/testing/contracts"  # the shared contract specs
+
+it_behaves_like_a_session_repository { |accounts| MyRedisSessionRepository.new(redis, accounts) }
+```
+
+If you implement any contract in this shard, you can now check it against the same examples the
+shipped adapters run, and build fixtures from the same doubles. Before this they lived under
+`spec/` and were reachable only by requiring this repository's own `spec_helper` — a private
+path, undocumented, and pulling in every double whether wanted or not.
+
+**Requiring `kemal_identity` compiles none of it.** Verified against a built binary: a production
+consumer has zero `Spec::` and zero `KemalIdentity::Testing` symbols, and
+`spec/unit/source_hygiene_spec.cr` now asserts that no production entry point requires the tree.
+
+⚠ **Breaking for anyone who was reaching into `spec/`:** `KemalIdentity::SpecHelper` is now
+`KemalIdentity::Testing`, alongside the doubles that were already there. `spec/support/*` and
+`spec/contract/*` moved to `src/kemal_identity/testing/` and
+`src/kemal_identity/testing/contracts/`.
+
+Two limits are documented rather than left to be discovered: the contracts exercise concurrency
+with fibers in one process, so a store shared between processes needs its own test; and
+`it_behaves_like_an_account_repository` requires multi-tenant behaviour, so a single-tenant
+adapter cannot pass three of its examples.
+
 ### ⚠ Breaking: the shared half of federation moved out of the `OIDC` namespace
 
 ```

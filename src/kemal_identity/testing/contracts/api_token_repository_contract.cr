@@ -4,7 +4,7 @@
 # containing them — the lookup joins token state to account status, so a token repository with
 # no accounts behind it cannot satisfy this contract.
 def it_behaves_like_an_api_token_repository(&build : Array(KemalIdentity::Accounts::Account) -> KemalIdentity::ApiTokens::Repository)
-  now = KemalIdentity::SpecHelper::FIXED_NOW
+  now = KemalIdentity::Testing::FIXED_NOW
   digest = ->(value : String) { KemalIdentity::Secret.new(value).digest }
 
   token = ->(id : String, account_id : String, raw : String, expires_in : Time::Span?) do
@@ -18,7 +18,7 @@ def it_behaves_like_an_api_token_repository(&build : Array(KemalIdentity::Accoun
     )
   end
 
-  one_account = [KemalIdentity::SpecHelper.account]
+  one_account = [KemalIdentity::Testing.account]
 
   describe "#create and #find_by_digest" do
     it "round trips a token" do
@@ -131,7 +131,7 @@ def it_behaves_like_an_api_token_repository(&build : Array(KemalIdentity::Accoun
 
   describe "the joined account status" do
     it "carries the account's current auth_version" do
-      repo = build.call([KemalIdentity::SpecHelper.account(auth_version: 7)])
+      repo = build.call([KemalIdentity::Testing.account(auth_version: 7)])
       repo.create(token.call("t1", "a1", "raw-1", nil))
 
       repo.find_by_digest(digest.call("raw-1")).or_fail.account_auth_version.should eq(7)
@@ -139,7 +139,7 @@ def it_behaves_like_an_api_token_repository(&build : Array(KemalIdentity::Accoun
 
     it "carries the account's disabled_at" do
       disabled_at = now - 1.hour
-      repo = build.call([KemalIdentity::SpecHelper.account(disabled_at: disabled_at)])
+      repo = build.call([KemalIdentity::Testing.account(disabled_at: disabled_at)])
       repo.create(token.call("t1", "a1", "raw-1", nil))
 
       found = repo.find_by_digest(digest.call("raw-1")).or_fail
@@ -222,8 +222,8 @@ def it_behaves_like_an_api_token_repository(&build : Array(KemalIdentity::Accoun
 
     it "does not touch another account's tokens" do
       repo = build.call([
-        KemalIdentity::SpecHelper.account(id: "a1", login: "a1@example.com"),
-        KemalIdentity::SpecHelper.account(id: "a2", login: "a2@example.com"),
+        KemalIdentity::Testing.account(id: "a1", login: "a1@example.com"),
+        KemalIdentity::Testing.account(id: "a2", login: "a2@example.com"),
       ])
       repo.create(token.call("t1", "a1", "raw-1", nil))
       repo.create(token.call("t2", "a2", "raw-2", nil))
@@ -261,8 +261,8 @@ def it_behaves_like_an_api_token_repository(&build : Array(KemalIdentity::Accoun
 
     it "does not list another account's tokens" do
       repo = build.call([
-        KemalIdentity::SpecHelper.account(id: "a1", login: "a1@example.com"),
-        KemalIdentity::SpecHelper.account(id: "a2", login: "a2@example.com"),
+        KemalIdentity::Testing.account(id: "a1", login: "a1@example.com"),
+        KemalIdentity::Testing.account(id: "a2", login: "a2@example.com"),
       ])
       repo.create(token.call("t1", "a1", "raw-1", nil))
       repo.create(token.call("t2", "a2", "raw-2", nil))

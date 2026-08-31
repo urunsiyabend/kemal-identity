@@ -18,11 +18,11 @@ describe "lazy rehash" do
 
   build = -> do
     repo = KemalIdentity::Testing::MemoryAccountRepository.new([
-      KemalIdentity::SpecHelper.account(
+      KemalIdentity::Testing.account(
         password_digest: weak.hash_secret(KemalIdentity::Secret.new(password))
       ),
     ])
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     {repo, authenticator(repo, current, clock), clock}
   end
 
@@ -58,11 +58,11 @@ describe "lazy rehash" do
 
   it "does not rehash a digest already at the current parameters" do
     repo = KemalIdentity::Testing::MemoryAccountRepository.new([
-      KemalIdentity::SpecHelper.account(
+      KemalIdentity::Testing.account(
         password_digest: current.hash_secret(KemalIdentity::Secret.new(password))
       ),
     ])
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     before = repo.find_by_id("a1").or_fail.password_digest
 
     authenticator(repo, current, clock).authenticate(login: "ada@example.com", password: password)
@@ -91,13 +91,13 @@ describe "lazy rehash" do
     # The legacy digest the migration exists to retire: needs_rehash? reports true for
     # anything unparseable, so an application arriving from MD5 is covered.
     repo = KemalIdentity::Testing::MemoryAccountRepository.new([
-      KemalIdentity::SpecHelper.account(password_digest: "$legacy$deadbeef"),
+      KemalIdentity::Testing.account(password_digest: "$legacy$deadbeef"),
     ])
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
 
     # It cannot verify, so no rehash happens and no login succeeds — the application supplies
     # a LegacyVerifier for that (v0.2). What matters here is that it does not raise.
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       authenticator(repo, current, clock).authenticate(login: "ada@example.com", password: password),
       KemalIdentity::FailureReason::InvalidCredential
     )
@@ -107,12 +107,12 @@ describe "lazy rehash" do
   it "still logs the user in when the rehash write fails" do
     repo = FailingWriteAccountRepository.new(
       KemalIdentity::Testing::MemoryAccountRepository.new([
-        KemalIdentity::SpecHelper.account(
+        KemalIdentity::Testing.account(
           password_digest: weak.hash_secret(KemalIdentity::Secret.new(password))
         ),
       ])
     )
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
 
     authenticator(repo, current, clock).authenticate(login: "ada@example.com", password: password)
       .should be_a(KemalIdentity::Authenticated)

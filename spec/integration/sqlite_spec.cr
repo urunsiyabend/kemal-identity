@@ -81,8 +81,8 @@ private def insert(account : KemalIdentity::Accounts::Account) : Nil
 end
 
 private def seed_accounts! : Nil
-  insert(KemalIdentity::SpecHelper.account(id: "a1", login: "a1@example.com"))
-  insert(KemalIdentity::SpecHelper.account(id: "a2", login: "a2@example.com"))
+  insert(KemalIdentity::Testing.account(id: "a1", login: "a1@example.com"))
+  insert(KemalIdentity::Testing.account(id: "a2", login: "a2@example.com"))
 end
 
 migrate!
@@ -157,11 +157,11 @@ end
 # Properties of this dialect specifically. The contracts cannot state them, because each
 # storage engine reaches them by a different route.
 describe "what SQLite enforces that the other adapters emulate" do
-  now = KemalIdentity::SpecHelper::FIXED_NOW
+  now = KemalIdentity::Testing::FIXED_NOW
 
   it "rejects a duplicate normalized_login for a null tenant" do
     reset_schema!
-    insert(KemalIdentity::SpecHelper.account(id: "a1", login: "ada@example.com"))
+    insert(KemalIdentity::Testing.account(id: "a1", login: "ada@example.com"))
 
     # The partial unique index. SQLite treats NULLs as distinct in a plain unique index exactly
     # as PostgreSQL does, so without this the single-tenant case admits duplicates.
@@ -170,14 +170,14 @@ describe "what SQLite enforces that the other adapters emulate" do
     # `ON CONFLICT` clause and the driver exception surfaces directly. That is the point: the
     # index is doing the work.
     expect_raises(Exception) do
-      insert(KemalIdentity::SpecHelper.account(id: "a2", login: "ada@example.com"))
+      insert(KemalIdentity::Testing.account(id: "a2", login: "ada@example.com"))
     end
   end
 
   it "allows the same login in different tenants" do
     reset_schema!
-    insert(KemalIdentity::SpecHelper.account(id: "a1", login: "ada@example.com", tenant_id: "t1"))
-    insert(KemalIdentity::SpecHelper.account(id: "a2", login: "ada@example.com", tenant_id: "t2"))
+    insert(KemalIdentity::Testing.account(id: "a1", login: "ada@example.com", tenant_id: "t1"))
+    insert(KemalIdentity::Testing.account(id: "a2", login: "ada@example.com", tenant_id: "t2"))
 
     KemalIdentity::SQLite::AccountRepository.new(DATABASE)
       .find_by_login("ada@example.com", "t2").or_fail.id.should eq("a2")
@@ -185,7 +185,7 @@ describe "what SQLite enforces that the other adapters emulate" do
 
   it "stores the session token as a BLOB, not as text" do
     reset_schema!
-    insert(KemalIdentity::SpecHelper.account)
+    insert(KemalIdentity::Testing.account)
 
     digest = KemalIdentity::Secret.new("a-token").digest
     repo = KemalIdentity::SQLite::SessionRepository.new(DATABASE)
@@ -199,7 +199,7 @@ describe "what SQLite enforces that the other adapters emulate" do
 
   it "round trips the assurance level through an INTEGER" do
     reset_schema!
-    insert(KemalIdentity::SpecHelper.account)
+    insert(KemalIdentity::Testing.account)
 
     digest = KemalIdentity::Secret.new("mfa-token").digest
     repo = KemalIdentity::SQLite::SessionRepository.new(DATABASE)
@@ -217,7 +217,7 @@ describe "what SQLite enforces that the other adapters emulate" do
   # instants exactly, so this is worth pinning rather than assuming.
   it "preserves timestamps to the precision the contracts compare them at" do
     reset_schema!
-    insert(KemalIdentity::SpecHelper.account)
+    insert(KemalIdentity::Testing.account)
 
     digest = KemalIdentity::Secret.new("time-token").digest
     repo = KemalIdentity::SQLite::SessionRepository.new(DATABASE)
@@ -230,7 +230,7 @@ describe "what SQLite enforces that the other adapters emulate" do
 
   it "raises InfrastructureError rather than a driver error on a duplicate digest" do
     reset_schema!
-    insert(KemalIdentity::SpecHelper.account)
+    insert(KemalIdentity::Testing.account)
 
     digest = KemalIdentity::Secret.new("contested").digest
     repo = KemalIdentity::SQLite::SessionRepository.new(DATABASE)
@@ -245,7 +245,7 @@ describe "what SQLite enforces that the other adapters emulate" do
 
   it "increments auth_version atomically under concurrency" do
     reset_schema!
-    insert(KemalIdentity::SpecHelper.account)
+    insert(KemalIdentity::Testing.account)
 
     repo = KemalIdentity::SQLite::AccountRepository.new(DATABASE)
     results = Channel(Int32?).new

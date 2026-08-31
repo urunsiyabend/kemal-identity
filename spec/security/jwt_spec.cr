@@ -39,7 +39,7 @@ private def jwt_harness(
   revocations : KemalIdentity::JWT::RevocationStore? = nil,
   accounts : KemalIdentity::Accounts::Repository? = nil,
 )
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
 
   validator = KemalIdentity::JWT::Validator.new(
     keyring: keyring,
@@ -64,7 +64,7 @@ private def jwt_harness_with(issuer : String = Forge::ISSUER, audience : String 
     issuer: issuer,
     audience: audience,
     algorithms: ["HS256"],
-    clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW),
+    clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW),
   )
 end
 
@@ -73,14 +73,14 @@ describe "a well-formed JWT" do
     validator, _ = jwt_harness
     outcome = validator.authenticate(Forge.encode(Forge.claims))
 
-    KemalIdentity::SpecHelper.should_authenticate(outcome).subject.should eq("a1")
+    KemalIdentity::Testing.should_authenticate(outcome).subject.should eq("a1")
   end
 
   it "names the token by its jti when the issuer states one" do
     validator, _ = jwt_harness
     outcome = validator.authenticate(Forge.encode(Forge.claims(jti: "jti-1")))
 
-    credential = KemalIdentity::SpecHelper.should_authenticate(outcome).credential.should_not be_nil
+    credential = KemalIdentity::Testing.should_authenticate(outcome).credential.should_not be_nil
     credential.kind.should eq(KemalIdentity::CredentialKind::Jwt)
     credential.id.should eq("jti-1")
   end
@@ -92,7 +92,7 @@ describe "a well-formed JWT" do
     validator, _ = jwt_harness
     outcome = validator.authenticate(Forge.encode(Forge.claims))
 
-    credential = KemalIdentity::SpecHelper.should_authenticate(outcome).credential.should_not be_nil
+    credential = KemalIdentity::Testing.should_authenticate(outcome).credential.should_not be_nil
     credential.kind.should eq(KemalIdentity::CredentialKind::Jwt)
     credential.id.should be_nil
   end
@@ -101,7 +101,7 @@ describe "a well-formed JWT" do
   # the presence of a person.
   it "authenticates at ApiToken assurance, which is never fresh" do
     validator, clock = jwt_harness
-    principal = KemalIdentity::SpecHelper.should_authenticate(
+    principal = KemalIdentity::Testing.should_authenticate(
       validator.authenticate(Forge.encode(Forge.claims))
     )
 
@@ -112,9 +112,9 @@ describe "a well-formed JWT" do
 
   it "dates the principal from iat, which is when the credential was actually verified" do
     validator, _ = jwt_harness
-    issued_at = KemalIdentity::SpecHelper::FIXED_NOW - 3.minutes
+    issued_at = KemalIdentity::Testing::FIXED_NOW - 3.minutes
 
-    principal = KemalIdentity::SpecHelper.should_authenticate(
+    principal = KemalIdentity::Testing.should_authenticate(
       validator.authenticate(Forge.encode(Forge.claims(issued_at: issued_at)))
     )
 
@@ -267,7 +267,7 @@ describe "RSA-signed tokens" do
   it "verifies a token signed by the issuer's private key" do
     validator, _ = rsa_harness
 
-    KemalIdentity::SpecHelper.should_authenticate(
+    KemalIdentity::Testing.should_authenticate(
       validator.authenticate(Forge.encode_rsa(Forge.claims, kid: "rsa"))
     ).subject.should eq("a1")
   end
@@ -489,7 +489,7 @@ describe "replaying a token across a trust boundary" do
   it "rejects a token from an issuer it does not trust" do
     validator, _ = jwt_harness
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       validator.authenticate(Forge.encode(Forge.claims(issuer: "https://evil.example.com"))),
       KemalIdentity::FailureReason::InvalidClaim
     )
@@ -506,7 +506,7 @@ describe "replaying a token across a trust boundary" do
     validator, _ = jwt_harness
     elsewhere = ::JSON::Any.new("https://other.example.com")
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       validator.authenticate(Forge.encode(Forge.claims(audience: elsewhere))),
       KemalIdentity::FailureReason::InvalidClaim
     )
@@ -562,7 +562,7 @@ describe "expiry" do
     claims = Forge.claims(expires_in: nil)
     validator, _ = jwt_harness
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       validator.authenticate(Forge.encode(claims)), KemalIdentity::FailureReason::InvalidClaim
     )
   end
@@ -573,7 +573,7 @@ describe "expiry" do
 
     clock.advance(16.minutes)
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       validator.authenticate(token), KemalIdentity::FailureReason::Expired
     )
   end
@@ -599,7 +599,7 @@ describe "expiry" do
 
   it "rejects a token that is not valid yet" do
     claims = Forge.claims
-    claims["nbf"] = ::JSON::Any.new((KemalIdentity::SpecHelper::FIXED_NOW + 10.minutes).to_unix)
+    claims["nbf"] = ::JSON::Any.new((KemalIdentity::Testing::FIXED_NOW + 10.minutes).to_unix)
     validator, _ = jwt_harness
 
     validator.authenticate(Forge.encode(claims)).should be_a(KemalIdentity::Failed)
@@ -607,7 +607,7 @@ describe "expiry" do
 
   it "accepts a token whose nbf has passed" do
     claims = Forge.claims
-    claims["nbf"] = ::JSON::Any.new((KemalIdentity::SpecHelper::FIXED_NOW - 10.minutes).to_unix)
+    claims["nbf"] = ::JSON::Any.new((KemalIdentity::Testing::FIXED_NOW - 10.minutes).to_unix)
     validator, _ = jwt_harness
 
     validator.authenticate(Forge.encode(claims)).should be_a(KemalIdentity::Authenticated)
@@ -615,7 +615,7 @@ describe "expiry" do
 
   it "rejects a token issued in the future" do
     validator, _ = jwt_harness
-    future = KemalIdentity::SpecHelper::FIXED_NOW + 10.minutes
+    future = KemalIdentity::Testing::FIXED_NOW + 10.minutes
 
     validator.authenticate(Forge.encode(Forge.claims(issued_at: future)))
       .should be_a(KemalIdentity::Failed)
@@ -632,7 +632,7 @@ describe "expiry" do
   # RFC 7519 permits a non-integer NumericDate.
   it "accepts a fractional exp" do
     claims = Forge.claims
-    seconds = (KemalIdentity::SpecHelper::FIXED_NOW + 15.minutes).to_unix.to_f + 0.5
+    seconds = (KemalIdentity::Testing::FIXED_NOW + 15.minutes).to_unix.to_f + 0.5
     claims["exp"] = ::JSON::Any.new(seconds)
     validator, _ = jwt_harness
 
@@ -657,7 +657,7 @@ describe "the lifetime ceiling" do
   it "rejects a token claiming a lifetime longer than the ceiling" do
     validator, _ = jwt_harness(max_lifetime: 1.hour)
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       validator.authenticate(Forge.encode(Forge.claims(expires_in: 30.days))),
       KemalIdentity::FailureReason::InvalidClaim
     )
@@ -693,7 +693,7 @@ describe "token-purpose separation" do
   it "rejects a token minted for another flow" do
     validator, _ = jwt_harness(purpose: "access")
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       validator.authenticate(Forge.encode(Forge.claims(purpose: "password-reset"))),
       KemalIdentity::FailureReason::InvalidClaim
     )
@@ -752,9 +752,9 @@ describe "revocation through a jti store" do
 
     validator.authenticate(token).should be_a(KemalIdentity::Authenticated)
 
-    store.revoke("j1", KemalIdentity::SpecHelper::FIXED_NOW + 15.minutes)
+    store.revoke("j1", KemalIdentity::Testing::FIXED_NOW + 15.minutes)
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       validator.authenticate(token), KemalIdentity::FailureReason::Revoked
     )
   end
@@ -762,7 +762,7 @@ describe "revocation through a jti store" do
   it "leaves other tokens working" do
     store = KemalIdentity::Testing::MemoryRevocationStore.new
     validator, _ = jwt_harness(revocations: store)
-    store.revoke("j1", KemalIdentity::SpecHelper::FIXED_NOW + 15.minutes)
+    store.revoke("j1", KemalIdentity::Testing::FIXED_NOW + 15.minutes)
 
     validator.authenticate(Forge.encode(Forge.claims(jti: "j2")))
       .should be_a(KemalIdentity::Authenticated)
@@ -772,7 +772,7 @@ describe "revocation through a jti store" do
   it "rejects a token with no jti once a store is configured" do
     validator, _ = jwt_harness(revocations: KemalIdentity::Testing::MemoryRevocationStore.new)
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       validator.authenticate(Forge.encode(Forge.claims)),
       KemalIdentity::FailureReason::InvalidClaim
     )
@@ -789,7 +789,7 @@ end
 
 describe "an account that should no longer be admitted" do
   it "stops authenticating immediately when accounts are wired in" do
-    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
     validator, clock = jwt_harness(accounts: accounts)
     token = Forge.encode(Forge.claims(subject: "a1"))
 
@@ -797,13 +797,13 @@ describe "an account that should no longer be admitted" do
 
     accounts.disable("a1", clock.now)
 
-    KemalIdentity::SpecHelper.should_fail_with(
+    KemalIdentity::Testing.should_fail_with(
       validator.authenticate(token), KemalIdentity::FailureReason::DisabledAccount
     )
   end
 
   it "rejects a subject that names no account" do
-    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
     validator, _ = jwt_harness(accounts: accounts)
 
     validator.authenticate(Forge.encode(Forge.claims(subject: "ghost")))
@@ -813,7 +813,7 @@ describe "an account that should no longer be admitted" do
   # Deliberate, and the same choice `ApiTokens::Service` makes: a password change must not
   # silently break a machine client that has no way to notice.
   it "survives an auth_version bump, as an API token does" do
-    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
     validator, _ = jwt_harness(accounts: accounts)
     accounts.bump_auth_version("a1")
 

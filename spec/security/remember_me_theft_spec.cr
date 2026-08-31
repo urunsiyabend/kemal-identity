@@ -9,11 +9,11 @@ require "../spec_helper"
 #
 # Named for the attack.
 private def harness(ttl : Time::Span = 30.days)
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
   random = KemalIdentity::Testing::DeterministicRandom.new
   notifier = KemalIdentity::Testing::RecordingNotifier.new
 
-  accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::SpecHelper.account])
+  accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
   sessions_repo = KemalIdentity::Testing::MemorySessionRepository.new(accounts)
   remember_repo = KemalIdentity::Testing::MemoryRememberRepository.new
 

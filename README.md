@@ -1529,6 +1529,38 @@ its own contract, and it reads roles from wherever you point it.
 notice attached. **Forcing a global password reset** to change hashing algorithms is a support
 burden that lazy rehash exists to make unnecessary.
 
+## Testing an adapter you wrote
+
+If you implement any of this shard's contracts — a Redis session store, a repository over your
+existing `users` table, a rate limiter over a shared store — the doubles and the shared contract
+specs are published for you:
+
+```crystal
+require "kemal_identity/testing"            # the in-memory doubles, fixtures, assertions
+require "kemal_identity/testing/contracts"  # the shared contract specs
+
+it_behaves_like_a_session_repository do |accounts|
+  MyRedisSessionRepository.new(redis, KemalIdentity::Testing::MemoryAccountRepository.new(accounts))
+end
+```
+
+Everything is `KemalIdentity::Testing`: an in-memory implementation of every repository contract,
+`TestClock` (moves only when you move it), `DeterministicRandom`, a fast hasher for specs that do
+not test hashing, and the assertion helpers this shard's own suite uses.
+
+**Requiring `kemal_identity` does not compile any of it.** Verified against a built binary: a
+production consumer has zero `Spec::` and zero `KemalIdentity::Testing` symbols.
+
+Two limits are worth knowing before trusting a green contract run:
+
+- **Concurrency is exercised with fibers in one process.** A store shared between *processes* can
+  pass every example and still lose updates — measured, and recorded under OPS-01 in
+  `blueprints/0025-maturity-validation-results.md`, where a limiter passed all twelve examples
+  while allowing 2.2× its global limit across six processes. Test that separately.
+- **`it_behaves_like_an_account_repository` requires multi-tenant behaviour.** Three of its
+  examples cover tenant scoping, so a single-tenant adapter over an existing `users` table with no
+  tenant column cannot pass them. The rest of the contract still applies.
+
 ## Development
 
 ```bash
@@ -1549,6 +1581,9 @@ regression because a database is missing defeats the point of having it.
 
 Design documents are in `docs/`. Feature blueprints and decision records are in
 `blueprints/`. Executable tests are in `spec/`. Those three directories never mix.
+
+The test doubles and shared contracts live in `src/kemal_identity/testing`, not in `spec/`,
+because they are published API — see `## Testing an adapter you wrote` above.
 
 ### Releasing
 

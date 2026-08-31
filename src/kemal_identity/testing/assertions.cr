@@ -8,7 +8,7 @@
 #
 # The exhaustive `case ... in` is the other half — adding an `Outcome` variant becomes a
 # compile error here rather than a silently unhandled branch.
-module KemalIdentity::SpecHelper
+module KemalIdentity::Testing
   def self.should_fail_with(
     outcome : KemalIdentity::Outcome,
     reason : KemalIdentity::FailureReason,

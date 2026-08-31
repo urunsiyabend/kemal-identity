@@ -79,6 +79,14 @@ jobs:
       - name: Core compiles without the Kemal adapter
         run: crystal build --no-codegen src/kemal_identity.cr
 
+      # The testing tree is published API as of v0.8 (blueprints/0025, DEV-02), so a double that
+      # has drifted from a contract must fail here rather than when a consumer requires it. The
+      # suite exercises most of it, but not a double no spec happens to use.
+      - name: The published testing entry points compile
+        run: |
+          crystal build --no-codegen src/kemal_identity/testing.cr
+          crystal build --no-codegen src/kemal_identity/testing/contracts.cr
+
       # Every example under spec/unit and spec/security must pass with no DATABASE_URL.
       # Skipping a security regression because a database is missing defeats the point of
       # having it, so this step runs deliberately without one.

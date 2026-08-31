@@ -24,9 +24,8 @@ that way rather than in-process.
 |---|---|
 | `tok01_spec.cr` | TOK-01, AUT-03 — two differently scoped tokens for one account |
 | `tok01_lookups_spec.cr` | TOK-01 hot path — counts `find_by_digest` calls per authentication |
-| `dev02_attempt1_spec.cr` | DEV-02 — a contract with no dependencies, required directly |
-| `dev02_attempt2_spec.cr` | DEV-02 — the same for a repository contract. **Does not compile**, deliberately: it is the evidence |
-| `dev02_attempt3_spec.cr` | DEV-02 — the require that works, reaching into the shard's private `spec/` tree |
+| `dev02_after_spec.cr` | DEV-02 after the fix — `require "kemal_identity/testing"`, nothing reaching into `spec/` |
+| `before-dev02-fix/` | The three attempts that produced DEV-02's original M2. They no longer run: the fix deleted the paths they used. See that directory's README |
 | `ops02_spec.cr` | OPS-02 — subscribing to events, and the absence of a typed sink |
 | `ops02_failure_spec.cr` | OPS-02 — a sink that raises, in both `Log` dispatch modes |
 | `http01_app.cr` | HTTP-01 — an API-only Kemal app, including a consumer-written RFC 6750 handler |
@@ -48,10 +47,7 @@ that way rather than in-process.
 | `dev03_http07_spec.cr` | DEV-03's application object, and HTTP-07 — a job's principal with no request |
 | `idp_family_spec.cr` | IDP-01, IDP-02, IDP-04 — two providers, out-of-order callbacks, the provider-switch case, linking conflicts, tenant lookups |
 
-## The two that are supposed to fail
-
-`dev02_attempt2_spec.cr` is expected to fail compilation with `undefined constant
-KemalIdentity::SpecHelper::FIXED_NOW`. Do not "fix" it; that error is the finding.
+## The one that is supposed to fail
 
 `idp03_contract_spec.cr` is expected to fail three tenancy examples. The adapter under test has
 no tenant column because the application it belongs to has one tenant. That the shared contract

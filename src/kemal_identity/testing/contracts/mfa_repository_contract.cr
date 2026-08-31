@@ -1,6 +1,6 @@
 # Shared spec for `KemalIdentity::MFA::Repository`. Every implementation runs it.
 def it_behaves_like_an_mfa_repository(&build : -> KemalIdentity::MFA::Repository)
-  now = KemalIdentity::SpecHelper::FIXED_NOW
+  now = KemalIdentity::Testing::FIXED_NOW
 
   factor = ->(id : String, account_id : String) do
     KemalIdentity::MFA::Factor.new(

@@ -36,7 +36,7 @@ private class RecordingFetcher
 end
 
 private def jwks_harness(body : String = jwks_body, ttl : Time::Span = 10.minutes)
-  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
   fetcher = RecordingFetcher.new(body)
 
   jwks = KemalIdentity::JWT::JWKS.new(
@@ -196,13 +196,13 @@ describe "configuring a JWKS" do
     expect_raises(KemalIdentity::ConfigurationError, /https/) do
       KemalIdentity::JWT::JWKS.new(
         uri: "http://issuer.example.com/jwks",
-        clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW),
+        clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW),
       )
     end
   end
 
   it "refuses a non-positive ttl or timeout" do
-    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::SpecHelper::FIXED_NOW)
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
 
     expect_raises(KemalIdentity::ConfigurationError, /ttl/) do
       KemalIdentity::JWT::JWKS.new(uri: "https://a.example.com/jwks", clock: clock, ttl: 0.seconds)
@@ -230,7 +230,7 @@ describe "a validator backed by a JWKS" do
       clock: clock,
     )
 
-    KemalIdentity::SpecHelper.should_authenticate(
+    KemalIdentity::Testing.should_authenticate(
       validator.authenticate(Forge.encode_rsa(Forge.claims, kid: "rsa"))
     ).subject.should eq("a1")
   end
