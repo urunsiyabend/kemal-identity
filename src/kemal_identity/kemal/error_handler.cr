@@ -23,38 +23,125 @@ module KemalIdentity::Kemal
   # knows its own routes. An application that wants it adds it at its login route, where the
   # validation is one line and visible.
   class ErrorHandler < ::Kemal::Handler
-    def initialize(@login_path : String? = "/login")
+    # What `WWW-Authenticate` announces. `realm` is a label a client may show; it names nothing
+    # about the deployment beyond what the application chose.
+    DEFAULT_REALM = "api"
+
+    def initialize(@login_path : String? = "/login", @realm : String = DEFAULT_REALM, @app : Application? = nil)
     end
 
     def call(env : HTTP::Server::Context)
       call_next(env)
     rescue NotAuthenticatedError
-      respond(env, status: 401, message: "authentication required", redirect: true)
+      # RFC 6750 §3: "If the request lacks any authentication information … the resource server
+      # SHOULD NOT include an error code". A presented credential that did not hold is a
+      # different answer, and `invalid_token` is the code for it.
+      respond(
+        env, status: 401, message: "authentication required", redirect: true,
+        challenge_error: bearer_presented?(env) ? "invalid_token" : nil,
+      )
     rescue FreshAuthenticationRequiredError
       # No redirect: sending somebody to a login page when they are already logged in is
       # confusing, and the application usually wants its own re-authentication prompt.
-      respond(env, status: 403, message: "fresh authentication required", redirect: false)
-    rescue ForbiddenError
+      #
+      # The status stays 403. RFC 9470's examples answer 401 but the document requires no
+      # status code, and RFC 6750 asks for 403 on the neighbouring case — so changing it would
+      # be a compatibility decision rather than a compliance one. Recorded in
+      # `blueprints/0026-bearer-challenges.md`.
+      #
+      # `insufficient_user_authentication` is only emitted for a request that actually presented
+      # a bearer credential: RFC 9470 defines it as the authentication event behind *the access
+      # token* being too weak or too old, and a browser session has no access token to say that
+      # about.
+      respond(
+        env, status: 403, message: "fresh authentication required", redirect: false,
+        challenge_error: bearer_presented?(env) ? "insufficient_user_authentication" : nil,
+      )
+    rescue error : ForbiddenError
       # 403, no redirect, and one body for every denial reason: whether the caller is not a
       # member of a tenant or a member with no role is an answer the audit log gets and the
       # client does not.
-      respond(env, status: 403, message: "not permitted", redirect: false)
+      #
+      # `error.challenge_error` is the projection `authorize!` made — `"insufficient_scope"` or
+      # nothing. The reason itself never reaches here.
+      respond(
+        env, status: 403, message: "not permitted", redirect: false,
+        challenge_error: error.challenge_error,
+      )
     rescue CSRFError
       # 403, and never a redirect: the request was refused on its own merits, and bouncing a
       # rejected POST to a login page would suggest the session had ended when it had not.
+      #
+      # No challenge: CSRF is not a bearer-credential problem, and a client that re-presented
+      # the same token would fail the same way.
       respond(env, status: 403, message: "invalid CSRF token", redirect: false)
     end
 
-    private def respond(env : HTTP::Server::Context, status : Int32, message : String, redirect : Bool) : Nil
+    private def respond(
+      env : HTTP::Server::Context,
+      status : Int32,
+      message : String,
+      redirect : Bool,
+      challenge_error : String? = nil,
+    ) : Nil
       login_path = @login_path
 
-      if redirect && !login_path.nil? && !wants_json?(env)
+      # A request that presented a bearer credential is never redirected, whatever it sent in
+      # `Accept`. Content negotiation is a guess about whether a browser is asking; an
+      # `Authorization: Bearer` header is the client saying so outright, and bouncing it to a
+      # login page answers an API call with an HTML page it cannot use.
+      #
+      # Measured before this: a `curl` sending a bearer token and no `Accept` received
+      # `302 Location: /login` (blueprints/0025, HTTP-01).
+      if redirect && !login_path.nil? && !wants_json?(env) && !bearer_presented?(env)
         env.redirect(login_path, status_code: 302)
         return
       end
 
+      challenge(env, challenge_error)
+
       # A generic message. It says what the client must do, and nothing about who exists.
       env.status(status).json({error: message})
+    end
+
+    # RFC 6750 §3 makes this header a MUST for a request that carried no credentials or a token
+    # that did not grant access — which is every branch above that reaches a status rather than a
+    # redirect.
+    #
+    # It is skipped when the application configured no bearer credential at all. Announcing a
+    # scheme the deployment does not accept would be advertising a door that is not there, and a
+    # browser-only application has no use for it.
+    private def challenge(env : HTTP::Server::Context, error : String?) : Nil
+      return unless bearer_configured?
+
+      value = %(Bearer realm="#{@realm}")
+      value += %(, error="#{error}") if error
+
+      # The `scope` attribute is OPTIONAL in RFC 6750 and deliberately omitted: naming the
+      # permission a caller lacks is the one part of a denial this shard keeps to the audit log.
+      env.response.headers["WWW-Authenticate"] = value
+    end
+
+    private def bearer_configured? : Bool
+      app = @app
+      return !app.bearer.nil? if app
+
+      # `configured?` rather than `app`, which raises: this handler is the outermost one, so a
+      # request that arrives before configuration must still get a response rather than a second
+      # exception thrown from the rescue that was handling the first.
+      return false unless KemalIdentity.configured?
+
+      !KemalIdentity.app.bearer.nil?
+    end
+
+    # Whether this request presented a bearer credential at all, which is what separates
+    # "nothing was sent" from "what was sent did not hold".
+    private def bearer_presented?(env : HTTP::Server::Context) : Bool
+      header = env.request.headers["Authorization"]?
+      return false if header.nil?
+
+      scheme, _, credential = header.partition(' ')
+      scheme.compare("Bearer", case_insensitive: true).zero? && !credential.strip.empty?
     end
 
     # Content negotiation, narrowly.

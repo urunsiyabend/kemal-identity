@@ -1043,6 +1043,48 @@ Three refusals, three meanings:
 `Authz::DenialReason` distinguishes "not a member of this tenant" from "a member with no role",
 and a body that varied with it would confirm that a guessed tenant exists.
 
+### The bearer challenge
+
+When your application accepts bearer credentials, refusals carry `WWW-Authenticate` as RFC 6750
+requires:
+
+| Request | Status | Challenge |
+|---|---|---|
+| no credential presented | 401 | `Bearer realm="api"` |
+| a bearer token that did not hold | 401 | `Bearer realm="api", error="invalid_token"` |
+| a token narrower than the action | 403 | `Bearer realm="api", error="insufficient_scope"` |
+| any other denial | 403 | `Bearer realm="api"` |
+| a session that must re-authenticate | 403 | `Bearer realm="api"` |
+
+- **Only an out-of-scope credential is described.** RFC 6750 registers no code for "the account
+  does not hold this permission", and that is the distinction worth keeping: "not a member of this
+  tenant" and "a member with no role" produce byte-identical responses.
+- **`scope=` is never sent.** The attribute is optional, and naming the permission a caller lacks
+  belongs in the audit log.
+- **Nothing is announced if you configured no bearer credential.** A browser-only deployment gets
+  no `Bearer` challenge, because it accepts none.
+- **A session needing re-authentication carries no error code.** RFC 9470's
+  `insufficient_user_authentication` is about the authentication event behind an *access token*,
+  and a browser session has none.
+
+Set the realm with `ErrorHandler.new(realm: "your-api")`.
+
+### API-only: never redirect
+
+By default an unauthenticated browser request is redirected to `login_path`. Two things turn that
+off:
+
+```crystal
+use KemalIdentity::Kemal::ErrorHandler.new(login_path: nil)   # never redirect, anywhere
+```
+
+and, without any configuration, **a request that presented a bearer credential is never
+redirected** — whatever it sent in `Accept`. Content negotiation is a guess about whether a
+browser is asking; an `Authorization: Bearer` header is the client saying so.
+
+`login_path: nil` is app-wide. There is no per-subtree switch yet, so a monolith serving both a
+browser UI and a REST API under one `ErrorHandler` gets one answer for both.
+
 For a template, ask without raising:
 
 ```crystal

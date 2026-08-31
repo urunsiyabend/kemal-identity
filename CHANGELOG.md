@@ -39,6 +39,39 @@ second half of `blueprints/0021-credential-reference.md` and land in this same r
 No new query anywhere. Every value comes from a row that was already read to authenticate the
 request.
 
+### ⚠ Refusals now carry the RFC 6750 challenge
+
+`WWW-Authenticate` was absent from every response. It is a MUST in RFC 6750 §3 for a request that
+carried no credentials or a token that did not grant access, and
+`blueprints/0025-maturity-validation-results.md` measured its absence against a running server.
+
+| Request | Status | Challenge |
+|---|---|---|
+| no credential presented | 401 | `Bearer realm="api"` |
+| a bearer token that did not hold | 401 | `error="invalid_token"` |
+| a token narrower than the action | 403 | `error="insufficient_scope"` |
+| any other denial | 403 | no error code |
+
+Only an out-of-scope credential is described, because RFC 6750 registers no code for "the account
+does not hold this permission" — and that is the distinction worth keeping hidden. `scope=` is
+never sent. Nothing is announced when the application configured no bearer credential.
+
+`ForbiddenError` gains `challenge_error : String?`, set by `authorize!`, and it carries a
+projection rather than the `DenialReason` — `"insufficient_scope"` or `nil`. The handler cannot
+render a reason it was never given.
+
+Set the realm with `ErrorHandler.new(realm: "your-api")`.
+
+**⚠ Breaking: a request that presented a bearer credential is never redirected.** Before this, a
+client sending `Authorization: Bearer` with no `Accept` header received `302 Location: /login`,
+because the redirect was decided purely by content negotiation. It now receives 401 with the
+challenge. If you have a client relying on that redirect, it will see a 401.
+
+Statuses are otherwise unchanged; RFC 6750 asks for 403 on `insufficient_scope`, which is what
+this already did. Whether `FreshAuthenticationRequiredError` should become 401 to match RFC 9470's
+examples is deferred — that document requires no status code, so it is a compatibility decision
+rather than a compliance one. `blueprints/0026-bearer-challenges.md`.
+
 ### The test doubles and shared contracts are published API
 
 ```crystal

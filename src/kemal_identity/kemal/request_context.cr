@@ -155,7 +155,12 @@ module KemalIdentity::Kemal
           raise FreshAuthenticationRequiredError.new("stronger authentication required")
         end
 
-        raise ForbiddenError.new("not permitted")
+        # The projection, and the only place it is made. `Authz::DenialReason` stays here with
+        # the audit line; what crosses into the response layer is one RFC 6750 code or nothing.
+        raise ForbiddenError.new(
+          "not permitted",
+          challenge_error: decision.reason.out_of_scope? ? "insufficient_scope" : nil,
+        )
       end
     end
 

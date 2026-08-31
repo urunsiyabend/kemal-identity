@@ -28,7 +28,7 @@ that way rather than in-process.
 | `before-dev02-fix/` | The three attempts that produced DEV-02's original M2. They no longer run: the fix deleted the paths they used. See that directory's README |
 | `ops02_spec.cr` | OPS-02 — subscribing to events, and the absence of a typed sink |
 | `ops02_failure_spec.cr` | OPS-02 — a sink that raises, in both `Log` dispatch modes |
-| `http01_app.cr` | HTTP-01 — an API-only Kemal app, including a consumer-written RFC 6750 handler |
+| `http01_app.cr` | HTTP-01 — an API-only Kemal app. Now uses the shipped `ErrorHandler`, since the shard emits the challenge itself; the consumer-written version it replaced is in the git history of this file |
 | `shared_limiter.cr` | OPS-01 — a `RateLimiter` over a store more than one process can see |
 | `ops01_spec.cr` | OPS-01 — the shard's own limiter contract plus atomicity, `retry_after`, key hygiene and store failure |
 | `ops01_setup.cr`, `ops01_worker.cr` | OPS-01 — the cross-process check. **Not a spec**: see below |

@@ -33,28 +33,7 @@ KemalIdentity.configure(
 ISSUED = KemalIdentity.app.api!.issue(ACCOUNTS.find_by_id("acct-1").not_nil!, "probe")
 File.write("#{__DIR__}/../token.txt", ISSUED.token.reveal)
 
-# HTTP-01: can a consumer add the RFC 6750 challenge without reopening a core class?
-# The shard's own ErrorHandler is documented as replaceable — "an application that wants its own
-# behaviour simply does not register this and rescues the two classes itself".
-class BearerErrorHandler < Kemal::Handler
-  def call(env)
-    call_next(env)
-  rescue KemalIdentity::NotAuthenticatedError
-    challenge(env, 401, "invalid_token", "authentication required")
-  rescue KemalIdentity::FreshAuthenticationRequiredError
-    # RFC 9470's step-up challenge, which the shard cannot emit for us today.
-    challenge(env, 401, "insufficient_user_authentication", "fresh authentication required")
-  rescue KemalIdentity::ForbiddenError
-    challenge(env, 403, "insufficient_scope", "not permitted")
-  end
-
-  private def challenge(env, status : Int32, error : String, message : String)
-    env.response.headers["WWW-Authenticate"] = %(Bearer realm="api", error="#{error}")
-    env.status(status).json({error: message})
-  end
-end
-
-use BearerErrorHandler.new
+use KemalIdentity::Kemal::ErrorHandler.new
 use KemalIdentity::Kemal::AuthenticationHandler.new
 
 # A pure REST API. No HTML, no login page, no browser.

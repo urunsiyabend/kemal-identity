@@ -1018,6 +1018,10 @@ private def issue_scoped_token(scopes : Array(String)?) : KemalIdentity::ApiToke
   KemalIdentity.app.api!.issue(ACCOUNTS.find_by_id("a1").or_fail, "scoped", scopes: scopes)
 end
 
+private def challenge_header : String?
+  response.headers["WWW-Authenticate"]?
+end
+
 private def bearer(token : String) : HTTP::Headers
   HTTP::Headers{"Authorization" => "Bearer #{token}"}
 end
@@ -1072,7 +1076,9 @@ describe "bearer tokens over HTTP" do
 
     KemalIdentity.app.api!.revoke(issued.record.id)
 
-    request("GET", "/api/me", bearer(issued.token.reveal)).status_code.should eq(302)
+    # 401, not a redirect: a request that presented a bearer credential is an API client
+    # saying so, whatever it sent in `Accept`.
+    request("GET", "/api/me", bearer(issued.token.reveal)).status_code.should eq(401)
   end
 
   it "rejects garbage without raising" do
@@ -1176,14 +1182,14 @@ describe "JWTs over HTTP" do
       secret: KemalIdentity::Secret.new("z" * 64)
     )
 
-    request("GET", "/api/me", bearer(forged)).status_code.should eq(302)
+    request("GET", "/api/me", bearer(forged)).status_code.should eq(401)
   end
 
   # The purpose claim, reaching all the way out to the response: a token minted to authorise a
   # password reset must not authenticate an API request.
   it "turns away a token minted for another flow" do
     request("GET", "/api/me", bearer(jwt_for(purpose: "password-reset")))
-      .status_code.should eq(302)
+      .status_code.should eq(401)
   end
 
   it "turns away an unsigned token" do
@@ -1191,7 +1197,7 @@ describe "JWTs over HTTP" do
       KemalIdentity::Testing::JWTForge.claims(now: TEST_CLOCK.now)
     )
 
-    request("GET", "/api/me", bearer(unsigned)).status_code.should eq(302)
+    request("GET", "/api/me", bearer(unsigned)).status_code.should eq(401)
   end
 
   # An automated client cannot re-authenticate interactively, so a JWT is no freer than an
@@ -1209,7 +1215,7 @@ describe "JWTs over HTTP" do
   # The chain falls through on shape and on shape only. A rejected opaque token is *recognised*
   # and rejected, so it must not get a second opinion from the JWT validator.
   it "does not let a rejected opaque token fall through to the JWT validator" do
-    request("GET", "/api/me", bearer("ki_" + "a" * 43)).status_code.should eq(302)
+    request("GET", "/api/me", bearer("ki_" + "a" * 43)).status_code.should eq(401)
   end
 
   it "exempts a JWT-only request from CSRF, as it does an opaque token" do
@@ -1316,6 +1322,92 @@ describe "the second factor over HTTP" do
     session = log_in
 
     request("GET", "/vault", cookies("kemal_identity=#{session}")).status_code.should eq(403)
+  end
+end
+
+# RFC 6750 §3 makes the challenge a MUST for a request that carried no credentials or a token
+# that did not grant access. Before v0.8 the header was absent from every response, which
+# blueprints/0025 measured against a running server (HTTP-01).
+describe "the RFC 6750 challenge" do
+  before_each { AUTHZ_STORE.remove_account("a1") }
+
+  it "answers an anonymous API request with a challenge and no error code" do
+    # "If the request lacks any authentication information ... SHOULD NOT include an error code."
+    get "/api/me", headers: HTTP::Headers{"Accept" => "application/json"}
+
+    response.status_code.should eq(401)
+    challenge_header.should eq(%(Bearer realm="api"))
+  end
+
+  it "names a presented credential that did not hold as invalid_token" do
+    get "/api/me", headers: bearer("ki_not-a-real-token")
+
+    response.status_code.should eq(401)
+    challenge_header.should eq(%(Bearer realm="api", error="invalid_token"))
+  end
+
+  # The one denial reason RFC 6750 has a code for, and the only one this shard reports.
+  it "names an out-of-scope credential as insufficient_scope" do
+    AUTHORIZER.grant("a1", "finance")
+    token = issue_scoped_token([] of String).token.reveal
+
+    get "/reports", headers: bearer(token)
+
+    response.status_code.should eq(403)
+    challenge_header.should eq(%(Bearer realm="api", error="insufficient_scope"))
+  end
+
+  # Every other denial gets the challenge and no error code: whether the caller is not a member
+  # of a tenant or a member with no role stays an audit-log answer.
+  it "reports no error code for a denial that is not about scope" do
+    session = log_in
+
+    get "/invoices", headers: cookies("kemal_identity=#{session}")
+
+    response.status_code.should eq(403)
+    challenge_header.should eq(%(Bearer realm="api"))
+  end
+
+  it "answers 'not a member' and 'a member with no role' with the same challenge" do
+    session = log_in
+    AUTHORIZER.grant("a1", "reader")
+
+    get "/tenants/globex/invoices", headers: cookies("kemal_identity=#{session}")
+    outsider = {response.status_code, challenge_header, response.body}
+
+    AUTHORIZER.add_member("a1", "globex")
+    get "/tenants/globex/invoices", headers: cookies("kemal_identity=#{session}")
+
+    {response.status_code, challenge_header, response.body}.should eq(outsider)
+  end
+
+  describe "step-up" do
+    # RFC 9470 defines insufficient_user_authentication as the authentication event behind *the
+    # access token* being too weak or too old. A browser session has no access token, so saying
+    # it about one would be a claim about something that is not there.
+    it "reports no bearer error for a session that needs re-authentication" do
+      token = log_in
+      TEST_CLOCK.advance(10.minutes)
+
+      get "/step-up/email", headers: cookies("kemal_identity=#{token}")
+
+      response.status_code.should eq(403)
+      challenge_header.should eq(%(Bearer realm="api"))
+
+      TEST_CLOCK.travel_to(KemalIdentity::Testing::FIXED_NOW)
+    end
+  end
+
+  # The scope attribute is OPTIONAL in RFC 6750, and naming the permission a caller lacks is the
+  # part of a denial this shard keeps to the audit log.
+  it "never names the permission in the challenge" do
+    session = log_in
+
+    get "/invoices", headers: cookies("kemal_identity=#{session}")
+
+    sent = challenge_header.or_fail("a denial must still carry the challenge")
+    sent.should_not contain("scope=")
+    sent.should_not contain("invoices")
   end
 end
 

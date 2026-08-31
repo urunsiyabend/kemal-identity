@@ -44,5 +44,30 @@ module KemalIdentity
   # The message must not name the permission, the tenant, or the reason. `Authz::DenialReason`
   # exists for the audit log; a response that varies with it tells an attacker whether the
   # tenant they guessed exists and whether they are inside it.
-  class ForbiddenError < Error; end
+  class ForbiddenError < Error
+    # The RFC 6750 error code this denial may be reported as, or `nil` for every denial that
+    # must not be described to the caller at all.
+    #
+    # ### Why this is not the `DenialReason`
+    #
+    # The handler needs one bit of protocol classification, not the six-way taxonomy the audit
+    # trail needs. Carrying `Authz::DenialReason` here would put `NotAMember` and
+    # `TenantMismatch` one `to_s` away from a response header, and the thing that keeps a
+    # denial from confirming that a guessed tenant exists would then be a convention rather
+    # than a boundary.
+    #
+    # So `authorize!` projects instead: `DenialReason::OutOfScope` becomes
+    # `"insufficient_scope"`, and **everything else becomes `nil`**. The handler cannot leak a
+    # reason it was never given.
+    #
+    # Only `OutOfScope` maps, because RFC 6750 registers no code for "the account does not hold
+    # this permission" — and that is the one distinction worth keeping hidden. `insufficient_scope`
+    # says the presented credential is narrower than the action, which RFC 6750 §3.1 defines as
+    # information the resource server tells the client on purpose.
+    getter challenge_error : String?
+
+    def initialize(message : String? = nil, @challenge_error : String? = nil)
+      super(message)
+    end
+  end
 end

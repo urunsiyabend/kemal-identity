@@ -39,7 +39,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 |---|---|---|---|---|
 | TOK-01 | Very high | M4 | **M3** | Ships and works; no packaged contract test or worked example for a consumer |
 | AUT-03 | Very high | M4 | **M3** | As TOK-01 — same machinery, same gap |
-| HTTP-01 | Very high | M4 | **M3** | `WWW-Authenticate` is not sent, and cannot be sent *correctly* by a consumer |
+| HTTP-01 | Very high | M4 | **M3 → M4** | Fixed after measurement: the shard sends the challenge |
 | DEV-02 | Very high | M4 | **M2 → M4** | Fixed after measurement: `require "kemal_identity/testing"` |
 | OPS-02 | Very high | M4 | **M2** | No typed sink; two undocumented failure modes when the sink throws |
 | OPS-01 | Very high | M4 | **M3** | The shared contract's concurrency example passes for an adapter that over-allows across processes |
@@ -49,7 +49,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | OPS-04 | High | M3 | **M3** | One repository of eight validated; reaching the contract depends on DEV-02 |
 | OPS-06 | High | M3 | **M3** | Shipped adapters hard-code their own table names |
 | OPS-07 | High | M3 | **M3** | Nothing in CI guards the property against regression |
-| DEV-01 | High | M3 | **M3** | Correct `WWW-Authenticate` needs a denial reason the consumer is not given |
+| DEV-01 | High | M3 | **M3 → M4** | Fixed with HTTP-01: the shard emits the accurate challenge, so a replacement handler no longer has to guess |
 | HTTP-03 | High | M3 | **M2** | An invalid cookie masks a valid bearer; precedence was undocumented and is not per-route |
 | JWT-01 | High | M3 | **M2** | Two validators cannot be chained, and there is no bounded way to read `iss` first |
 | JWT-02 | High | M3 | **M3** | — |
@@ -167,6 +167,47 @@ rather than documenting the workaround.
 **Smallest change that would reach M4:** send `WWW-Authenticate` from `ErrorHandler`, derived
 from the denial reason it already has; and let a route subtree declare itself API-only rather
 than inferring it from `Accept`.
+
+### Fixed — re-measured at M4
+
+The first half landed and this scenario was re-run against the same running server, with the
+shard's own `ErrorHandler` rather than a consumer's replacement:
+
+| Request | Before | After |
+|---|---|---|
+| no credential, `Accept: json` | 401, no header | 401, `Bearer realm="api"` |
+| invalid bearer, no `Accept` | **302 → /login** | **401**, `error="invalid_token"` |
+| no credential, no `Accept` (browser app) | 302 → /login | unchanged |
+
+The redirect row was not in the plan. It came out of a failing spec: a client presenting a bearer
+token and no `Accept` header was being redirected, because the redirect was decided purely by
+content negotiation. Content negotiation guesses whether a browser is asking; an
+`Authorization: Bearer` header is the client saying so. Five existing examples had asserted that
+302 — none of their comments defended it, and all five were named for the refusal rather than the
+status, so 401 is the more accurate expression of what they meant.
+
+The accuracy problem this scenario identified — that only the shard knows the denial reason, so
+only the shard can pick the right `error=` code — was solved without handing the reason to the
+response layer. `ForbiddenError` carries a **projection**: `"insufficient_scope"` for
+`DenialReason::OutOfScope`, `nil` for everything else. The handler cannot render a reason it was
+never given, which is a boundary rather than a convention.
+`blueprints/0026-bearer-challenges.md` records the RFC reading behind each row, including two
+gates that came from the specifications rather than from the code: the challenge is announced only
+where the application accepts bearer credentials, and `insufficient_user_authentication` only
+where a bearer credential was actually presented — RFC 9470 defines it as a statement about the
+authentication event behind an access token, and a browser session has none.
+
+**M4 is claimed for the challenge, and the remaining half is named rather than closed.** API-only
+behaviour is still app-wide: `ErrorHandler.new(login_path: nil)` turns the redirect off
+everywhere, and there is no per-subtree switch — the same parameter HTTP-02 wants on `PathGuard`.
+A monolith serving a browser UI and a REST API under one handler gets one answer for both. What
+changed is that the common case no longer needs it: a bearer-presenting request is never
+redirected regardless.
+
+**DEV-01 moves with it.** Its one remaining gap was that a consumer's replacement handler could
+not choose between `insufficient_scope` and anything else. It no longer has to: the shipped
+handler is accurate, and a replacement that wants its own envelope still gets the three typed
+exceptions plus `challenge_error` on the one that has it.
 
 ---
 
