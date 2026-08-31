@@ -1,11 +1,11 @@
 module KemalIdentity::Postgres
-  # `OIDC::LinkRepository` over `auth_external_identities`.
+  # `Federation::LinkRepository` over `auth_external_identities`.
   #
   # The unique index on `(issuer, subject)` is doing the security work here: without it one
   # provider account can be attached to two local ones, and whichever row is found first decides
   # who somebody logs in as. A duplicate is surfaced as an `InfrastructureError` rather than
   # absorbed.
-  class LinkRepository < OIDC::LinkRepository
+  class LinkRepository < Federation::LinkRepository
     UNIQUE_VIOLATION = "23505"
 
     COLUMNS = "id, account_id, issuer, subject, created_at, last_authenticated_at"
@@ -13,7 +13,7 @@ module KemalIdentity::Postgres
     def initialize(@db : DB::Database)
     end
 
-    def link(record : OIDC::Link) : Nil
+    def link(record : Federation::Link) : Nil
       @db.exec(<<-SQL,
         INSERT INTO auth_external_identities (#{COLUMNS})
         VALUES ($1, $2, $3, $4, $5, $6)
@@ -26,14 +26,14 @@ module KemalIdentity::Postgres
       raise InfrastructureError.new("external identity is already linked")
     end
 
-    def find(issuer : String, subject : String) : OIDC::Link?
+    def find(issuer : String, subject : String) : Federation::Link?
       @db.query_one?(<<-SQL, issuer, subject) { |row| read(row) }
         SELECT #{COLUMNS} FROM auth_external_identities
          WHERE issuer = $1 AND subject = $2
         SQL
     end
 
-    def for_account(account_id : String) : Array(OIDC::Link)
+    def for_account(account_id : String) : Array(Federation::Link)
       @db.query_all(<<-SQL, account_id) { |row| read(row) }
         SELECT #{COLUMNS} FROM auth_external_identities
          WHERE account_id = $1
@@ -59,8 +59,8 @@ module KemalIdentity::Postgres
       result.rows_affected == 1
     end
 
-    private def read(row : DB::ResultSet) : OIDC::Link
-      OIDC::Link.new(
+    private def read(row : DB::ResultSet) : Federation::Link
+      Federation::Link.new(
         id: row.read(String),
         account_id: row.read(String),
         issuer: row.read(String),

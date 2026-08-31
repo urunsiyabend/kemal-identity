@@ -73,48 +73,4 @@ module KemalIdentity::OIDC
       to_s(io)
     end
   end
-
-  # What a provider asserted about somebody, once their ID token verified.
-  #
-  # ### `(issuer, subject)` is the identity. The email is not.
-  #
-  # `docs/06-roadmap.md`: "The persistent key for an external identity is `(issuer, subject)` —
-  # never email." Two reasons, and both bite in production:
-  #
-  # 1. **Emails change.** People marry, change surname, leave a company and come back. A row
-  #    keyed on an address becomes a different person's row, or a stranded orphan.
-  # 2. **Emails are claimed, not proved.** A provider that lets somebody set an unverified
-  #    address and hands it to you in a token has just let them claim to be whoever owns that
-  #    address at *your* service. Matching on it is account takeover with extra steps.
-  #
-  # `subject` is stable within an issuer and meaningless outside it, which is why both halves
-  # are the key. Use `email` to *display*, and to pre-fill a form somebody then confirms —
-  # never to look an account up.
-  struct Identity
-    getter issuer : String
-    getter subject : String
-    getter email : String?
-
-    # Whether the provider claims to have verified the address. A claim about a claim: false or
-    # absent means the address proves nothing at all, and true means only that this provider
-    # says so.
-    getter? email_verified : Bool
-
-    getter name : String?
-
-    # Every claim the ID token carried, verified but uninterpreted.
-    getter claims : Hash(String, ::JSON::Any)
-
-    def initialize(
-      @issuer : String,
-      @subject : String,
-      @claims : Hash(String, ::JSON::Any),
-      @email : String? = nil,
-      @email_verified : Bool = false,
-      @name : String? = nil,
-    )
-      raise ArgumentError.new("issuer must not be empty") if @issuer.empty?
-      raise ArgumentError.new("subject must not be empty") if @subject.empty?
-    end
-  end
 end

@@ -31,7 +31,7 @@ require "./contract/action_token_repository_contract"
 require "./contract/remember_repository_contract"
 require "./contract/api_token_repository_contract"
 require "./contract/mfa_repository_contract"
-require "./contract/oidc_link_repository_contract"
+require "./contract/federation_link_repository_contract"
 require "./contract/authz_repository_contract"
 
 module KemalIdentity::SpecHelper

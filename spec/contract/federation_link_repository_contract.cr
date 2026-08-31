@@ -1,11 +1,11 @@
-# Shared spec for `KemalIdentity::OIDC::LinkRepository`. Every implementation runs it.
-def it_behaves_like_a_link_repository(&build : -> KemalIdentity::OIDC::LinkRepository)
+# Shared spec for `KemalIdentity::Federation::LinkRepository`. Every implementation runs it.
+def it_behaves_like_a_link_repository(&build : -> KemalIdentity::Federation::LinkRepository)
   now = KemalIdentity::SpecHelper::FIXED_NOW
   google = "https://accounts.google.com"
   okta = "https://acme.okta.com"
 
   link = ->(id : String, account_id : String, issuer : String, subject : String) do
-    KemalIdentity::OIDC::Link.new(
+    KemalIdentity::Federation::Link.new(
       id: id, account_id: account_id, issuer: issuer, subject: subject, created_at: now
     )
   end
@@ -82,12 +82,12 @@ def it_behaves_like_a_link_repository(&build : -> KemalIdentity::OIDC::LinkRepos
     it "lists an account's links, oldest first" do
       repo = build.call
       repo.link(
-        KemalIdentity::OIDC::Link.new(
+        KemalIdentity::Federation::Link.new(
           id: "l1", account_id: "a1", issuer: google, subject: "sub-1", created_at: now
         )
       )
       repo.link(
-        KemalIdentity::OIDC::Link.new(
+        KemalIdentity::Federation::Link.new(
           id: "l2", account_id: "a1", issuer: okta, subject: "sub-2", created_at: now + 1.hour
         )
       )

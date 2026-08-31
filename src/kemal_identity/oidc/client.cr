@@ -116,7 +116,7 @@ module KemalIdentity::OIDC
       state : String?,
       code : String?,
       error : String? = nil,
-    ) : Identity | Failed
+    ) : Federation::Identity | Failed
       if refusal = refuse_callback(pending, state, code, error)
         return refusal
       end
@@ -140,12 +140,16 @@ module KemalIdentity::OIDC
         return failure
       end
 
-      identity = Identity.new(
+      identity = Federation::Identity.new(
         issuer: @provider.issuer,
         subject: validated.principal.subject,
         claims: claims,
         email: claims["email"]?.try(&.as_s?),
-        email_verified: claims["email_verified"]?.try(&.as_bool?) || false,
+        # No `|| false`: an absent claim and a claim of `false` are different assertions, and
+        # `Federation::Identity#email_verified` keeps them apart. A claim that is present but
+        # not a boolean — some issuers send the string `"true"` — reads as nothing said, which
+        # `#email_verified?` treats as unverified.
+        email_verified: claims["email_verified"]?.try(&.as_bool?),
         name: claims["name"]?.try(&.as_s?),
       )
 

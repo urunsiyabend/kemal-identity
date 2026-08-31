@@ -73,7 +73,7 @@ private def id_token(
   audience : ::JSON::Any? = nil,
   issuer : String? = ISSUER,
   email : String? = "ada@example.com",
-  email_verified : Bool = true,
+  email_verified : Bool? = true,
   extra : Hash(String, ::JSON::Any) = {} of String => ::JSON::Any,
   kid : String? = "rsa",
 ) : String
@@ -86,7 +86,7 @@ private def id_token(
   claims["exp"] = ::JSON::Any.new((now + 1.hour).to_unix)
   claims["iat"] = ::JSON::Any.new(now.to_unix)
   claims["email"] = ::JSON::Any.new(email) if email
-  claims["email_verified"] = ::JSON::Any.new(email_verified)
+  claims["email_verified"] = ::JSON::Any.new(email_verified) unless email_verified.nil?
   claims.merge!(extra)
 
   KemalIdentity::Testing::JWTForge.encode_rsa(claims, kid: kid)
@@ -199,13 +199,62 @@ describe "completing a flow" do
 
     identity = complete_with(client, endpoint, clock)
 
-    identity.should be_a(KemalIdentity::OIDC::Identity)
+    identity.should be_a(KemalIdentity::Federation::Identity)
 
-    asserted = identity.as(KemalIdentity::OIDC::Identity)
+    asserted = identity.as(KemalIdentity::Federation::Identity)
     asserted.issuer.should eq(ISSUER)
     asserted.subject.should eq("provider-subject-1")
     asserted.email.should eq("ada@example.com")
     asserted.email_verified?.should be_true
+  end
+
+  # `blueprints/0024`. Three states, because "the issuer said no" and "the issuer said nothing"
+  # are different assertions — and a protocol with no such concept says nothing. Collapsing them
+  # makes a policy of *"only accept issuers that verify addresses"* unwritable.
+  describe "what the issuer said about the address" do
+    it "keeps an absent claim apart from a claim of false" do
+      client, endpoint, clock = oidc_harness
+      complete_with(client, endpoint, clock, email_verified: nil)
+        .as(KemalIdentity::Federation::Identity)
+        .email_verified.should be_nil
+
+      client, endpoint, clock = oidc_harness
+      complete_with(client, endpoint, clock, email_verified: false)
+        .as(KemalIdentity::Federation::Identity)
+        .email_verified.should be_false
+    end
+
+    # The security answer is one Bool, and both of the first two states are "no". Written out
+    # rather than left to `getter?`, which over a `Bool?` returns `Bool?`.
+    it "reads both as unverified for the security decision" do
+      KemalIdentity::Federation::Identity
+        .new(issuer: "https://i", subject: "s", claims: {} of String => ::JSON::Any)
+        .email_verified?.should be_false
+
+      KemalIdentity::Federation::Identity
+        .new(
+          issuer: "https://i", subject: "s", claims: {} of String => ::JSON::Any,
+          email_verified: false
+        ).email_verified?.should be_false
+
+      KemalIdentity::Federation::Identity
+        .new(
+          issuer: "https://i", subject: "s", claims: {} of String => ::JSON::Any,
+          email_verified: true
+        ).email_verified?.should be_true
+    end
+
+    # A boolean claim that is not a boolean — some issuers send the string "true". Nothing said,
+    # which reads as unverified rather than as trusted.
+    it "treats a non-boolean claim as nothing said" do
+      identity = KemalIdentity::Federation::Identity.new(
+        issuer: "https://i", subject: "s", claims: {} of String => ::JSON::Any,
+        email_verified: ::JSON::Any.new("true").as_bool?
+      )
+
+      identity.email_verified.should be_nil
+      identity.email_verified?.should be_false
+    end
   end
 
   it "sends the PKCE verifier and the redirect URI at the exchange" do
@@ -237,7 +286,7 @@ describe "completing a flow" do
   it "keeps nothing but the identity, discarding the provider's access and refresh tokens" do
     client, endpoint, clock = oidc_harness
 
-    identity = complete_with(client, endpoint, clock).as(KemalIdentity::OIDC::Identity)
+    identity = complete_with(client, endpoint, clock).as(KemalIdentity::Federation::Identity)
 
     identity.claims.has_key?("access_token").should be_false
     identity.claims.has_key?("refresh_token").should be_false

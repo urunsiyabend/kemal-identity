@@ -87,6 +87,16 @@ already linked raises — **including to the same account** — because silently
 link is how one provider account ends up attached to two local ones, and then whichever row is
 found first decides who somebody logs in as.
 
+Two things about this key were sharpened in v0.8, and `blueprints/0024-federation-namespace.md`
+carries both. The index prevents one external identity reaching two accounts; it does *not* merge
+one person's identities across providers, and was never going to — different issuers are
+different rows, both of which may point at the same account, which is what a person linked to
+Google and to a corporate IdP looks like. And whether `(issuer, subject)` is a single namespace
+*across protocols* is deliberately left open: OIDC's `(iss, sub)` and SAML's `(EntityID, NameID)`
+are independent identifier spaces whose values can coincide, and neither remedy — one canonical
+namespace, or a protocol discriminator — is safe to pick before there is a second protocol to
+pick it against.
+
 ### 6. The provider's access and refresh tokens are dropped
 
 The roadmap: "not stored at all unless the application actually calls the provider's API, and

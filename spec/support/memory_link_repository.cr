@@ -1,13 +1,13 @@
 module KemalIdentity::Testing
-  # In-memory `OIDC::LinkRepository`, passing the same contract the database adapters must.
-  class MemoryLinkRepository < KemalIdentity::OIDC::LinkRepository
+  # In-memory `Federation::LinkRepository`, passing the same contract the database adapters must.
+  class MemoryLinkRepository < KemalIdentity::Federation::LinkRepository
     def initialize
       @mutex = Mutex.new
-      @links = {} of String => KemalIdentity::OIDC::Link
+      @links = {} of String => KemalIdentity::Federation::Link
       @by_pair = {} of String => String
     end
 
-    def link(record : KemalIdentity::OIDC::Link) : Nil
+    def link(record : KemalIdentity::Federation::Link) : Nil
       @mutex.synchronize do
         key = pair(record.issuer, record.subject)
 
@@ -24,14 +24,14 @@ module KemalIdentity::Testing
       end
     end
 
-    def find(issuer : String, subject : String) : KemalIdentity::OIDC::Link?
+    def find(issuer : String, subject : String) : KemalIdentity::Federation::Link?
       @mutex.synchronize do
         id = @by_pair[pair(issuer, subject)]?
         id.nil? ? nil : @links[id]?
       end
     end
 
-    def for_account(account_id : String) : Array(KemalIdentity::OIDC::Link)
+    def for_account(account_id : String) : Array(KemalIdentity::Federation::Link)
       @mutex.synchronize do
         @links.each_value
           .select { |record| record.account_id == account_id }
@@ -57,7 +57,7 @@ module KemalIdentity::Testing
         existing = @links[id]?
         return false if existing.nil?
 
-        @links[id] = KemalIdentity::OIDC::Link.new(
+        @links[id] = KemalIdentity::Federation::Link.new(
           id: existing.id,
           account_id: existing.account_id,
           issuer: existing.issuer,

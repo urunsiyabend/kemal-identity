@@ -14,13 +14,20 @@ different lifecycles. Kemal Identity keeps three separate concepts:
 |---|---|---|---|
 | **RequestAuthenticator** | Who is making *this request*? | Every request | `authenticate(...) : AuthenticationResult` |
 | **CredentialAuthenticator** | Does this secret prove this identity? | At login only | `authenticate(identifier, secret) : AuthenticationResult` |
-| **IdentityProvider** | What does an external issuer assert? | Redirect + callback | `authorization_uri(...)` / `exchange_callback(...)` |
+| **Federation client** | What does an external issuer assert? | Redirect + callback | `authorize(...)` / `complete(...)`, returning `Federation::Identity` |
 
 A `SessionCookie` reads an already-established session. A `Password` verifies a
-credential and *establishes* one. An `OIDCProvider` runs a two-leg browser
+credential and *establishes* one. An `OIDC::Client` runs a two-leg browser
 protocol and returns a foreign identity that then has to be mapped to a local
 account. They share a return type at the point where they converge — a
 `Principal` — and nothing else.
+
+The third row is deliberately not an abstract contract. It was named
+`IdentityProvider` here before federation was built, and when it was built the
+honest shape turned out to be one client per protocol over a shared identity
+model — `Federation::Identity` and `Federation::LinkRepository`, which every
+protocol writes through. `blueprints/0024-federation-namespace.md` records why
+inventing the interface first would have meant designing SAML's without SAML.
 
 ## Layers
 

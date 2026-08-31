@@ -1,4 +1,4 @@
-module KemalIdentity::OIDC
+module KemalIdentity::Federation
   # A stored association between an external identity and a local account.
   #
   # `Identity` is what a provider asserted during one flow. This is what the application decided
@@ -39,12 +39,28 @@ module KemalIdentity::OIDC
     end
   end
 
-  # Storage for `Link`s.
+  # Storage for `Link`s, shared by every federation protocol.
   #
   # Small and boring on purpose. The security in federated login is in the flow — `state`,
-  # `nonce`, PKCE, the ID token's `iss` and `aud` — and by the time anything reaches here the
+  # `nonce`, PKCE, the assertion's `iss` and `aud` — and by the time anything reaches here the
   # provider's assertion has already been verified. What this layer has to get right is the
   # uniqueness constraint, which is doing more work than it looks like.
+  #
+  # ### One repository for all protocols, and the reason is `#for_account`
+  #
+  # A second protocol added later must write here rather than to a table of its own. Not because
+  # of the uniqueness constraint — that holds inside any one table, and two protocols naturally
+  # produce different issuers, so splitting them would not violate it. The reason is the two
+  # methods that ask a question *about an account* rather than about a link:
+  #
+  # * `#for_account` is "which providers is this account linked to". Answered from half the rows,
+  #   it is a management screen that lies.
+  # * `#unlink` is guarded by the application against removing somebody's last way in. That check
+  #   reads `#for_account`, so against a split store it can strand an account with no login
+  #   method left — which is the one outcome unlinking must never produce.
+  #
+  # Both break silently and both break in the direction of losing access, which is why this is a
+  # `Federation` type and not an `OIDC` one (`blueprints/0024-federation-namespace.md`).
   abstract class LinkRepository
     # Records that `(issuer, subject)` is this account.
     #

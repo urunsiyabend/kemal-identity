@@ -13,7 +13,7 @@ module KemalIdentity::JWT
     #
     # **Verified, not trusted.** The signature says the issuer wrote these; it says nothing
     # about whether `email_verified` is true or whether `groups` should mean anything to your
-    # application. Read `OIDC::Identity` before using any of them as an identifier.
+    # application. Read `Federation::Identity` before using any of them as an identifier.
     getter claims : Hash(String, ::JSON::Any)
 
     def initialize(@principal : Principal, @claims : Hash(String, ::JSON::Any))

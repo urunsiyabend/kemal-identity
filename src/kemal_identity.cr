@@ -48,9 +48,11 @@ require "./kemal_identity/api_tokens/token"
 require "./kemal_identity/api_tokens/repository"
 require "./kemal_identity/api_tokens/service"
 
+require "./kemal_identity/federation/identity"
+require "./kemal_identity/federation/link"
+
 require "./kemal_identity/oidc/provider"
 require "./kemal_identity/oidc/pending"
-require "./kemal_identity/oidc/link"
 require "./kemal_identity/oidc/client"
 require "./kemal_identity/oidc/pending_codec"
 

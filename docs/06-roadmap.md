@@ -241,7 +241,7 @@ is. `blueprints/0020-api-freeze-blockers.md` records the scan that separated the
 | `Authorizer#decide` receives a resource and a context | **done** — `blueprints/0022-authorization-context-and-denials.md`. `Authz::Context` carries tenant, resource, environment attributes and credential; `Authorizable` is a two-method module frozen by the suite's compilation, since Crystal cannot store an `Object` in a struct at all |
 | A denial names its own reason, and says whether re-authenticating would help | **done** — the second half of 0022. `DenialReason::Custom` plus a free-form `code`, and `step_up?` split off as the single authority for the control flow. Named constructors fix the flag, so `RBAC` cannot forget it |
 | `RateLimiter` can report that its store is unavailable | **done** — `blueprints/0023-rate-limiter-store-failure.md`. `Verdict.unavailable`, fail-closed at all five call sites, and `FailOpenRateLimiter` for a path that would rather stay up — per endpoint, since each service takes its own limiter |
-| `IdentityProvider` is written, or removed from the freeze list | **not started** — the type is named in the freeze list below and does not exist. `OIDC::Provider` is a struct with a fixed constructor and no abstract ancestor |
+| `IdentityProvider` is written, or removed from the freeze list | **done** — removed, and the protocol-neutral half of federation moved out of the `OIDC` namespace instead. `blueprints/0024-federation-namespace.md`: a second protocol added after 1.0 is purely additive, so no interface had to be invented for one that does not exist yet |
 | ~~`AuthenticatorChain` stops foreclosing a request-aware authenticator~~ | **withdrawn** — it was never a blocker. A defaulted overload carrying request attributes can be added to `RequestAuthenticator` after 1.0 without breaking any implementor, measured rather than assumed, so DPoP and trusted-proxy identity stay reachable. `blueprints/0020` decision 7 records what the reasoning got wrong |
 
 Deliberately **not** in v0.8, because none of it requires a frozen signature to move: the
@@ -266,12 +266,14 @@ The criterion is contract stability, not feature count.
 | Persistence | `AccountRepository`, `Accounts::Account`, `SessionRepository`, `Sessions::Record`, `Sessions::Lookup` |
 | Authorization | `Authorizer`, `Authz::Decision` and its two variants, the denial-reason model |
 | Supporting contracts | `RateLimiter` and `Verdict`, `Notifier`, `Clock`, `RandomSource` |
-| Federation | `IdentityProvider`, if v0.8 writes it |
+| Federation | `Federation::Identity`, `Federation::Link`, `Federation::LinkRepository`, `OIDC::Provider`, `OIDC::Client`, `OIDC::Pending`, `OIDC::PendingCodec` |
 | HTTP | `env.auth` |
 
 A frozen method freezes its argument and return types with it, which is why the argument and
 return types are named here rather than left implied. The original list in this section was
-shorter and named `IdentityProvider`, which did not exist — see `blueprints/0020` decision 1.
+shorter and named `IdentityProvider`, which did not exist — see `blueprints/0020` decision 1. It
+is gone: `blueprints/0024` establishes that a second federation protocol needs no interface above
+the two clients, only a shared identity model outside either protocol's namespace.
 
 **Not frozen, on purpose.** Provider lists, ORM and driver adapters, TOTP internals, the
 shipped `RBAC` implementation, migration files, and everything under `KemalIdentity::Kemal`

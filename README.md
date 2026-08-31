@@ -747,7 +747,7 @@ get "/auth/callback" do |env|
   )
 
   case result
-  in KemalIdentity::OIDC::Identity
+  in KemalIdentity::Federation::Identity
     account = account_for(result)          # yours — see below
     env.auth.start!(
       KemalIdentity::Principal.new(
@@ -766,7 +766,7 @@ end
 ### `(issuer, subject)` is the identity. The email is not.
 
 ```crystal
-def account_for(identity : KemalIdentity::OIDC::Identity)
+def account_for(identity : KemalIdentity::Federation::Identity)
   link = LINKS.find(identity.issuer, identity.subject)
   return accounts.find_by_id(link.account_id) if link
   # ... otherwise: create an account, or ask the person to confirm a merge.
@@ -784,6 +784,27 @@ end
 Use `identity.email` to display, and to pre-fill a form somebody then confirms. Never to find an
 account. `identity.email_verified?` is a claim about a claim: it means only that this provider
 says so.
+
+That predicate answers a `Bool` and treats "not verified" and "the issuer said nothing" alike,
+which is the only safe reading for a decision. When you need to tell them apart —
+*"only accept issuers that verify addresses"* — read the field instead:
+
+| `identity.email_verified` | Meaning |
+|---|---|
+| `nil` | the issuer asserted nothing. Normal for a protocol with no such concept, and for a claim that arrived as something other than a boolean |
+| `false` | the issuer said the address is **not** verified |
+| `true` | the issuer says it verified it |
+
+### `Federation::` versus `OIDC::`
+
+Protocol mechanics live under `OIDC` — `Provider`, `Client`, `Pending`, `PendingCodec`. The
+durable identity model lives under `Federation` — `Identity`, `Link`, `LinkRepository` — because
+none of it is specific to OpenID Connect, and a second protocol added later has to share it.
+
+Sharing `LinkRepository` in particular is not optional. `for_account` answers "which providers is
+this account linked to", and the guard that stops somebody unlinking their last remaining way in
+reads it. Against a second table it would answer from half the rows and could strand an account
+with no login method at all. `blueprints/0024-federation-namespace.md`.
 
 Linking a pair that is already linked raises, **including to the same account**. Silently
 accepting a second link is how one provider account ends up attached to two local ones, and then

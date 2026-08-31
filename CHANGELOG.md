@@ -39,6 +39,41 @@ second half of `blueprints/0021-credential-reference.md` and land in this same r
 No new query anywhere. Every value comes from a row that was already read to authenticate the
 request.
 
+### ⚠ Breaking: the shared half of federation moved out of the `OIDC` namespace
+
+```
+KemalIdentity::Federation::Identity        (was OIDC::Identity)
+KemalIdentity::Federation::Link            (was OIDC::Link)
+KemalIdentity::Federation::LinkRepository  (was OIDC::LinkRepository)
+```
+
+`OIDC::Provider`, `OIDC::Client`, `OIDC::Pending` and `OIDC::PendingCodec` are unchanged;
+`Client#complete` now returns `Federation::Identity | Failed`. If you implement
+`LinkRepository` or name `Identity` in a signature, change the namespace — nothing else about
+those types moved.
+
+The roadmap listed a type called `IdentityProvider` among the ones v1.0 freezes, and no such
+type existed. Rather than invent it, v0.8 answers the question it was standing in for: **a
+second federation protocol added after 1.0 must not require a breaking change.** Everything a
+`SAML::Client` would touch was checked, and only these three names would have forced one —
+protocol-neutral concepts sitting inside a protocol's namespace, one of which consumers
+implement. `blueprints/0024-federation-namespace.md`.
+
+`LinkRepository` is shared for a specific reason: `for_account` answers "which providers is this
+account linked to", and the guard against unlinking somebody's last way in reads it. Against a
+second table it answers from half the rows.
+
+### `Identity#email_verified` is now `Bool?`
+
+`nil` means the issuer asserted nothing, `false` means it said the address is not verified,
+`true` means it says it verified it. Previously both of the first two arrived as `false`, so a
+policy of "only accept issuers that verify addresses" could not be written.
+
+`#email_verified?` still answers a `Bool` and still treats `nil` as unverified, so the security
+behaviour is unchanged. It is written out rather than generated, because `getter?` over a `Bool?`
+returns `Bool?` — falsy in a conditional, but not a boolean, and a security predicate should not
+have a third answer.
+
 ### A rate limiter can say that its store is gone
 
 `Verdict` gains a third state. A limiter over shared storage used to have three ways to lie
