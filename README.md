@@ -429,6 +429,60 @@ is a defaulted field, so an adapter written before v0.8 keeps compiling and sile
 and a dropped scope reads back as `nil`, which means *unrestricted*. Run the shared contract
 suite; it has three examples that fail on exactly this.
 
+### When a request presents both a cookie and a bearer token
+
+**The cookie is resolved first, and it wins.** A request carrying both a valid session cookie and
+a valid `Authorization: Bearer` is authenticated as whoever the cookie names; the token is never
+looked at. Identities never merge — `env.auth.credential.kind` says which one answered.
+
+Two consequences, and the second is a sharp edge:
+
+| Cookie | Bearer | Result |
+|---|---|---|
+| valid | valid | the cookie's account, `kind: Session` |
+| valid | invalid or revoked | the cookie's account — the bearer is not examined |
+| absent | valid | the token's account, `kind: ApiToken` |
+| **present but invalid** | **valid** | **401** |
+
+That last row is the one to know about. A session cookie that has idle-expired, been revoked, or
+been tampered with **masks a perfectly good bearer token**: the handler clears the bad cookie and
+stops, rather than falling through. It is fail-closed rather than dangerous, but a same-origin SPA
+that keeps sending a stale cookie alongside an `Authorization` header will get 401s it did not
+expect.
+
+If your application wants bearer-first, replace the handler. It is about twenty lines of public
+API:
+
+```crystal
+class BearerFirstHandler < Kemal::Handler
+  def initialize(@app : KemalIdentity::Application)
+  end
+
+  def call(env)
+    header = env.request.headers["Authorization"]?
+    bearer = header.try { |h| h.starts_with?("Bearer ") ? h.lchop("Bearer ") : nil }
+
+    outcome =
+      if bearer && (service = @app.bearer)
+        service.authenticate(bearer)
+      else
+        @app.sessions.resolve(@app.cookie.extract(env.request.cookies))
+      end
+
+    env.auth = KemalIdentity::Kemal::RequestContext.new(env, @app, outcome)
+    call_next(env)
+  end
+end
+
+use BearerFirstHandler.new(KemalIdentity.app)   # instead of AuthenticationHandler
+```
+
+⚠ **A replacement handler cannot keep remember-me.** `restore_remembered!` is `protected`, so a
+handler outside the shard cannot call it — replacing `AuthenticationHandler` means an application
+using remember-me has to reimplement the restore, including the ordering
+`blueprints/0012-remember-me.md` explains. If you use remember-me, weigh that before replacing
+the handler.
+
 ### Which credential proved the request
 
 `env.auth.require!` answers *who*. `env.auth.credential` answers *what proved it*:

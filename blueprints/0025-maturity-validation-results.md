@@ -30,7 +30,7 @@ Results are recorded here rather than in the catalogue so that the catalogue sta
 it is — a document with no result for any particular library — and so this one can be re-run
 against a later revision without rewriting it.
 
-**All seven very-high scenarios are done, and six high-frequency ones.**
+**All seven very-high scenarios are done, and seven high-frequency ones.**
 Nothing below is an assessment made by reading the source; each row cites what was run.
 
 ## Summary
@@ -50,6 +50,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | OPS-06 | High | M3 | **M3** | Shipped adapters hard-code their own table names |
 | OPS-07 | High | M3 | **M3** | Nothing in CI guards the property against regression |
 | DEV-01 | High | M3 | **M3** | Correct `WWW-Authenticate` needs a denial reason the consumer is not given |
+| HTTP-03 | High | M3 | **M2** | An invalid cookie masks a valid bearer; precedence was undocumented and is not per-route |
 
 ---
 
@@ -553,10 +554,90 @@ Localisation was not attempted.
 
 ---
 
+## HTTP-03 — Credential precedence when cookie and bearer coexist
+
+**Result: M2.** Applicable.
+
+A consumer app was built with two accounts — Alice with a browser session, Bob with a bearer token
+— and every combination probed over HTTP:
+
+| Request | Result |
+|---|---|
+| no credential | 401 |
+| valid cookie (alice) | 200 — `alice via Session` |
+| valid bearer (bob) | 200 — `bob via ApiToken` |
+| **invalid cookie + valid bearer** | **401** |
+| valid cookie + garbage bearer | 200 — `alice via Session` |
+| valid cookie (alice) + valid bearer (bob) | 200 — `alice via Session` |
+
+**Two pass conditions hold.** *"conflicting identities never merge"* — two valid credentials for
+different people produced one principal, Alice's, with no blending. *"audit identifies which
+credential won"* — `env.auth.credential.kind` named it on every request.
+
+**The fourth row is a defect, now confirmed over HTTP rather than inferred from source.** A
+session cookie that has expired, been revoked or been tampered with **masks a valid bearer token**:
+`AuthenticationHandler` clears the bad cookie and stops, and only tries the bearer when no cookie
+was presented at all. A same-origin SPA that keeps sending a stale cookie beside an
+`Authorization` header gets 401s. Fail-closed, so not dangerous — but wrong, and surprising.
+
+**The fifth row is the scenario's own persona**, and it is the one the catalogue names: "an SPA
+accidentally sends both a valid session cookie and a revoked bearer token". The revoked bearer is
+not rejected — it is never examined. The presented credential is silently ignored, which is the
+same outcome the rule about silent fallback exists to prevent, arrived at from the other
+direction.
+
+**A consumer can change it, and that was proven rather than assumed.** A twenty-line
+`BearerFirstHandler` using only public API — `@app.bearer`, `@app.sessions.resolve`,
+`@app.cookie.extract`, `RequestContext.new` — was built, run, and probed:
+
+| Request | With the consumer's handler |
+|---|---|
+| invalid cookie + valid bearer | 200 — `bob via ApiToken` |
+| alice cookie + bob bearer | 200 — `bob via ApiToken` |
+
+**Why it is M2 and not M3, in two measured parts.**
+
+*The precedence was not documented anywhere a reader would find it.* `grep -i precedence` over
+`README.md` and `docs/` returned nothing; the rule lived in a comment inside
+`authentication_handler.cr`. The first pass condition is "Precedence is explicit **and
+documented**". Fixed in the same commit as this document — the README now carries the table above,
+the sharp edge, and the replacement handler.
+
+*A replacement cannot keep remember-me.* Compiled, not guessed:
+
+```
+Error: protected method 'restore_remembered!' called for KemalIdentity::Kemal::RequestContext
+```
+
+`restore_remembered!` and `authenticate_bearer!` are `protected`, so a handler outside the shard
+cannot call them. An application that uses remember-me and wants different precedence must
+reimplement the restore — including the ordering `blueprints/0012` documents as subtle, since
+restoring on a *failed* cookie widens the window in which parallel requests both present the
+remember token and one of them reads as theft. That is duplicated I/O in the M2 sense, and it
+lands on exactly the application HTTP-03 describes: a monolith serving browsers and APIs, which is
+the kind most likely to have remember-me.
+
+And precedence is app-wide either way. The pass condition asks for "unless **the route** explicitly
+allows that policy"; one handler decides for every route.
+
+**Smallest change that would reach M3:** make `authenticate_bearer!` and `restore_remembered!`
+public, so a replacement handler can compose the pieces instead of reimplementing one. M4 wants
+precedence declarable per route subtree, which is the same parameter HTTP-02 wants on `PathGuard`.
+
+**A methodology note, recorded because it nearly produced a wrong result.** An earlier attempt
+concluded `restore_remembered!` *was* reachable, because `crystal build --no-codegen` accepted a
+file that defined a handler calling it. Crystal only analyses method bodies that are actually
+reached, and nothing called that handler. The visibility error appeared only once the handler was
+wired into a running app. **Compiling a file that merely defines a class proves nothing about its
+method bodies** — a trap worth knowing about for the scenarios still unrun.
+
+---
+
 ## Not yet attempted
 
-The remaining thirty-seven scenarios — twenty-two high, twelve medium, one low, two
-niche-critical — are unstarted. `blueprints/0020` decision 8 already records which of them are
+The remaining thirty-six scenarios — twenty-one high, twelve medium, one low, two
+niche-critical — are unstarted. The JWT family (JWT-01 to JWT-04) shares one harness and has not
+been touched since v0.6, which makes it the most likely place for a surprise. `blueprints/0020` decision 8 already records which of them are
 additive and which were checked for freeze impact; that is a different question from this one and
 does not substitute for it.
 

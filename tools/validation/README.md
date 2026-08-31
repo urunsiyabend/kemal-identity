@@ -41,6 +41,8 @@ that way rather than in-process.
 | `kv_sessions.cr` | OPS-04 — `SessionRepository` over a key-value store held to Redis-shaped rules |
 | `ops04_spec.cr` | OPS-04 — the shard's session contract against that adapter, plus expiry-on-read and concurrent revoke |
 | `ops07/{core,sqlite,pg}/` | OPS-07 — three whole projects. Build each and check what `lib/` holds |
+| `http03_app.cr` | HTTP-03 — two accounts, two credential kinds. A server: build, run, probe every combination |
+| `http03_bearer_first.cr` | HTTP-03 — the same app with a consumer-written bearer-first handler. **Contains a deliberately failing line**: see below |
 
 ## The two that are supposed to fail
 
@@ -50,6 +52,22 @@ KemalIdentity::SpecHelper::FIXED_NOW`. Do not "fix" it; that error is the findin
 `idp03_contract_spec.cr` is expected to fail three tenancy examples. The adapter under test has
 no tenant column because the application it belongs to has one tenant. That the shared contract
 cannot be run without one is the finding.
+
+## The protected-method probe
+
+`http03_bearer_first.cr` calls `ctx.restore_remembered!`, which does not compile:
+
+```
+Error: protected method 'restore_remembered!' called for KemalIdentity::Kemal::RequestContext
+```
+
+That is the finding — a replacement handler cannot keep remember-me. Comment the line out to run
+the app and probe its precedence.
+
+**Do not check reachability with `crystal build --no-codegen` on a file that only defines a
+class.** Crystal analyses the bodies of methods it reaches, and an unreferenced handler's `call`
+is not reached, so a visibility error stays hidden. An earlier attempt at this concluded the
+opposite for exactly that reason.
 
 ## The three minimal consumers
 
