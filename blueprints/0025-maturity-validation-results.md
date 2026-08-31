@@ -30,7 +30,7 @@ Results are recorded here rather than in the catalogue so that the catalogue sta
 it is — a document with no result for any particular library — and so this one can be re-run
 against a later revision without rewriting it.
 
-**All seven very-high scenarios are done, and seven high-frequency ones.**
+**All seven very-high scenarios are done, ten high-frequency ones, and one medium.**
 Nothing below is an assessment made by reading the source; each row cites what was run.
 
 ## Summary
@@ -51,6 +51,10 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | OPS-07 | High | M3 | **M3** | Nothing in CI guards the property against regression |
 | DEV-01 | High | M3 | **M3** | Correct `WWW-Authenticate` needs a denial reason the consumer is not given |
 | HTTP-03 | High | M3 | **M2** | An invalid cookie masks a valid bearer; precedence was undocumented and is not per-route |
+| JWT-01 | High | M3 | **M2** | Two validators cannot be chained, and there is no bounded way to read `iss` first |
+| JWT-02 | High | M3 | **M3** | — |
+| JWT-03 | High | M3 | **M3** | — |
+| JWT-04 | Medium | M2–M3 | **M3** | Works, but inherits JWT-01's hand-rolled routing to get per-issuer validators |
 
 ---
 
@@ -633,11 +637,142 @@ method bodies** — a trap worth knowing about for the scenarios still unrun.
 
 ---
 
+## JWT-01 — Multiple JWT issuers selected at runtime
+
+**Result: M2.** Applicable.
+
+Two validators were built for two issuers, each with its own HMAC key. Individually they work,
+and each refuses the other's tokens — twice over, and the order matters:
+
+| Presented to validator A | Refused on |
+|---|---|
+| a token from issuer B, signed with B's key | **the signature** — `InvalidCredential` |
+| a token claiming issuer B, signed with A's key | **the claim** — `InvalidClaim` |
+
+The first row was not what source reading predicted. The signature fails before `iss` is ever
+compared, because each issuer signs with a key the other's ring does not hold. Correct, and it
+shapes everything below.
+
+**Chaining the two validators does not work, and cannot.** `AuthenticatorChain` is the mechanism
+the shard ships for "one header, two credentials", and it routes on **shape**. Every JWT is three
+base64url segments, so a token from issuer B is shape-identical to one from issuer A: validator A
+recognises it, fails it on the signature, and the chain's own rule — stop at anything that was
+recognised and then failed — ends the attempt. Validator B is never asked.
+
+Measured in both orders, which is what makes this structural rather than a misconfiguration:
+
+```
+[A, B] -> issuer A's token authenticates, issuer B's is refused
+[B, A] -> issuer B's token authenticates, issuer A's is refused
+```
+
+Whichever issuer is registered second loses. Half of a two-customer API is rejected either way.
+
+**So a consumer must route on `iss` before validating, and there is no bounded way to do that.**
+`Validator` exposes no issuer peek — asserted, not assumed — so the routing that works is the
+consumer decoding the payload segment themselves:
+
+```crystal
+segments = credential.split('.')
+payload = ::JSON.parse(Base64.decode_string(pad(segments[1])))
+validator = validators[payload["iss"]?.try(&.as_s?)]?
+validator.try(&.authenticate(credential))
+```
+
+Verified working: both issuers authenticate, and an unknown issuer is refused with no validator
+consulted and no network touched.
+
+**But the safety of it is now the consumer's.** The validator has a `max_bytesize` for exactly
+this reason and applies it inside itself; the hand-rolled peek above has none, so it will happily
+base64-decode and JSON-parse whatever arrives. The pass condition is *"Issuer selection happens
+only after **bounded**, non-trusting parsing"* — achievable, and achieved by nobody who does not
+know to write the bound. That is the difference between M2 and M3 here: it is not that the
+scenario is impossible, it is that the safe version is not the obvious one and the shard offers
+no help.
+
+The other pass conditions hold once routing exists: each issuer keeps its own algorithm and
+audience allow-list because each has its own `Validator`; cache keys include the issuer because
+each has its own `KeySource`; and an unknown issuer triggers no network access in the version
+above.
+
+**Smallest change that would reach M3:** a bounded, non-trusting `JWT.unverified_issuer(credential) : String?`
+— the same length check the validator already does, then one segment decoded, no signature
+implied by the name. Additive, so it can land after 1.0.
+
+**Fixed in this commit:** the README described shape-only routing accurately and left the
+consequence for the reader to derive. It now says plainly that two JWT validators cannot be
+chained, and points here for the routing.
+
+---
+
+## JWT-02 — Custom claim mapping without weakening validation
+
+**Result: M3.** Applicable.
+
+A token carrying `uid` and `tenant` alongside the registered claims was validated, and
+`Validator#validate` returned a `Validated` whose `claims` held both. The mapping step is the
+consumer's and runs on already-verified claims:
+
+```crystal
+claims = validator.validate(token).as(KemalIdentity::JWT::Validated).claims
+Principal.new(subject: claims["uid"].as_s, tenant_id: claims["tenant"].as_s, ...)
+```
+
+*"Mapping cannot skip signature, issuer, audience, expiry or purpose checks"* — structurally so.
+A validation failure returns `Failed`, which carries no claims, so there is nothing to map. That
+was asserted directly: a wrong-issuer token yielded `Failed` and no claim access.
+
+*"local identity linking uses issuer plus subject rather than email"* — `iss` and `sub` both come
+back on the verified claims, so the pair is available without the consumer reaching for `email`.
+
+Nothing named as a gap. Not M4 only because there is no packaged example of a mapping step and no
+contract a consumer could run against their own mapper.
+
+---
+
+## JWT-03 — Audience/resource-specific validation
+
+**Result: M3.** Applicable.
+
+One process, two APIs, two validators differing only in audience. A token minted for `billing`
+authenticated against the billing validator and was refused by the admin one with `InvalidClaim`.
+
+*"route policy cannot accidentally use a global validator with a broader audience"* — there is no
+global validator to pick up by accident. A `Validator` is a value a route holds; nothing is
+registered ambiently, which is the same property that makes JWT off-by-default.
+
+*"multi-audience tokens have explicit semantics"* — measured, because RFC 7519 permits `aud` to be
+an array and what a verifier does with one it is only *one of* is the subtle part. A token with
+`aud: ["billing", "admin"]` authenticated against **both** validators; a token with
+`aud: ["billing"]` was refused by the admin validator. Membership, not equality, and it is the
+right reading.
+
+---
+
+## JWT-04 — Revocation/introspection policy per issuer
+
+**Result: M3.** Applicable.
+
+Two validators, two policies: issuer A with a `RevocationStore`, issuer B with expiry only.
+Revoking `jti-a` in A's store refused A's token on the next call with `Revoked`, and B's token
+kept authenticating — B has no store to consult, so nothing about its policy changed.
+
+*"The strategy is issuer-bound at boot"* — it is a constructor argument on the validator, so it
+cannot drift at runtime.
+
+**The cost it inherits.** Per-issuer revocation is only reachable if you have per-issuer
+validators, and getting a token to the right one is JWT-01's hand-rolled routing. This scenario's
+own mechanism is clean; the thing it sits on is M2.
+
+Introspection-per-issuer — one partner offering RFC 7662 rather than a denylist — was not
+attempted. It needs the HTTP-backed authenticator TOK-06 is about, which is unrun.
+
+---
+
 ## Not yet attempted
 
-The remaining thirty-six scenarios — twenty-one high, twelve medium, one low, two
-niche-critical — are unstarted. The JWT family (JWT-01 to JWT-04) shares one harness and has not
-been touched since v0.6, which makes it the most likely place for a surprise. `blueprints/0020` decision 8 already records which of them are
+The remaining thirty-two scenarios — eighteen high, eleven medium, one low, two niche-critical —
+are unstarted. `blueprints/0020` decision 8 already records which of them are
 additive and which were checked for freeze impact; that is a different question from this one and
 does not substitute for it.
 

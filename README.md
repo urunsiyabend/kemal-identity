@@ -610,9 +610,22 @@ mine" — and stops at anything else. A credential that was recognised and then 
 merits does not get a second opinion from an authenticator that never issued it, which is how a
 revoked credential ends up authenticating a request.
 
-The same rule applies one level up: a request that presents a bearer token is never resolved
-from a session cookie afterwards, even when the token is rejected. A client that sent a token
-is asking to be authenticated by it.
+⚠ **Shape-only routing means two JWT validators cannot be chained.** Every JWT is three
+base64url segments, so a token from issuer B looks exactly like one from issuer A: validator A
+recognises the shape, fails it on the signature, and the chain stops. Validator B is never
+asked, and that customer's tokens are refused. Reversing the order moves the problem to the
+other issuer rather than solving it.
+
+Accepting several issuers therefore needs routing on `iss` **before** validating, and there is
+no helper for that yet — you decode the payload segment yourself, bound it yourself, and pick
+the validator by issuer. See `blueprints/0025-maturity-validation-results.md` (JWT-01) for a
+worked version and what it costs.
+
+When a bearer token is presented and fails, a remember-me cookie is not tried afterwards: a
+client that sent a token is asking to be authenticated by it. Precedence between a **session
+cookie** and a bearer token is a separate question, and the cookie is resolved first — see
+`## When a request presents both a cookie and a bearer token` above, including the case where an
+invalid cookie masks a valid token.
 
 ## Second factors
 

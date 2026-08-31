@@ -43,6 +43,7 @@ that way rather than in-process.
 | `ops07/{core,sqlite,pg}/` | OPS-07 — three whole projects. Build each and check what `lib/` holds |
 | `http03_app.cr` | HTTP-03 — two accounts, two credential kinds. A server: build, run, probe every combination |
 | `http03_bearer_first.cr` | HTTP-03 — the same app with a consumer-written bearer-first handler. **Contains a deliberately failing line**: see below |
+| `jwt_family_spec.cr` | JWT-01 to JWT-04 — two issuers, chaining in both orders, hand-rolled `iss` routing, claim mapping, per-audience and per-issuer policy |
 
 ## The two that are supposed to fail
 
