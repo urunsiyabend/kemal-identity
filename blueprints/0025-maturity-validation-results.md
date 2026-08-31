@@ -30,7 +30,7 @@ Results are recorded here rather than in the catalogue so that the catalogue sta
 it is — a document with no result for any particular library — and so this one can be re-run
 against a later revision without rewriting it.
 
-**All seven very-high scenarios are done, ten high-frequency ones, and one medium.**
+**All seven very-high scenarios are done, eleven high-frequency ones, and two medium.**
 Nothing below is an assessment made by reading the source; each row cites what was run.
 
 ## Summary
@@ -55,6 +55,8 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | JWT-02 | High | M3 | **M3** | — |
 | JWT-03 | High | M3 | **M3** | — |
 | JWT-04 | Medium | M2–M3 | **M3** | Works, but inherits JWT-01's hand-rolled routing to get per-issuer validators |
+| HTTP-07 | High | M3 | **M3** | Works and was entirely undocumented, including the trust boundary |
+| DEV-03 | Medium | M2–M3 | **M3** | The claim holds and links no Kemal; there is no worked example |
 
 ---
 
@@ -769,10 +771,94 @@ attempted. It needs the HTTP-backed authenticator TOK-06 is about, which is unru
 
 ---
 
+## DEV-03 — Framework adapter other than Kemal
+
+**Result: M3.** Applicable.
+
+A whole working server was built over raw `HTTP::Server`, requiring `kemal_identity` and
+**never** `kemal_identity/kemal`. It resolves a bearer token or a session cookie, maps the three
+outcomes to statuses, and emits the RFC 6750 challenge the shard does not:
+
+| Request | Response |
+|---|---|
+| no credential | 401, `WWW-Authenticate: Bearer realm="raw"` |
+| valid cookie | 200 — `u-1 via Session` |
+| valid bearer | 200 — `u-1 via ApiToken` |
+| invalid bearer | 401, `WWW-Authenticate: … error="invalid_token"` |
+
+**The framework-independence claim was verified against the binary, not the source.**
+`docs/01-architecture.md` says the layering "keeps the door open for an Amber or Lucky layer
+without touching the core". Checked with `nm`:
+
+| Binary | `KemalIdentity` symbols | `Kemal::` symbols |
+|---|---|---|
+| the raw `HTTP::Server` app | 189 | **0** |
+| the Kemal app from HTTP-03 | — | 748 |
+
+The first row alone would prove nothing — a stripped binary shows nothing either — which is why
+the 189 and the 748 are there. Kemal is genuinely not linked.
+
+*"framework-specific cookie/header/error handling stays in the adapter"* holds, and the seam is
+at the standard library rather than at Kemal: `Sessions::CookieConfig#extract` takes
+`HTTP::Cookies`, so the codec is reusable by anything that speaks stdlib HTTP.
+
+*"the application object can be created without the Kemal shard being loaded"* — `KemalIdentity.configure`
+was called and `KemalIdentity.app` built in a spec that requires neither `kemal` nor the adapter.
+
+**Why not M4: there is no worked example, and finding the seams cost a compile error.** The codec
+is `Sessions::CookieConfig` itself, not a `Sessions::Cookie` class — which is what the first
+attempt reached for, with `Error: undefined constant KemalIdentity::Sessions::Cookie`. The
+architecture doc asserts the door is open; nothing shows a reader through it.
+
+---
+
+## HTTP-07 — Authentication outside an HTTP request
+
+**Result: M3.** Applicable.
+
+A job's principal was constructed with no request, no cookie and no faked `HTTP::Server::Context`,
+and authorised against the same `RBAC` a route uses. `Authz::RBAC`, `Sessions::Service`,
+`ApiTokens::Service` and every repository are reachable with only `kemal_identity` required —
+which DEV-03's symbol count independently confirms.
+
+*"actor and source are auditable"* — a `CredentialRef` with `kind: Custom, id: "cron:nightly-sweep"`
+names the launcher, so `authz.denied` distinguishes a job from a session rather than reporting
+both as an account.
+
+*"no fake HTTP request is necessary"* — none was built.
+
+Freshness works with an injected clock: a principal fresh within five minutes went stale after
+the `TestClock` advanced ten, with no request anywhere.
+
+**The last pass condition is not enforced, and cannot be.** *"jobs cannot invent a stronger
+assurance than their trusted launcher grants"* — `Principal.new` accepts any `AssuranceLevel`.
+Measured both ways: a job claiming `ApiToken` was refused a permission demanding `MFA` with
+`InsufficientAssurance`, and the same job claiming `MFA` was **permitted**.
+
+There is no fix that keeps the scenario possible. Restricting the constructor would make
+authentication outside HTTP impossible, which is the thing being validated. So the honest boundary
+is that whatever builds a `Principal` is trusted code — and the hazard is that a reader might
+assume otherwise.
+
+**Which is the finding: none of this was documented.** `grep -i 'background job\|worker\|outside an
+HTTP'` over `README.md` and `docs/` returned nothing. A capability the shard has, the scenario the
+catalogue rates High, and no page telling anybody it exists or what it costs. Fixed in the same
+commit: the README now has an `## Outside an HTTP request` section with the worked example, the
+audit guidance, and the trust boundary stated as a warning.
+
+---
+
 ## Not yet attempted
 
-The remaining thirty-two scenarios — eighteen high, eleven medium, one low, two niche-critical —
-are unstarted. `blueprints/0020` decision 8 already records which of them are
+The remaining thirty scenarios — seventeen high, ten medium, one low, two niche-critical — are
+unstarted.
+
+A note on what "unstarted" means for the ones whose feature is absent — WebAuthn, magic links,
+device flow, SCIM, token rotation. The catalogue is explicit that absence is not immaturity:
+*"A feature may be absent and the library may still be mature if an application can add it
+through a documented, safe contract."* So those are not quick entries. Each needs a real attempt
+at adding it from outside, which is what DEV-03 and HTTP-07 above turned out to be, and what
+TOK-01 was before the feature landed. `blueprints/0020` decision 8 already records which of them are
 additive and which were checked for freeze impact; that is a different question from this one and
 does not substitute for it.
 

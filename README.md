@@ -1317,6 +1317,46 @@ which is the point.
 implement `AccountRepository` over it and never create `auth_accounts` at all — that is the
 whole point of the contract being abstract.
 
+## Outside an HTTP request
+
+A background job, a maintenance task or a message consumer can act under a principal and run the
+same authorization policy a route would. Nothing needs Kemal, and nothing needs a faked request:
+
+```crystal
+require "kemal_identity"   # not kemal_identity/kemal
+
+actor = KemalIdentity::Principal.new(
+  subject: "worker-1",
+  assurance: KemalIdentity::AssuranceLevel::ApiToken,
+  authenticated_at: Time.utc,
+  credential: KemalIdentity::CredentialRef.new(
+    kind: KemalIdentity::CredentialKind::Custom,
+    id: "cron:nightly-sweep",         # what the audit trail will name
+    name: "scheduler",
+  ),
+)
+
+authorizer.decide(actor, "invoices.sweep").permitted?
+```
+
+The same services work: `Sessions::Service`, `ApiTokens::Service`, `Authz::RBAC` and the
+repositories know nothing about HTTP. Only `env.auth` and the handlers do, and they live in
+`kemal_identity/kemal`, which a job need not require. Measured: a binary that requires only
+`kemal_identity` and serves requests from raw `HTTP::Server` links **no Kemal symbols at all**.
+
+- **Give the job its own credential reference.** `kind: Custom` with an id naming the launcher is
+  what makes `authz.denied` answerable later. A job with no credential is indistinguishable from
+  a session in the trail.
+- **`AssuranceLevel::ApiToken` is the honest level for automation.** It is below `Password`, and
+  `Principal#fresh?` is false for it, so a job cannot satisfy `require_fresh!`-style policy.
+
+⚠ **Whatever constructs a `Principal` is trusted, and the shard cannot check that.**
+`Principal.new` accepts any assurance, so a job *can* claim `MFA` and reach a permission that
+demands it. There is no way around this: restricting the constructor would make this whole
+section impossible. What protects the boundary is that the code building the principal is your
+own launcher — treat it as the security decision it is, and do not build one from data that came
+from outside.
+
 ## Migrating an application that already has users
 
 Not a flag day. Four independent steps, each reversible, and three of them are things this shard

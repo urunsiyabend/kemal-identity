@@ -44,6 +44,8 @@ that way rather than in-process.
 | `http03_app.cr` | HTTP-03 — two accounts, two credential kinds. A server: build, run, probe every combination |
 | `http03_bearer_first.cr` | HTTP-03 — the same app with a consumer-written bearer-first handler. **Contains a deliberately failing line**: see below |
 | `jwt_family_spec.cr` | JWT-01 to JWT-04 — two issuers, chaining in both orders, hand-rolled `iss` routing, claim mapping, per-audience and per-issuer policy |
+| `dev03_raw_http.cr` | DEV-03 — a whole server over raw `HTTP::Server`, no Kemal. A server: build, run, probe |
+| `dev03_http07_spec.cr` | DEV-03's application object, and HTTP-07 — a job's principal with no request |
 
 ## The two that are supposed to fail
 
@@ -69,6 +71,18 @@ the app and probe its precedence.
 class.** Crystal analyses the bodies of methods it reaches, and an unreferenced handler's `call`
 is not reached, so a visibility error stays hidden. An earlier attempt at this concluded the
 opposite for exactly that reason.
+
+## The no-Kemal check
+
+Building `dev03_raw_http.cr` is half of DEV-03; the other half is what the binary links:
+
+```
+nm -C /tmp/dev03 | grep -c 'KemalIdentity'          # must be large -- proves nm works here
+nm -C /tmp/dev03 | grep -o 'Kemal::[A-Za-z]*' | grep -v KemalIdentity | wc -l   # must be 0
+```
+
+Both numbers matter. A zero on its own proves nothing, because a stripped binary answers zero to
+everything. The recorded run was 189 and 0, against 748 for the Kemal app.
 
 ## The three minimal consumers
 
