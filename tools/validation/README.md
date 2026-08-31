@@ -46,6 +46,7 @@ that way rather than in-process.
 | `jwt_family_spec.cr` | JWT-01 to JWT-04 — two issuers, chaining in both orders, hand-rolled `iss` routing, claim mapping, per-audience and per-issuer policy |
 | `dev03_raw_http.cr` | DEV-03 — a whole server over raw `HTTP::Server`, no Kemal. A server: build, run, probe |
 | `dev03_http07_spec.cr` | DEV-03's application object, and HTTP-07 — a job's principal with no request |
+| `idp_family_spec.cr` | IDP-01, IDP-02, IDP-04 — two providers, out-of-order callbacks, the provider-switch case, linking conflicts, tenant lookups |
 
 ## The two that are supposed to fail
 
@@ -55,6 +56,13 @@ KemalIdentity::SpecHelper::FIXED_NOW`. Do not "fix" it; that error is the findin
 `idp03_contract_spec.cr` is expected to fail three tenancy examples. The adapter under test has
 no tenant column because the application it belongs to has one tenant. That the shared contract
 cannot be run without one is the finding.
+
+## A note on the deterministic random double
+
+`idp_family_spec.cr` gives each OIDC client its own `DeterministicRandom` seed. Without that,
+two clients produce *identical* `state` and `nonce`, and a test asserting that concurrent flows
+stay apart fails against the double rather than against the shard. Production uses
+`SecureRandomSource` and does not have the problem.
 
 ## The protected-method probe
 

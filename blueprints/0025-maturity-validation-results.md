@@ -30,7 +30,7 @@ Results are recorded here rather than in the catalogue so that the catalogue sta
 it is — a document with no result for any particular library — and so this one can be re-run
 against a later revision without rewriting it.
 
-**All seven very-high scenarios are done, eleven high-frequency ones, and two medium.**
+**All seven very-high scenarios are done, fourteen high-frequency ones, and two medium.**
 Nothing below is an assessment made by reading the source; each row cites what was run.
 
 ## Summary
@@ -57,6 +57,9 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | JWT-04 | Medium | M2–M3 | **M3** | Works, but inherits JWT-01's hand-rolled routing to get per-issuer validators |
 | HTTP-07 | High | M3 | **M3** | Works and was entirely undocumented, including the trust boundary |
 | DEV-03 | Medium | M2–M3 | **M3** | The claim holds and links no Kemal; there is no worked example |
+| IDP-01 | High | M3 | **M2** | `Pending` does not bind the provider, and provider-specific parameters cannot be sent |
+| IDP-02 | High | M3 | **M3** | — |
+| IDP-04 | High | M3 | **M3** | — |
 
 ---
 
@@ -848,10 +851,107 @@ audit guidance, and the trust boundary stated as a warning.
 
 ---
 
+## IDP-01 — Several OIDC providers with provider-specific options
+
+**Result: M2.** Applicable. Two of five pass conditions do not hold.
+
+Two providers were registered — a Google-shaped one and an Okta-shaped one — each with its own
+issuer, client id, redirect URI and key source. **Concurrent flows stay apart**: two flows started
+before either completed had distinct `state` and `nonce`, and both completed correctly in the
+reverse order they were begun. **Key sources are isolated**, so one provider's JWKS cache cannot
+answer for another.
+
+**Then the one that fails: a callback can switch providers.**
+
+Okta's client was handed *Google's* pending state together with a token Okta had minted, and it
+completed successfully, returning a `Federation::Identity` for issuer Okta.
+
+Every check passes from that client's point of view, which is why: `state` matches the pending it
+was given, `nonce` matches the token, and `iss`/`aud` are compared against **Okta's** provider —
+which did mint the token. `Pending` carries `state`, `nonce`, the PKCE verifier and `return_to`,
+and **nothing naming the provider**; asserted directly, it has no `issuer`.
+
+The pass condition is *"pending state binds provider, redirect URI, nonce and PKCE verifier"* and
+*"callback cannot switch providers"*. Neither holds at the type level. What holds instead is
+whatever the application's callback route does, and nothing told it that this was its job. No
+exploit is claimed here — `PendingCodec` signs the pending, so an attacker cannot forge one, and
+the realistic paths need a pending from the victim's own browser. But the provider boundary is
+carried by application routing rather than by the flow state, which is not where the scenario
+expects it.
+
+**And the second: provider-specific authorisation parameters cannot be sent.** `authorize` takes
+`return_to` and `prompt`. Measured — the generated URL has no `hd`, no `domain_hint`, no
+`login_hint`, and `Provider` has no `extra_authorization_params`. Google's domain restriction,
+Okta's login hint and Azure's domain hint are all unreachable through the shipped call.
+
+**The workaround was attempted and works.** `authorize` returns the `Pending`, and everything the
+URL needs is readable from it — `state`, `nonce`, `code_challenge` — so the consumer rebuilds the
+query string with their own parameters and redirects to that instead of `flow.url`. Verified: the
+rebuilt URL carries `hd` and `login_hint` alongside the shard's own state and challenge, and the
+pending still completes through `client.complete` with every check intact. About twelve lines, and
+none of them security logic — only query-string assembly.
+
+That is what makes this M2 rather than M1: both gaps have consumer-side answers. It is M2 rather
+than M3 because neither answer was written down anywhere, and one of them is a safety boundary.
+
+**Fixed in this commit:** the README now has a `### More than one provider` section carrying the
+callback-routing warning, the measured provider-switch behaviour, and the URL-rebuilding recipe.
+
+---
+
+## IDP-02 — Safe account linking and conflict resolution
+
+**Result: M3.** Applicable.
+
+*"Email never auto-links identities"* — structurally, because there is nowhere to put one.
+`Federation::Link` holds an id, an account, an issuer, a subject and timestamps; asserted, it does
+not respond to `email`. The stored key cannot be an address even by mistake.
+
+*"conflicts are typed outcomes"* — two providers asserting the same subject string for two
+different people produced two independent links, resolving to two different accounts, with no
+collision. And relinking an already-linked pair raises `InfrastructureError` — **including to the
+same account**, which was checked separately, because silently accepting the second row is how one
+provider identity ends up attached to two local accounts and whichever is found first decides who
+signs in.
+
+*"unlink cannot strand an account without a recovery path"* — the repository gives the application
+what the guard needs (`for_account` returns the links) and does not enforce it: `unlink` on the
+last remaining link succeeds and leaves the account with none. Recorded rather than counted
+against the result, since deciding what counts as a recovery path — another provider, a password,
+a recovery code — is not the repository's to know.
+
+*"linking requires fresh proof of both sides"* is the application's, and `require_fresh!` is the
+mechanism for its half.
+
+---
+
+## IDP-04 — Multi-tenant login discovery and tenant switching
+
+**Result: M3.** Applicable.
+
+One address, two tenants, two accounts: `find_by_login("ada@example.com", "acme")` and the same
+call for `"globex"` returned different account ids.
+
+*"authorization always receives the target tenant"*, from both ends. A lookup naming **no** tenant
+did not match a tenanted row — `nil` is the single-tenant case, not a wildcard. And a principal
+bound to `acme` asking about `globex` was refused with `TenantMismatch`, before membership was
+consulted, even though it holds the role there.
+
+*"tenant discovery does not enumerate accounts to an attacker"* — there is no discovery API to
+abuse. `AccountRepository` answers one tenant at a time and has no "which tenants does this
+address exist in" method; asserted against `responds_to?`.
+
+*"session rotation occurs if assurance/security context increases"* was not exercised for a tenant
+switch. `mfa_verified!` rotates on an assurance increase and has its own coverage in the shard's
+suite; whether switching tenant should rotate is an application decision the shard does not make
+either way.
+
+---
+
 ## Not yet attempted
 
-The remaining thirty scenarios — seventeen high, ten medium, one low, two niche-critical — are
-unstarted.
+The remaining twenty-seven scenarios — fourteen high, ten medium, one low, two niche-critical —
+are unstarted.
 
 A note on what "unstarted" means for the ones whose feature is absent — WebAuthn, magic links,
 device flow, SCIM, token rotation. The catalogue is explicit that absence is not immaturity:

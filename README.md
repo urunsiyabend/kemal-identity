@@ -830,6 +830,58 @@ get "/auth/callback" do |env|
 end
 ```
 
+### More than one provider
+
+Each provider is a `Provider` value with its own issuer, client id, redirect URI and key source,
+and each gets its own `Client`. Concurrent flows stay apart: `state`, `nonce` and the PKCE
+verifier are minted per flow.
+
+⚠ **`Pending` does not name the provider, so routing the callback is your job.** It carries
+`state`, `nonce`, the PKCE verifier and `return_to` — nothing that says which provider started
+the flow. Hand a Google flow's pending to the Okta client and the Okta client will complete it
+happily: the state matches the pending it was given, the nonce matches the token, and `iss`/`aud`
+are checked against *Okta*, which minted it. Measured, not hypothetical.
+
+So the callback route must give the pending to the client that started the flow — key the
+callback path or the stored state by provider, and look the client up by that:
+
+```crystal
+get "/auth/callback/:provider" do |env|
+  client = CLIENTS[env.params.url["provider"]]?
+  next env.status(404) if client.nil?
+  # ...decode the pending, then client.complete(...)
+end
+```
+
+**Provider-specific authorisation parameters are not sent for you.** `authorize` takes
+`return_to` and `prompt`. Google's `hd`, Okta's `login_hint`, Azure's `domain_hint` and the rest
+have nowhere to go — so build the URL yourself from the `Pending` you were handed:
+
+```crystal
+flow = client.authorize(return_to: "/dashboard")
+pending = flow.pending          # store this as usual, via PendingCodec
+
+params = URI::Params.build do |form|
+  form.add("response_type", "code")
+  form.add("client_id", client.provider.client_id)
+  form.add("redirect_uri", client.provider.redirect_uri)
+  form.add("scope", client.provider.scopes.join(' '))
+  form.add("state", pending.state)
+  form.add("nonce", pending.nonce)
+  form.add("code_challenge", pending.code_challenge)
+  form.add("code_challenge_method", "S256")
+  form.add("hd", "example.com")            # whatever your provider wants
+end
+
+uri = client.provider.authorization_endpoint.dup
+uri.query = params
+env.redirect uri.to_s            # instead of flow.url
+```
+
+Nothing security-relevant is duplicated — the state, nonce and challenge all come from the
+`Pending` the shard minted, and `complete` still does every check. Only the query string is
+yours.
+
 ### `(issuer, subject)` is the identity. The email is not.
 
 ```crystal

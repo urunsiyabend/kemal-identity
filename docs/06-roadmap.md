@@ -288,8 +288,8 @@ result for this library.
 That pass is under way in `blueprints/0025-maturity-validation-results.md`, run from a separate
 consumer project rather than from inside this repository — several scenarios are about what an
 application can reach from outside, which cannot be answered from in here. **All seven very-high
-scenarios are done — five M3, two M2 — plus eleven high-frequency and two medium. One reached
-M4; four are M2.**
+scenarios are done — five M3, two M2 — plus fourteen high-frequency and two medium. One reached
+M4; five are M2.**
 `tools/validation/` keeps the attempts so a later revision is measured against the same ones.
 
 Two of the findings are about the shared contract specs rather than about any feature, and both
