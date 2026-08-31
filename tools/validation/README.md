@@ -36,6 +36,11 @@ that way rather than in-process.
 | `legacy_users.cr` | IDP-03 — an `AccountRepository` over a consumer-owned `users` table, and a SHA-256 `LegacyVerifier` |
 | `idp03_spec.cr` | IDP-03 — no `auth_accounts`, UUID subjects, soft deletion, lazy rehash |
 | `idp03_contract_spec.cr` | IDP-03 — the shard's `AccountRepository` contract against that adapter. **Three tenancy examples fail by design**: the adapter is single-tenant |
+| `tok03_spec.cr` | TOK-03 — session, JWT and consumer-written credential references; no reachable secret |
+| `aut01_spec.cr` | AUT-01 — ownership rules, and the store-read count for a hundred-row list with and without the cache |
+| `kv_sessions.cr` | OPS-04 — `SessionRepository` over a key-value store held to Redis-shaped rules |
+| `ops04_spec.cr` | OPS-04 — the shard's session contract against that adapter, plus expiry-on-read and concurrent revoke |
+| `ops07/{core,sqlite,pg}/` | OPS-07 — three whole projects. Build each and check what `lib/` holds |
 
 ## The two that are supposed to fail
 
@@ -45,6 +50,20 @@ KemalIdentity::SpecHelper::FIXED_NOW`. Do not "fix" it; that error is the findin
 `idp03_contract_spec.cr` is expected to fail three tenancy examples. The adapter under test has
 no tenant column because the application it belongs to has one tenant. That the shared contract
 cannot be run without one is the finding.
+
+## The three minimal consumers
+
+`ops07/` holds three separate projects rather than three spec files, because the property is
+about dependency resolution and a spec cannot observe that:
+
+```
+for k in core sqlite pg; do
+  (cd ops07/$k && shards install && ls lib/ && crystal build src/main.cr)
+done
+```
+
+`core/lib` must contain neither `pg` nor `sqlite3`; the other two must contain exactly one of
+them. Paths in each `shard.yml` point at this repository and need fixing if it moves.
 
 ## The cross-process rate limit check
 

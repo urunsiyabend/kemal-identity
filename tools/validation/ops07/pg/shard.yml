@@ -1,0 +1,7 @@
+name: pg_only
+version: 0.1.0
+dependencies:
+  kemal_identity:
+    path: /home/urunsiyabend/personal/development/kemal_identity
+  pg:
+    github: will/crystal-pg

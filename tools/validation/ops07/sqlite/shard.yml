@@ -1,0 +1,7 @@
+name: sqlite_only
+version: 0.1.0
+dependencies:
+  kemal_identity:
+    path: /home/urunsiyabend/personal/development/kemal_identity
+  sqlite3:
+    github: crystal-lang/crystal-sqlite3

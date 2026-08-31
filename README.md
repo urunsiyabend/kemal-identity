@@ -967,13 +967,27 @@ class OwnershipAuthorizer < KemalIdentity::Authz::Authorizer
     decision = @inner.decide(principal, permission, context)   # the grant first
     return decision unless decision.permitted?
 
-    owner = context.resource.as?(KemalIdentity::Authz::Resource).try(&.["owner_id"])
-    return decision if owner.nil? || owner == principal.subject
+    resource = context.resource
+    return decision if resource.nil?          # not an object question: the grant decided it
+
+    # From here the rule has been asked about an object, so it has to answer. Anything it
+    # cannot read the owner of is a denial, not a pass -- see the note below.
+    owner = resource.as?(KemalIdentity::Authz::Resource).try(&.["owner_id"])
+    return decision if owner == principal.subject
 
     KemalIdentity::Authz::Forbidden.policy(permission, code: "not_the_owner")
   end
 end
 ```
+
+⚠ **The two `nil`s mean different things and only one of them is a pass.** `context.resource`
+being nil means nobody asked an object question, and the grant already answered. `owner` being
+nil means the rule *was* asked and could not read what it needed — a resource of the wrong type,
+or one carrying no `owner_id` — and that has to deny. Writing the two checks as one
+`return decision if owner.nil? || owner == principal.subject` reads naturally and fails **open**:
+a resource with no owner attribute is permitted by a rule whose whole job is to require one.
+This was found by attempting AUT-01 against an earlier version of this example; see
+`blueprints/0025-maturity-validation-results.md`.
 
 - **The grant runs first, and the object rule can only narrow.** Owning something is not a
   substitute for being allowed to act on it.

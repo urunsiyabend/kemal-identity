@@ -30,7 +30,7 @@ Results are recorded here rather than in the catalogue so that the catalogue sta
 it is — a document with no result for any particular library — and so this one can be re-run
 against a later revision without rewriting it.
 
-**All seven very-high scenarios are done.**
+**All seven very-high scenarios are done, and six high-frequency ones.**
 Nothing below is an assessment made by reading the source; each row cites what was run.
 
 ## Summary
@@ -44,6 +44,12 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | OPS-02 | Very high | M4 | **M2** | No typed sink; two undocumented failure modes when the sink throws |
 | OPS-01 | Very high | M4 | **M3** | The shared contract's concurrency example passes for an adapter that over-allows across processes |
 | IDP-03 | Very high | M4 | **M3** | The shared `AccountRepository` contract cannot be run by a single-tenant adapter |
+| TOK-03 | High | M3 | **M4** | — |
+| AUT-01 | High | M3 | **M3** | The no-N+1 condition needs a cache that is off by default |
+| OPS-04 | High | M3 | **M3** | One repository of eight validated; reaching the contract depends on DEV-02 |
+| OPS-06 | High | M3 | **M3** | Shipped adapters hard-code their own table names |
+| OPS-07 | High | M3 | **M3** | Nothing in CI guards the property against regression |
+| DEV-01 | High | M3 | **M3** | Correct `WWW-Authenticate` needs a denial reason the consumer is not given |
 
 ---
 
@@ -366,16 +372,197 @@ validation had to reconstruct.
 
 ---
 
+## TOK-03 — Access to current credential identity and metadata
+
+**Result: M4.** Applicable.
+
+All four pass conditions, from the consumer project.
+
+*"Credential kind and stable ID are available separately from the identity"* — a resolved session
+returned `credential.kind == Session` and `credential.id == issued.record.id`, next to a
+`subject` that is neither.
+
+*"session, opaque token and JWT credentials have an explicit representation"* — `Session`,
+`ApiToken`, `Jwt`, and a JWT resolved with `credential.id == "jti-77"`. The opaque-token case was
+already measured under TOK-01.
+
+*"raw secret and digest remain inaccessible"* — `CredentialRef` responds to none of `secret`,
+`digest`, `token` or `reveal`. There is nothing to redact because nothing secret reaches it.
+
+*"custom authenticators can attach their own safe reference"* — a `GatewayAuthenticator` was
+written from the consumer project, registered in an `AuthenticatorChain`, and returned
+`kind: Custom, id: "abcdef123456", name: "corporate gateway"`. Twenty lines, no core class
+touched.
+
+Nothing was found to name as a gap: the behaviour is complete, the README documents it as of
+v0.8, and there is no contract to run because a value type has none.
+
+---
+
+## AUT-01 — Object ownership and ABAC
+
+**Result: M3.** Applicable.
+
+An `Invoice` in the consumer project included `Authz::Authorizable`, and an `OwnershipAuthorizer`
+wrapped the shipped `RBAC`: the grant first, the per-object rule second. The owner was permitted
+and a non-owner refused with `code: "not_the_owner"` — same account, same permission, different
+object.
+
+**The N+1 condition was measured, and the answer has a condition attached.** A hundred invoices
+were authorised through the same policy, with the authz store wrapped to count reads:
+
+| Configuration | Policy evaluations | Store reads |
+|---|---|---|
+| `Authz::Cache` configured | 100 | **1** |
+| Cache left at its default | 100 | **100** |
+
+*"list endpoints can apply the same policy without an N+1 query per row"* therefore holds — but
+only for an application that switches on a cache that is **off by default**, and whose TTL is
+also the revocation delay (`blueprints/0018`). The shard documents that trade-off for revocation
+and says nothing about it for list endpoints, where it is the difference between one read and a
+hundred.
+
+**A second finding, and this one is a hazard.** *"missing attributes deny"* does not hold
+automatically. When the resource is not the type the rule expects, `context.resource.as?(Invoice)`
+yields `nil`, and a rule written the obvious way — `return decision if invoice.nil?` — falls
+through to the **permissive** branch. Measured: an `Authz::Resource` carrying only a type and an
+id was permitted by a rule meant to require ownership.
+
+The shard cannot make a consumer's downcast fail closed; only the consumer's rule can. But it can
+say so, and the README's ownership example currently shows exactly the shape that fails open.
+
+---
+
+## OPS-04 — Custom session/token stores such as Redis
+
+**Result: M3.** Applicable, and validated for one repository of eight.
+
+`SessionRepository` — the hot one, and the one with the join — was implemented over a key-value
+store held to Redis-shaped rules: get, set, set-if-absent, an atomic read-modify-write, and no
+scans on the read path. **The shard's own contract ran against it from the consumer project: 33
+examples, 0 failures**, plus three of this validation's own.
+
+*"Required atomic operations are expressible in the contract"* — yes. `create` needs
+set-if-absent to refuse a duplicate digest loudly rather than overwrite; `revoke` and `touch`
+need read-modify-write. Sixteen fibers revoking one session concurrently produced exactly one
+report of having changed something.
+
+*"TTL cleanup is an optimisation rather than the only expiry check"* — asserted directly: a
+session was left in the store, the clock advanced past its deadline, no sweeper ran, and
+`resolve` answered `Expired` with the row still present.
+
+*"account disabled state remains promptly available"* — this is where the design shows. SQL joins
+account status into `find_by_digest`; a key-value store cannot join, so the adapter has to read
+the account separately. **Two reads on the hot path instead of one**, which is a real cost and
+the honest one: caching the flag into the session value would make it stale, which is the
+staleness the whole module exists to avoid. An account disabled after its session was minted was
+refused on the next resolve.
+
+**Why not M4.** Seven repositories were not attempted, and the scenario says "every repository
+contract". Running the contract at all also depends on reaching it, which is DEV-02's M2.
+
+---
+
+## OPS-06 — Custom schema/table names and migration ownership
+
+**Result: M3.** Applicable. Largely answered by IDP-03's run.
+
+*"SQL migrations are reference implementations rather than hidden runtime requirements"* — proven
+rather than asserted: IDP-03's application has a `users` table and no `auth_accounts`, verified
+against `sqlite_master`, and authentication worked.
+
+*"repository contracts fully describe required constraints and atomicity"* — the key-value session
+adapter in OPS-04 was written from the contract's documentation alone and passed all 33 examples,
+including the duplicate-digest and concurrency ones. That is the condition holding.
+
+*"table names are not baked into core services"* — holds for the core. `Sessions::Service` and
+`ApiTokens::Service` name no table; everything goes through a repository.
+
+**The gap is one step out from the condition as written.** The *shipped adapters* do hard-code
+their own table names: of eight SQLite adapters, only two take a name argument at all, and both
+take `accounts_table` only, because they join to it. An application with a `myapp_` prefix cannot
+use `SQLite::SessionRepository` against `myapp_sessions` — it writes its own adapter, which
+IDP-03 showed costs about seventy lines. A capability gap it is not; a convenience gap it is.
+
+**Friction worth recording.** Applying the shipped migrations from outside took a hand-rolled
+parser: they are micrate-format, micrate cannot resolve on this stack (`blueprints/0002`), and
+comments must be stripped *before* splitting on `;` or a semicolon inside a column comment cuts a
+statement in half. The first attempt did exactly that and produced `incomplete input` from
+SQLite — the same error the shard's own spec helper carries a comment about having hit.
+
+---
+
+## OPS-07 — Optional database drivers and minimal dependency graph
+
+**Result: M3.** Applicable.
+
+Three consumer projects were built, as the scenario asks, and each compiled and ran:
+
+| Project | `lib/` after `shards install` |
+|---|---|
+| core only | `backtracer db exception_page kemal kemal_identity radix` |
+| SQLite only | the above **+ `sqlite3`**, no `pg` |
+| PostgreSQL only | the above **+ `pg`**, no `sqlite3` |
+
+*"Each resolves and compiles with only its selected driver"* — yes, and the core-only project
+resolves **neither**, which is the v0.7 packaging change doing its job. The core-only binary
+hashed a password and built a `Principal` with no database present at all.
+
+*"development/test dependencies do not leak into consumer resolution"* — `ameba` and `spec-kemal`
+appear in none of the three.
+
+Kemal itself is installed by all three, including core-only. That is documented as deliberate —
+`docs/00-scope.md` says "One dependency: kemal" — so it is recorded rather than counted against
+the result. Worth noting only because the same reasoning that moved the drivers out would apply
+to a consumer that wants the hasher and nothing else, which is what the sibling
+`kemal_identity_argon2` shard is.
+
+**Why not M4: nothing protects this.** CI's "Core compiles without the Kemal adapter" step
+compiles `src/kemal_identity.cr` *inside this repository*, where both drivers are installed as
+development dependencies. It proves the core references no Kemal types. It does not prove that a
+consumer resolving only the shard gets no drivers — so moving `pg` back into `dependencies` would
+break the property with a green build. A CI step that resolves a throwaway consumer and asserts
+`lib/` holds neither driver would close it.
+
+---
+
+## DEV-01 — Custom error envelope and localisation
+
+**Result: M3.** Applicable. Mostly answered by HTTP-01's run.
+
+*"Security decisions and presentation are separate"* — `ErrorHandler` was replaced entirely by a
+consumer-written handler, and authentication carried on unchanged.
+
+*"the application can map errors without rescuing a broad base exception"* — the three guard
+failures were rescued individually as `NotAuthenticatedError`,
+`FreshAuthenticationRequiredError` and `ForbiddenError`. They do share a `KemalIdentity::Error`
+base, and so do `InfrastructureError` and `ConfigurationError` — so an application that rescued
+the base would swallow an infrastructure fault as an authentication failure. It is not forced to,
+and the specific classes are the documented way.
+
+*"internal failure reasons stay out of public messages"* — the exceptions carry no reason, which
+is the same property from the other side.
+
+*"401/403 and `WWW-Authenticate` semantics remain correct"* — this is where it stops at M3, and
+for the reason HTTP-01 found: `ForbiddenError` carries no denial reason, so a consumer's handler
+cannot choose between `insufficient_scope` and anything else and has to answer one code for every
+403. Presentation is fully replaceable; *correct* presentation of an RFC 6750 challenge is not
+available to the replacement.
+
+Localisation was not attempted.
+
+---
+
 ## Not yet attempted
 
-The remaining forty-three scenarios — twenty-eight high, twelve medium, one low, two
+The remaining thirty-seven scenarios — twenty-two high, twelve medium, one low, two
 niche-critical — are unstarted. `blueprints/0020` decision 8 already records which of them are
 additive and which were checked for freeze impact; that is a different question from this one and
 does not substitute for it.
 
 ## What this exercise changed
 
-Four things, which is the argument for running it before a release rather than after.
+Five things, which is the argument for running it before a release rather than after.
 
 The `Permission#minimum_assurance` interaction in TOK-01 was found by attempting the scenario,
 not by reading the code — a scoped token silently denied everything until two permissions were
@@ -394,6 +581,24 @@ say the same thing: **the contracts are the shard's main promise to adapter auth
 currently narrower than they appear.** That is a stronger argument for DEV-02 than DEV-02's own
 result was — a suite that is hard to reach is one problem, and a suite that is reachable but
 silent on the property you needed is a worse one.
+
+The fifth is AUT-01's, and it is the one a reader of the README would walk into. The ownership
+example in the documentation has the shape
+
+```crystal
+owner = context.resource.as?(KemalIdentity::Authz::Resource).try(&.["owner_id"])
+return decision if owner.nil? || owner == principal.subject
+```
+
+and `owner.nil?` is reached both when the resource carries no owner *and* when it is not the type
+the rule expected — where it permits. Measured: a resource with no owner attribute was permitted
+by a rule meant to require ownership. The shard cannot make a consumer's downcast fail closed, but
+the example it ships should not be the version that fails open.
+
+**Fixed in the same commit as this document.** The README example now separates the two `nil`s —
+"nobody asked an object question" passes, "the rule could not read what it needed" denies — and
+says why, because the natural one-line version is the wrong one. `tools/validation/aut01_spec.cr`
+asserts the denial, so the fix has a test rather than a paragraph.
 
 ## Re-running this
 

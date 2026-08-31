@@ -1,0 +1,5 @@
+name: core_only
+version: 0.1.0
+dependencies:
+  kemal_identity:
+    path: /home/urunsiyabend/personal/development/kemal_identity
