@@ -7,6 +7,12 @@
 Excluded:
   - lib/
   - bin/
+  # Consumer-side validation attempts, kept as evidence for
+  # blueprints/0025-maturity-validation-results.md. They belong to a separate project that
+  # depends on this shard and are deliberately written the way an application would write
+  # them -- `not_nil!` included -- so the bans in src/CLAUDE.md do not apply. One of them is
+  # expected not to compile at all: that error is the finding. See tools/validation/README.md.
+  - tools/validation/
 
 Lint/SpecFilename:
   # spec/contract holds shared examples that unit and integration specs call into, and

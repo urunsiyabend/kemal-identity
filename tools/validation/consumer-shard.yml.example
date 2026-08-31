@@ -1,0 +1,9 @@
+name: consumer_app
+version: 0.1.0
+crystal: ">= 1.12.0"
+
+dependencies:
+  kemal_identity:
+    path: /home/urunsiyabend/personal/development/kemal_identity
+  sqlite3:
+    github: crystal-lang/crystal-sqlite3

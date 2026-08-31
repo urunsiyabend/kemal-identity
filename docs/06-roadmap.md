@@ -285,6 +285,12 @@ the day they are written, and the results go in their own document so
 `blueprints/maturity-validation-scenarios.md` stays what it says it is: a catalogue carrying no
 result for this library.
 
+That pass is under way in `blueprints/0025-maturity-validation-results.md`, run from a separate
+consumer project rather than from inside this repository — several scenarios are about what an
+application can reach from outside, which cannot be answered from in here. Five of the seven
+very-high scenarios are done; `tools/validation/` keeps the attempts so a later revision is
+measured against the same ones.
+
 ## Migration path for existing Kemal apps
 
 Not a flag day. Four independent steps, each reversible.
