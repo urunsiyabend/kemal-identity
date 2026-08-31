@@ -30,7 +30,7 @@ Results are recorded here rather than in the catalogue so that the catalogue sta
 it is — a document with no result for any particular library — and so this one can be re-run
 against a later revision without rewriting it.
 
-**Five of the seven very-high scenarios are done. OPS-01 and IDP-03 are not yet attempted.**
+**All seven very-high scenarios are done.**
 Nothing below is an assessment made by reading the source; each row cites what was run.
 
 ## Summary
@@ -42,8 +42,8 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | HTTP-01 | Very high | M4 | **M3** | `WWW-Authenticate` is not sent, and cannot be sent *correctly* by a consumer |
 | DEV-02 | Very high | M4 | **M2** | Contract suite and doubles reachable only through the shard's private `spec/` tree |
 | OPS-02 | Very high | M4 | **M2** | No typed sink; two undocumented failure modes when the sink throws |
-| OPS-01 | Very high | M4 | *not yet run* | |
-| IDP-03 | Very high | M4 | *not yet run* | |
+| OPS-01 | Very high | M4 | **M3** | The shared contract's concurrency example passes for an adapter that over-allows across processes |
+| IDP-03 | Very high | M4 | **M3** | The shared `AccountRepository` contract cannot be run by a single-tenant adapter |
 
 ---
 
@@ -251,15 +251,122 @@ correlation without global state.
 
 ---
 
+## OPS-01 — Distributed rate limiting
+
+**Result: M3.** Applicable.
+
+A limiter over a store more than one process can see was written from the consumer project —
+SQLite rather than Redis, so the test needs no server and the atomicity question stays concrete.
+It implements the two-method contract and reopens nothing.
+
+**The shard's own contract passes.** `it_behaves_like_a_rate_limiter` was required from the
+consumer project and run against the adapter: **12 examples, 0 failures**, alongside six of this
+validation's own.
+
+**And that was not enough.** The catalogue asks for concurrent attempts through *different
+processes*, so six processes were run against one store, twenty attempts each, global limit ten:
+
+```
+süreç 1: allowed=1     süreç 4: allowed=6
+süreç 2: allowed=11    süreç 5: allowed=2
+süreç 3: allowed=0     süreç 6: allowed=2
+--- TOTAL allowed: 22 (limit 10, 120 attempts) ---
+```
+
+**Twenty-two allowed against a limit of ten**, and one process alone allowed eleven. The same
+adapter had just passed the shard's contract, including its concurrency example — which runs
+`limit * 2` **fibers in one process**, where crystal-db serialises through the pool and the
+race never happens.
+
+The cause was the adapter's, not the shard's: no `busy_timeout`, no `journal_mode=WAL`, and no
+`BEGIN IMMEDIATE`, so contended writes failed with `SQLITE_BUSY`, were converted to
+`Verdict.unavailable` by the adapter's own rescue, and the window reset behaviour did the rest.
+With those three fixed:
+
+```
+süreç 1: allowed=10    (all others: 0)
+--- TOTAL: 10 (limit 10) --- counter: 120
+```
+
+Exactly the limit, every attempt counted. **So the contract does permit a correct distributed
+implementation** — which is what this scenario asks — and the pass conditions hold against the
+corrected adapter: consume-and-decide atomic across processes, `retry_after` stable across
+repeated denials, and the limiter never sees the login somebody typed (asserted against the
+stored keys; the shard hashes it first).
+
+**Store failure.** Two simulations were tried and rejected before one worked, and both are worth
+recording. Pointing the adapter at a path that never existed raises `DB::ConnectionRefused` from
+`DB.open` — construction, not `#consume` — so the adapter's rescue never runs. Closing the
+database and querying again did **not** fail, because crystal-db's pool opens a fresh connection.
+Dropping the table is a real store-level failure that reaches the query, and there the adapter
+converts it: `Verdict.unavailable`, `allowed? == false`, no `retry_after`. A login against it
+failed closed with `FailureReason::RateLimiterUnavailable`, and the same limiter wrapped in
+`FailOpenRateLimiter` carried on — the per-endpoint choice `blueprints/0023` designed, exercised
+from outside.
+
+**The gap to M4 is specific and it is the shard's to close.** An adapter author who runs the
+shared contract and sees twelve green examples has been told their limiter is correct across
+processes, and it may not be. Either the contract needs a cross-process harness, or it needs to
+say plainly that it does not test that — and the guidance a distributed adapter needs (take the
+write lock up front; make a contended write wait rather than report the store unavailable)
+belongs next to the contract rather than in a consumer's second attempt.
+
+---
+
+## IDP-03 — Existing users, UUIDs and custom account storage
+
+**Result: M3.** Applicable.
+
+An adapter was written over a consumer-owned `users` table: UUID primary keys, `email` plus a
+lowercased `email_lower`, `deleted_at` for soft deletion, `auth_epoch` under the application's
+own name, and a column of SHA-256 digests from whatever came before. **`auth_accounts` is never
+created** — asserted against `sqlite_master`, which lists `users` and does not list it.
+
+**Pass conditions, all four measured:**
+
+- *"A repository adapter is sufficient"* — five methods, about seventy lines, no core class
+  touched. A login against the application's own table returned an `Authenticated`.
+- *"canonical subject conversion has one documented boundary"* — `Principal#subject` came back as
+  the application's UUID, unconverted. Nothing casts it anywhere.
+- *"soft-deleted/disabled users fail closed"* — `deleted_at` was mapped onto the shard's
+  `disabled_at` in the adapter's row reader, and a soft-deleted user was then refused **with the
+  correct password**, reason `DisabledAccount`, without the application writing a check.
+- *"lazy digest migration is possible"* — `MigratingHasher` with bcrypt current and a
+  consumer-written `Sha256Verifier`: a login against a `sha256$…` digest succeeded, and the row's
+  scheme was `bcrypt` immediately afterwards. Nobody was sent through a password reset. The shard
+  ships no legacy verifier implementations, deliberately, and writing one took nine lines.
+
+Login normalisation also worked in the application's favour: `"  ADA@Example.COM "` resolved
+against the existing lowercased column, because the shard normalises before the adapter is asked.
+
+**Then the shard's own `AccountRepository` contract was run against it: 25 examples, 22 passed.**
+The three failures are all in the tenancy group:
+
+```
+#find_by_login tenancy matches only the given tenant
+#find_by_login tenancy matches only the null tenant when given nil
+#find_by_login tenancy does not treat a nil tenant as a wildcard
+```
+
+**The contract requires multi-tenant behaviour, and this adapter is single-tenant.** Its table
+has no tenant column, and `find_by_login` answers `nil` for any tenant-scoped question rather
+than answering it from untenanted rows — which is the safe behaviour for the application it
+belongs to.
+
+That is the gap, and it lands on the scenario most likely to matter: IDP-03's persona is a mature
+application with a `users` table, and most such applications are single-tenant. They can write the
+adapter — that part works — but they cannot use the shared contract to check it without adding a
+tenant column they do not want. DEV-02's whole value is unavailable to exactly the adapters most
+likely to be written.
+
+**Smallest change that would reach M4:** let the contract be told the adapter is single-tenant —
+a `tenanted: false` argument, or the tenancy examples split into a separate opt-in group — plus a
+worked example of the whole migration, which is what `blueprints/0019` describes and this
+validation had to reconstruct.
+
+---
+
 ## Not yet attempted
-
-**OPS-01 — Distributed rate limiting.** Needs a limiter over a shared store, concurrent attempts
-through more than one process, and the store-failure paths `blueprints/0023` introduced. The
-contract side of it changed in v0.8, so this is the scenario most worth running next.
-
-**IDP-03 — Existing users, UUIDs and custom account storage.** Needs an `AccountRepository`
-implemented over a consumer-owned `users` table with UUID keys, soft deletion and a legacy digest
-column, with no `auth_accounts` present at all.
 
 The remaining forty-three scenarios — twenty-eight high, twelve medium, one low, two
 niche-critical — are unstarted. `blueprints/0020` decision 8 already records which of them are
@@ -268,7 +375,7 @@ does not substitute for it.
 
 ## What this exercise changed
 
-Two things, which is the argument for running it before a release rather than after.
+Four things, which is the argument for running it before a release rather than after.
 
 The `Permission#minimum_assurance` interaction in TOK-01 was found by attempting the scenario,
 not by reading the code — a scoped token silently denied everything until two permissions were
@@ -278,3 +385,19 @@ And HTTP-01 came out **better** than the source reading in `blueprints/0020` pre
 `ErrorHandler.new(login_path: nil)` turns out to satisfy half the scenario. An assessment made
 from `grep` had called that gap larger than it is. The catalogue's insistence on evidence over
 opinion earned its keep in both directions.
+
+The other two are about the shared contracts, and they point the same way. A rate limiter passed
+all twelve of the shard's contract examples while allowing 2.2× its global limit across
+processes, and an `AccountRepository` over a real application's `users` table could not run the
+contract at all because three examples require a tenant column it has no reason to have. Both
+say the same thing: **the contracts are the shard's main promise to adapter authors, and they are
+currently narrower than they appear.** That is a stronger argument for DEV-02 than DEV-02's own
+result was — a suite that is hard to reach is one problem, and a suite that is reachable but
+silent on the property you needed is a worse one.
+
+## Re-running this
+
+`tools/validation/` holds every attempt. The multi-process rate-limit check is not a spec: build
+`ops01_worker.cr` and `ops01_setup.cr`, then run several workers against one database file and sum
+what they report. The numbers in the OPS-01 section came from six workers, twenty attempts each,
+a global limit of ten.

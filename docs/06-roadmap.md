@@ -287,9 +287,15 @@ result for this library.
 
 That pass is under way in `blueprints/0025-maturity-validation-results.md`, run from a separate
 consumer project rather than from inside this repository — several scenarios are about what an
-application can reach from outside, which cannot be answered from in here. Five of the seven
-very-high scenarios are done; `tools/validation/` keeps the attempts so a later revision is
-measured against the same ones.
+application can reach from outside, which cannot be answered from in here. **All seven very-high
+scenarios are done: five reached M3, two reached M2.** `tools/validation/` keeps the attempts so a
+later revision is measured against the same ones.
+
+Two of the findings are about the shared contract specs rather than about any feature, and both
+say the contracts are narrower than they look: a rate limiter passed all twelve limiter contract
+examples while allowing 2.2× its global limit across processes, and an `AccountRepository` over a
+real application's single-tenant `users` table cannot run the account contract at all. Closing
+those is the same work as DEV-02.
 
 ## Migration path for existing Kemal apps
 

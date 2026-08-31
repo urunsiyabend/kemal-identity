@@ -30,6 +30,34 @@ that way rather than in-process.
 | `ops02_spec.cr` | OPS-02 — subscribing to events, and the absence of a typed sink |
 | `ops02_failure_spec.cr` | OPS-02 — a sink that raises, in both `Log` dispatch modes |
 | `http01_app.cr` | HTTP-01 — an API-only Kemal app, including a consumer-written RFC 6750 handler |
+| `shared_limiter.cr` | OPS-01 — a `RateLimiter` over a store more than one process can see |
+| `ops01_spec.cr` | OPS-01 — the shard's own limiter contract plus atomicity, `retry_after`, key hygiene and store failure |
+| `ops01_setup.cr`, `ops01_worker.cr` | OPS-01 — the cross-process check. **Not a spec**: see below |
+| `legacy_users.cr` | IDP-03 — an `AccountRepository` over a consumer-owned `users` table, and a SHA-256 `LegacyVerifier` |
+| `idp03_spec.cr` | IDP-03 — no `auth_accounts`, UUID subjects, soft deletion, lazy rehash |
+| `idp03_contract_spec.cr` | IDP-03 — the shard's `AccountRepository` contract against that adapter. **Three tenancy examples fail by design**: the adapter is single-tenant |
+
+## The two that are supposed to fail
 
 `dev02_attempt2_spec.cr` is expected to fail compilation with `undefined constant
 KemalIdentity::SpecHelper::FIXED_NOW`. Do not "fix" it; that error is the finding.
+
+`idp03_contract_spec.cr` is expected to fail three tenancy examples. The adapter under test has
+no tenant column because the application it belongs to has one tenant. That the shared contract
+cannot be run without one is the finding.
+
+## The cross-process rate limit check
+
+Not a spec, because the property is about separate processes and a spec is one:
+
+```
+crystal build -o /tmp/ops01_setup  src/ops01_setup.cr
+crystal build -o /tmp/ops01_worker src/ops01_worker.cr
+
+/tmp/ops01_setup /tmp/ops01.db
+for i in 1 2 3 4 5 6; do /tmp/ops01_worker /tmp/ops01.db 10 20 & done; wait
+```
+
+Sum what the workers print. It must equal the limit — 10 here, from 120 attempts. Before
+`shared_limiter.cr` gained `journal_mode=WAL`, `busy_timeout` and `BEGIN IMMEDIATE`, the same
+harness reported 22.
