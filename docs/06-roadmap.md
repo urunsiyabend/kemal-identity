@@ -273,9 +273,10 @@ each one closes.
 | The account contract can be told an adapter is single-tenant | **done** — IDP-03 M3 → M4. `tenanted: false` replaces the tenancy group with an example demanding that a tenant-scoped lookup answer `nil`, rather than skipping — ignoring the argument is the unsafe way to be single-tenant, and it passed everything else |
 | CI resolves three consumers and checks what each gets | **done** — OPS-07 M3 → M4. The property v0.7.0 exists for had nothing keeping it true; verified to fail when `pg` is moved back into `dependencies` |
 
-### Unreleased — the catalogue's second pass
+## v0.9.0 — the catalogue's second pass
 
-Same rule: additive, measured first, and the scenario is named.
+**Released on 2026-09-01.** Measured first, and the scenario is named. A minor rather than a patch
+because two items change behaviour an application may be observing, though no signature moved.
 
 | Deliverable | State |
 |---|---|

@@ -45,7 +45,7 @@ Add the shard to your application's `shard.yml`:
 dependencies:
   kemal_identity:
     github: urunsiyabend/kemal-identity
-    version: ~> 0.8.1
+    version: ~> 0.9.0
 ```
 
 Then install dependencies:
@@ -61,7 +61,7 @@ application:
 dependencies:
   kemal_identity:
     github: urunsiyabend/kemal-identity
-    version: ~> 0.8.1
+    version: ~> 0.9.0
   pg:
     github: will/crystal-pg
 ```
@@ -270,6 +270,9 @@ See [testing](docs/05-testing.md) for the full test matrix.
 
 ## Documentation
 
+- [Examples](examples/) — six runnable applications, each a single file: a browser site, a
+  JSON API with scoped tokens, per-object authorization, a credential this shard does not ship,
+  several JWT issuers, and a workload identity
 - [Scope](docs/00-scope.md)
 - [Architecture](docs/01-architecture.md)
 - [Security model](docs/02-security-model.md)

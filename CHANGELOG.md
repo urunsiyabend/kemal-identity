@@ -1,9 +1,14 @@
 # Changelog
 
-## Unreleased
+## v0.9.0 — 2026-09-01
 
-The catalogue's second pass. Additive except where noted — two changes alter behaviour an
-application may be observing, and both are called out below.
+The catalogue's second pass, and the reason this is a minor rather than a patch: no signature
+moved, but two changes alter behaviour an application may be observing — one of them a privilege
+boundary. Both are marked ⚠ below.
+
+Everything here came out of running `blueprints/maturity-validation-scenarios.md` from a separate
+consumer project, or out of writing the examples. Four of the six items are defects the shard had
+and nothing was testing.
 
 ### An application can register its own bearer authenticator
 
