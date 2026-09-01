@@ -177,14 +177,28 @@ KemalIdentity.configure(
 ```
 
 They land after the shipped authenticators, in the order given, in the same `AuthenticatorChain`.
-Position among the shipped ones changes no answer — every family checks its shape exactly, and
-that was measured across all three positions (`blueprints/0025`, TOK-04) — and going last means a
-loose shape check in an application's authenticator cannot shadow a credential this shard issued.
+Going last means a loose shape check in an application's authenticator cannot shadow a credential
+this shard issued.
 
 `AuthenticatorChain` reads exactly one thing as "not my credential, try the next":
 `Failed(MalformedCredential)`. Any other failure means the credential *was* recognised and then
 rejected, and the chain **stops** — falling through there would let a revoked token get a second
 opinion from an authenticator that never issued it.
+
+**One owner per shape.** That stopping rule is what makes the order matter, and only for a shape
+two authenticators both claim. Measured both ways (`blueprints/0025`, TOK-05):
+
+- Among authenticators whose shapes are *disjoint*, position changes nothing. A consumer's
+  authenticator was placed at all three positions of a three-authenticator chain, and every
+  credential family produced an identical answer at each one.
+- Where a shape is *shared*, the first claimant wins and the chain stops there. Configure `jwt:`
+  alongside a JWT-shaped authenticator of your own and the shipped validator rejects a token from
+  your second issuer on its signature — which is not `MalformedCredential`, so your authenticator
+  never runs. The same happens to an application whose own tokens start with `ki_`.
+
+Two escapes, both measured. Own the shape entirely — hold every issuer's validator in your own
+authenticator and do not configure `jwt:`, which is what `JWT.unverified_issuer` exists for — or
+move the shapes apart, which for opaque tokens is what `api_token_prefix:` is for.
 
 **Why this is a configuration parameter rather than something an application wires itself.**
 `Application#bearer` is not only what resolves the header. `Kemal::ErrorHandler` asks it whether

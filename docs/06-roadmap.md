@@ -280,6 +280,7 @@ Same rule: additive, measured first, and the scenario is named.
 | Deliverable | State |
 |---|---|
 | An application's own bearer authenticator | **done** — TOK-04 M2 → M3. `bearer_authenticators:`. The contract was always implementable; `app.bearer` had no way in — and it also gates the RFC 6750 challenge and the CSRF exemption, so an application whose only bearer credential was its own silently lost both |
+| An explicit `bearer:` override taking the whole chain | **open** — TOK-05 M3. Four families work and a shape has one owner either way, so nothing needs it yet; the condition it would close is "the chain is consumer-supplied", of which half is composed for you |
 | `AuthenticatorChain#authenticators` should not hand out its mutable array | **open** — it is what made an accidental registration route work before the parameter existed, and it contradicts "configuration is boot-time and immutable". Returning a copy changes a published getter's behaviour, so it waits for a minor release |
 
 ## v1.0 — API freeze
@@ -317,8 +318,8 @@ result for this library.
 
 That pass is under way in `blueprints/0025-maturity-validation-results.md`, run from a separate
 consumer project rather than from inside this repository — several scenarios are about what an
-application can reach from outside, which cannot be answered from in here. **Twenty-four of fifty
-are recorded, and nothing sits below M3 any more: eighteen M3 and six M4.** All seven very-high
+application can reach from outside, which cannot be answered from in here. **Twenty-five of fifty
+are recorded, and nothing sits below M3 any more: nineteen M3 and six M4.** All seven very-high
 scenarios are done. Every M2 the first pass found was fixed after measurement rather than filed.
 `tools/validation/` keeps the attempts so a later revision is measured against the same ones.
 

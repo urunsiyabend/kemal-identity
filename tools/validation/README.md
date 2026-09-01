@@ -50,6 +50,7 @@ that way rather than in-process.
 | `tok04_spec.cr` | TOK-04 — the authenticator alone, and in a chain the consumer built |
 | `tok04_order_spec.cr` | TOK-04 — every position among the shipped authenticators, every credential family. The evidence behind "extras go last" |
 | `tok04_register_probe.cr` | TOK-04 — **does not compile, on purpose**: `configure(bearer:)` before the fix. The error is the finding |
+| `tok05_spec.cr` | TOK-05 — four bearer families, the two shape collisions and both escapes, plus I/O counts and the oversized-credential timing |
 | `tok04_app_chain.cr` | TOK-04 — registration by reaching into `AuthenticatorChain#authenticators`. A server: build, run, probe. Works, and is an accident |
 | `tok04_app_only.cr` | TOK-04 — the gateway token as the *only* bearer credential, resolved by a handler of the consumer's own. A server. This is the one that loses the challenge and the CSRF exemption |
 | `tok04_app_fixed.cr` | TOK-04 — the same app through `bearer_authenticators:`, with no handler of its own. A server |

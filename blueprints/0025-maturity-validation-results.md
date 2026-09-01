@@ -50,6 +50,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | OPS-06 | High | M3 | **M3** | Shipped adapters hard-code their own table names |
 | OPS-07 | High | M3 | **M3 → M4** | Fixed after measurement: CI resolves three consumers and checks what each gets |
 | DEV-01 | High | M3 | **M3 → M4** | Fixed with HTTP-01: the shard emits the accurate challenge, so a replacement handler no longer has to guess |
+| TOK-05 | High | Medium | **M3** | Four families work, but a shape may have only one owner — the chain's built-in half is not reorderable |
 | TOK-04 | High | M3 | **M2 → M3** | Fixed after measurement: `bearer_authenticators:` — the contract was implementable and had nowhere to go |
 | HTTP-03 | High | M3 | **M2 → M3** | Fixed after measurement: `AuthenticationHandler.new(precedence: ...)`, and remember-me survives the reversal |
 | JWT-01 | High | M3 | **M2 → M3** | Fixed after measurement: `JWT.unverified_issuer`, bounded and strict |
@@ -1390,9 +1391,12 @@ in the order given. Re-measured, same app, same probes, **no handler of the cons
 **Why "after the shipped ones" rather than an interleaving API.** Measured, not assumed: the
 consumer's authenticator was placed at all three positions of a three-authenticator chain and
 every credential family — an issued opaque token, a gateway token, a JWT, garbage, nothing —
-produced an identical answer at every position. Every family checks shape exactly, so position
-does not decide anything. What the fixed order buys is that a *loose* shape check in a consumer's
-authenticator cannot shadow a credential this shard issued.
+produced an identical answer at every position. What the fixed order buys is that a *loose* shape
+check in a consumer's authenticator cannot shadow a credential this shard issued.
+
+That measurement holds only because the four shapes were **disjoint**, which was not obvious at
+the time and is not always true — TOK-05 below is the case where two authenticators claim one
+shape, and there the order decides everything.
 
 `spec/unit/custom_bearer_authenticator_spec.cr` holds nine examples, including the challenge and
 the CSRF exemption driven through the real handlers. Teeth checked by mutation: dropping the
@@ -1406,3 +1410,65 @@ what made the accidental route above possible, and it contradicts "configuration
 immutable". Returning a copy would close it, and `AuthenticatorChain` is outside the freeze list —
 but it changes the behaviour of a published getter, so it belongs in a minor release rather than
 in the patch that adds a parameter.
+
+---
+
+## TOK-05 — More than two bearer credential families
+
+**Result: M3.** Applicable. Reachable only because TOK-04's parameter now exists.
+
+Four families in one application, as the persona describes: an opaque personal token, an internal
+gateway JWT, a partner JWT with its own issuer and key, and a legacy credential kept alive during
+a migration.
+
+**Three of the four pass conditions hold, and one is measured rather than argued.**
+
+*"Ambiguous shapes fail closed"* — a JWT from an issuer nobody knows is `MalformedCredential`, and
+a partner-issuer JWT signed with the wrong key is `InvalidCredential` and **stops** the chain
+rather than being offered to the next authenticator.
+
+*"No authenticator performs I/O before determining that the shape could belong to it"* — counted,
+not asserted. Five credentials that belong to nobody (empty, a plain string, an opaque token, a
+too-short legacy token, a too-long one) produced **zero** I/O calls in either consumer-written
+authenticator. A two-megabyte three-segment credential was refused in under fifty milliseconds
+with no decode and no I/O.
+
+*"Error behaviour does not reveal which backends exist"* — an unknown-issuer JWT and a plain
+string produce the *same* `FailureReason`, and the reason names no backend. A probe cannot
+enumerate the configured issuers.
+
+**The first condition — "the chain is consumer-supplied rather than hard-coded to named
+built-ins" — holds only halfway, and the failure is instructive.**
+
+The first attempt configured `jwt:` *and* passed a JWT-shaped router of the application's own.
+The partner token never reached the router:
+
+```
+chain: [shipped JWT validator, application's issuer router]
+partner token → Failed(InvalidCredential), router io_calls: 0
+```
+
+`InvalidCredential` rather than `InvalidClaim`, because the signature fails before `iss` is
+compared — JWT-01's first row again. Either way it is not `MalformedCredential`, so the chain
+stops, exactly as it must: falling through would be a rejected token getting a second opinion.
+
+**The same collision was then measured for the opaque family**, rather than assumed by analogy: an
+application whose own credentials start with `ki_` and are 46 bytes long never sees them either,
+because `ApiTokens::Service` claims that shape first.
+
+**Both escapes work, and both were run.** Own the shape entirely — hold every issuer's validator
+in your own authenticator and do not configure `jwt:` — and all four families resolve to the right
+principal. Or move the shapes apart: with `api_token_prefix: "app_"`, the colliding `ki_`
+credential reaches the application's authenticator and the shard's own tokens still resolve.
+
+So the rule is **one owner per shape**, and it is a property of the stopping rule rather than of
+this parameter. Documented in `docs/01-architecture.md`, which previously carried the
+over-general claim that position never matters — true only for disjoint shapes, and TOK-04's
+measurement happened to use four disjoint ones.
+
+**Why M3 and not M4.** The built-in half of the chain is not reorderable and cannot be omitted
+piecemeal: an application cannot say "my authenticator first, then the shipped one". Nothing in
+this scenario needs that, because a shape has one owner either way — but the condition as written
+asks for a consumer-supplied chain, and half of it is composed for you. The M4 step is an explicit
+override (`bearer:` taking the whole chain), which is additive and can wait until something needs
+it. `tools/validation/tok05_spec.cr` holds the eight examples.
