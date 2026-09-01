@@ -140,3 +140,8 @@ strings. Recording that as the remaining gap rather than inventing a scheme for 
 **Documentation owed.** The `README.md` event catalogue needs the sink, the two normalised field
 names, and `#failures` as the thing to alarm on. Not written here: that file is being edited
 elsewhere.
+
+Two more items are owed to that same file, recorded here because this is where the list started.
+Its ownership example shows the `return decision if resource.nil?` shape that fails **open**
+(`blueprints/0025`, AUT-01), and the credential-precedence section an earlier commit added is gone
+from the current README — both now live in `docs/`, and the README will want to point at them.

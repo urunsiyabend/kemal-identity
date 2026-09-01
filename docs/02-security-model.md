@@ -236,6 +236,62 @@ The window is the caller's choice (decision D5). Operations that must call it: c
 email, changing password, disabling MFA, generating or revoking API credentials, and any
 destructive account action.
 
+## Authorization rules an application writes itself
+
+`Authz::Authorizer` is a seam: the shipped `Authz::RBAC` answers *does this account hold the
+permission*, and an application that also has per-object rules wraps it. Two things about that
+wrapper are measured in `blueprints/0025-maturity-validation-results.md` (AUT-01) and neither is
+obvious.
+
+### A rule that cannot read its resource must deny
+
+`Authz::Context#resource` is an `Authorizable`, so a rule reaching for its own type downcasts:
+
+```crystal
+invoice = context.resource.as?(Invoice)
+```
+
+`as?` yields `nil` for anything that is not an `Invoice` — including an `Authz::Resource` carrying
+only a type and an id, which is what a route that did not load the row passes. Written the obvious
+way, the rule then **fails open**:
+
+```crystal
+return decision if invoice.nil?      # WRONG: falls through to the permissive branch
+```
+
+Measured: a resource with no owner attribute was permitted by a rule whose entire purpose was to
+require ownership. The shard cannot make a consumer's downcast fail closed — only the consumer's
+rule can — so write the other branch:
+
+```crystal
+# The rule needs an Invoice to have an opinion. Anything else is a route that did not load one,
+# and "I could not check" is not "yes".
+return Authz::Forbidden.policy(permission, code: "no_invoice_in_context") if invoice.nil?
+```
+
+The same holds for attributes: `context["device"]` is nilable, and a missing value is a question
+nobody answered.
+
+### The N+1 on a list endpoint, and what removing it costs
+
+A route applying one policy per row queries the authz store per row. Measured over a hundred
+invoices, with the store wrapped to count reads:
+
+| Configuration | Policy evaluations | Store reads |
+|---|---|---|
+| `Authz::Cache` configured | 100 | **1** |
+| Cache left at its default | 100 | **100** |
+
+`Authz::Cache` is **off by default**, and that is deliberate: its TTL *is* the revocation delay
+(`blueprints/0018`). A grant removed from the store keeps deciding requests until the entry
+expires — five seconds by default, one minute at `MAX_TTL`.
+
+So the choice on a list endpoint is explicit rather than tuned away: either a hundred reads per
+page, or revocation that lags by the TTL. Pick the TTL against how fast a removed grant must stop
+working, not against the page size. A page that authorises a hundred rows is also worth a second
+look on its own terms — one `authorize!` for *reading the list* plus per-row filtering the
+application already does in SQL is often the same answer with one query.
+
 ## Logging
 
 Never log: passwords, raw tokens of any kind, session cookies, `Authorization` headers,

@@ -594,6 +594,17 @@ id was permitted by a rule meant to require ownership.
 The shard cannot make a consumer's downcast fail closed; only the consumer's rule can. But it can
 say so, and the README's ownership example currently shows exactly the shape that fails open.
 
+**Documented after measurement**, in `docs/02-security-model.md` under *Authorization rules an
+application writes itself*: the fail-open downcast with the branch that fixes it, and the N+1 table
+above with the TTL that buying your way out of it costs. It went to `docs/` rather than the README
+because the README is being edited elsewhere — and because a security trade-off with a number
+attached belongs in the security model, not in a getting-started file. **Still owed in the README:**
+its ownership example still shows the `return decision if invoice.nil?` shape that fails open.
+
+Still M3. The conditions were already met; what changed is that a reader can now find out on which
+terms. M4 wants a worked example and operational guidance, and the worked example — the consumer
+project's `OwnershipAuthorizer` — lives in `tools/validation/`, not in `examples/`.
+
 ---
 
 ## OPS-04 — Custom session/token stores such as Redis

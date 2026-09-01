@@ -264,6 +264,7 @@ each one closes.
 
 | Deliverable | State |
 |---|---|
+| The authorization cache's cost on a list endpoint, written down | **done** — AUT-01 stays M3. One store read per page with `Authz::Cache`, a hundred without, and the TTL is the revocation delay either way; documented with the fail-open downcast next to it, in `docs/02-security-model.md` |
 | Credential precedence as a handler argument | **done** — HTTP-03 M2 → M3. `AuthenticationHandler.new(precedence: Precedence::Bearer)` instead of publishing `restore_remembered!`: the ordering is the subtle part, so handing it over would document the trap and then invite it |
 | Provider-specific authorization parameters | **done** — IDP-01 M2 → M3. Allowlisted by exclusion: the nine parameters the flow builds are refused at construction, because the dangerous version of this feature turns PKCE off by configuration |
 | `JWT.unverified_issuer`, so several issuers can be routed | **done** — JWT-01 M2 → M3. Bounded before decoding and reusing the validator's own strict base64url, because a second decoder that almost agrees is how one token means two things |
