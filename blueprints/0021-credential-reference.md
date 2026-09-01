@@ -212,7 +212,7 @@ until it is written down, so it is written down in the README and asserted in
 And adding a defaulted field to `ApiTokens::Token` is non-breaking in exactly the direction that
 is dangerous: an adapter written before v0.8 keeps compiling, silently drops the column, and
 reads back `nil` — which means *unrestricted*. No type can catch that. The shared contract suite
-can, so `spec/contract/api_token_repository_contract.cr` grew three examples asserting the
+can, so `src/kemal_identity/testing/contracts/api_token_repository_contract.cr` grew three examples asserting the
 round trip of all three scope states, verified by deliberately reverting the PostgreSQL adapter
 and watching them fail. It is also one more argument for DEV-02: a contract suite only protects
 the adapters that can run it.

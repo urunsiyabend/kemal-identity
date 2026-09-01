@@ -5,7 +5,7 @@
 | Layer | Directory | Needs a DB? | What it covers |
 |---|---|---|---|
 | Unit | `spec/unit` | no | hashing, digesting, cookie codec, expiry arithmetic, config validation |
-| Contract | `spec/contract` | some | shared specs every adapter must pass |
+| Contract | `src/kemal_identity/testing/contracts` | some | shared specs every adapter must pass, **published** for consumers |
 | HTTP integration | `spec/integration` | yes | spec-kemal: login, logout, cookie flags, guards, error mapping |
 | Security regression | `spec/security` | no | one spec per threat in `docs/02-security-model.md` |
 | Concurrency | `spec/concurrency` | yes | atomic consumption, parallel session writes |
@@ -17,12 +17,12 @@ regressions database-free means they run on every save, which is the point.
 ## Contract specs
 
 Every abstract class gets one shared spec, and every implementation runs it — including the
-in-memory doubles in `spec/support`. This is what keeps the in-memory adapter honest;
+in-memory doubles in `src/kemal_identity/testing`. This is what keeps the in-memory adapter honest;
 a test double that quietly behaves differently from PostgreSQL turns green specs into
 false confidence.
 
 ```crystal
-# spec/contract/session_repository_contract.cr
+# src/kemal_identity/testing/contracts/session_repository_contract.cr
 def it_behaves_like_a_session_repository(&build : -> SessionRepository)
   # create/find round trip
   # create refuses a duplicate token digest instead of overwriting
@@ -77,7 +77,7 @@ app = KemalIdentity::Application.new(
 ```
 
 `FastTestHasher` exists because a suite that runs real bcrypt at cost 12 in every login
-spec will take minutes. It lives in `spec/support`, passes the `Hasher` contract, and is
+spec will take minutes. It lives in `src/kemal_identity/testing`, passes the `Hasher` contract, and is
 unreachable from a production build. The real `BcryptHasher` is exercised in its own spec
 and in the benchmark.
 

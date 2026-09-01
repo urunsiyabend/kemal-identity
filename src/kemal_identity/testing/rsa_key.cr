@@ -4,7 +4,7 @@ require "openssl"
 #
 # `src/kemal_identity/jwt/rsa.cr` binds verification, because that is all the shard does. To
 # *attack* an RS256 validator a spec has to be able to mint tokens, so signing is bound here —
-# in `spec/support/`, where it cannot become part of the published API by accident. A shard that
+# behind `kemal_identity/testing`, which a production build never requires. A shard that
 # can sign is a shard someone will use to issue tokens, and issuing is deliberately out of scope.
 lib LibCrypto
   fun d2i_autoprivatekey = d2i_AutoPrivateKey(

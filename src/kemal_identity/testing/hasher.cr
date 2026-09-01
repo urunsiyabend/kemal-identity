@@ -4,7 +4,8 @@ module KemalIdentity::Testing
   # Real bcrypt at cost 12 is tens of milliseconds per verification, so a suite that used it
   # everywhere would take minutes and nobody would run it on save. This satisfies the same
   # `Hasher` contract — the contract spec is what stops it drifting into false confidence —
-  # and is unreachable from a production build because it lives in `spec/support`.
+  # and is unreachable from a production build because nothing in `kemal_identity` requires
+  # `kemal_identity/testing`.
   #
   # **Not a password hasher.** A single SHA-256 pass is exactly what a password hasher must
   # not be: it is fast, which is the property that makes offline cracking cheap. The

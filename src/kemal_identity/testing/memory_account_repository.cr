@@ -2,8 +2,9 @@ module KemalIdentity::Testing
   # In-memory `Accounts::Repository`.
   #
   # Passes the same contract spec as the PostgreSQL adapter, which is the only thing that
-  # makes it trustworthy. It lives in `spec/support` and is unreachable from a production
-  # build — `src/CLAUDE.md` bans in-memory repositories under `src/`.
+  # makes it trustworthy. Unreachable from a production build not because of where it lives —
+  # it is published as `kemal_identity/testing` — but because nothing in `kemal_identity`
+  # requires that tree. Measured: a consumer binary has zero `KemalIdentity::Testing` symbols.
   #
   # Guarded by a `Mutex` because the contract requires adapters to be safe for concurrent use
   # from multiple fibers on multiple threads, and since Crystal 1.21 that may genuinely mean

@@ -102,7 +102,7 @@ Both were cases of a test convenience deciding what the library supports.
 **`WaitGroup`** arrived in Crystal 1.13 and was used by five concurrency specs and the
 benchmark. It set the floor
 at 1.13 while the library itself needed nothing of the sort. Replaced with
-`spec/support/fiber_join.cr`, a buffered-channel barrier that works on every supported version.
+`src/kemal_identity/testing/fiber_join.cr`, a buffered-channel barrier that works on every supported version.
 The concurrency specs were re-verified afterwards against the read-then-write mutation from
 `blueprints/0011-action-token-atomicity.md` — they still catch it, three runs out of three,
 which mattered because the swap touched the exact machinery those specs rely on.

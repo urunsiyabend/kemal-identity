@@ -313,6 +313,15 @@ what those files exist to be. The scan now excludes `src/kemal_identity/testing`
 one directory, not a pattern, so a violation anywhere else is still caught — and a new example
 asserts the exclusion is neither empty nor swallowing all of `src/`.
 
+**One thing the move broke, caught by CI rather than by this validation.** `bench/hashing_latency.cr`
+required four files by their old `spec/support` paths and stopped compiling. The suite, the lint,
+the format check and the example build all stayed green; the benchmark is compiled by a CI step
+that was not re-run locally after the move. Fixed, along with every stale `spec/support` and
+`spec/contract` reference in the source comments, `docs/`, and four earlier blueprints — several
+of which claimed the doubles "cannot become published API **because** they live under `spec/`",
+a reason that stopped being true the moment they were published. The property still holds, for a
+different reason: nothing in `kemal_identity` requires the tree.
+
 **What DEV-02 still does not have**, and why M4 is claimed anyway: the block signatures are
 documented in the contracts' own comments and now in the README, but there is no compile-time
 statement of them. An adapter author still learns that `it_behaves_like_an_api_token_repository`

@@ -40,7 +40,7 @@ deprecated in OpenSSL 3.0, and `EVP_PKEY_fromdata` is 3.0-only, which would make
 refuse to build against 1.1.1. `d2i_PUBKEY` is stable in both. About forty lines of ASN.1 write
 the structure; OpenSSL parses and validates it.
 
-**Verification only.** Signing is bound in `spec/support/`, where it cannot become part of the
+**Verification only.** Signing is bound in the test-only tree, where it cannot become part of the
 published API by accident — a shard that can sign is a shard someone will use to issue tokens,
 and issuing is out of scope.
 
@@ -142,3 +142,14 @@ nobody can change it.
 * Not done here: a Kemal handler for the two OIDC routes. The flow is framework-agnostic, the
   codec covers the sharp edge, and the remaining glue is a redirect and a cookie the application
   writes itself.
+
+## Amendment, v0.8.0
+
+Two paths named above moved. The test-only RSA signing helper is now
+`src/kemal_identity/testing/rsa_key.cr`, published behind `require "kemal_identity/testing"`
+rather than hidden under `spec/` — so the reason it cannot reach a production build changed with
+it. It is not the location any more; it is that nothing in `kemal_identity` requires that tree,
+which was measured rather than asserted: a consumer binary carries zero `KemalIdentity::Testing`
+symbols (`blueprints/0025`, DEV-02 and OPS-07).
+
+The decision itself is unchanged: this shard verifies signatures and does not mint them.

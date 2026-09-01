@@ -2,7 +2,7 @@ module KemalIdentity::Testing
   # A stand-in for the password scheme an application is migrating off.
   #
   # A single unsalted SHA-256 pass, which is what a legacy scheme usually turns out to be and
-  # is exactly why it is being retired. It lives in `spec/support` and not in `src` on purpose:
+  # is exactly why it is being retired. It lives behind `kemal_identity/testing` on purpose:
   # this shard ships the `LegacyVerifier` contract and no implementations, because a published
   # `Sha256Verifier` is a published working SHA-256 password check and the first thing somebody
   # does with a class that exists is use it for something new.

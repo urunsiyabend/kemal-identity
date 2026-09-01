@@ -57,7 +57,7 @@ is a design error: extract the two or three values it actually reads (a cookie
 string, a request method, a path) and pass those.
 
 Why this matters concretely: it is what makes `spec/unit/` runnable without a
-server and `spec/contract/` runnable against every adapter. It also leaves the
+server and the shared contracts runnable against every adapter. It also leaves the
 door open for an Amber or Lucky layer without touching the core.
 
 ## Module map

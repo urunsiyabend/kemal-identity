@@ -21,7 +21,7 @@ contradicts the layering rule in `docs/01-architecture.md`:
 > three values it actually reads (a cookie string, a request method, a path) and pass those.
 
 That rule is not decoration. It is what makes `spec/unit` runnable without a server, what lets
-`spec/contract` run against every adapter, and what leaves the door open to an Amber or Lucky
+the shared contracts run against every adapter, and what leaves the door open to an Amber or Lucky
 adapter without touching the core. One `env` parameter in the session service would end all
 three.
 

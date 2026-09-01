@@ -16,13 +16,17 @@
 
 require "../src/kemal_identity"
 
-# The in-memory repositories live in spec/support, not src -- `src/CLAUDE.md` bans them from
-# the shipped code. They pass the same contract specs as the PostgreSQL adapters, so measuring
-# against them isolates the shard's own overhead from the database's.
-require "../spec/support/fiber_join"
-require "../spec/support/test_clock"
-require "../spec/support/memory_account_repository"
-require "../spec/support/memory_session_repository"
+# The in-memory repositories live in src/kemal_identity/testing, published as
+# `require "kemal_identity/testing"` and required by nothing in `kemal_identity` itself. They are
+# required here file by file rather than through that entry point, which would pull `spec` into a
+# benchmark that has no use for it.
+#
+# They pass the same contract specs as the PostgreSQL adapters, so measuring against them
+# isolates the shard's own overhead from the database's.
+require "../src/kemal_identity/testing/fiber_join"
+require "../src/kemal_identity/testing/clock"
+require "../src/kemal_identity/testing/memory_account_repository"
+require "../src/kemal_identity/testing/memory_session_repository"
 
 SEPARATOR = "-" * 78
 

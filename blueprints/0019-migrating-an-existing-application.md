@@ -44,8 +44,14 @@ this project publishing a working SHA-1 password check, and the first thing some
 class that exists is use it for something new. An implementation is five lines and belongs in
 the application that has the legacy table.
 
-The test double lives in `spec/support`, where it cannot become published API — the same rule
-`spec/support/rsa_test_key.cr` follows for signing.
+The test double lives in the test-only tree, where it cannot reach a production build — the same
+rule the RSA signing helper follows.
+
+**Amended in v0.8.0:** both moved to `src/kemal_identity/testing/`, published as
+`require "kemal_identity/testing"`. They still never reach a production build, but the reason is
+now that nothing in `kemal_identity` requires that tree rather than that they are hidden under
+`spec/` — see `blueprints/0025-maturity-validation-results.md` (DEV-02), which is why they were
+published in the first place.
 
 ### 3. One verifier runs, routed by shape
 

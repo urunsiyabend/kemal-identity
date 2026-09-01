@@ -30,7 +30,8 @@ require "./postgres/authz_repository"
 # tooling — they are not run from here. An auth library that mutates the schema on boot is one
 # that will mutate it at the wrong moment (`docs/03-data-model.md`).
 #
-# Both classes run the same contract specs as the in-memory doubles in `spec/support`. That is
+# Both classes run the same contract specs as the in-memory doubles in
+# `src/kemal_identity/testing`. That is
 # the only thing that makes those doubles trustworthy: a double that quietly behaves
 # differently from PostgreSQL turns a green suite into false confidence.
 module KemalIdentity::Postgres
