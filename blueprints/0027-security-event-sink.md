@@ -78,6 +78,15 @@ output an operator greps is now consistent too — so `authz.*` events now say `
 `session.revoked` and `session.ended` say `credential:`, which is what a session id is now that
 `CredentialRef` exists.
 
+**Amended in v0.8.2: this sweep was incomplete, and nothing was testing it.** `session.started`,
+`api_token.issued` and `api_token.revoked` kept their own field names, so the three events that
+*mint or kill* a credential were the three leaving `SecurityEvent#credential` nil — with the id in
+the `data` bag instead, and `api_token.issued` calling it `token:`, which reads as though the
+secret itself were in the log line. Found by reading a validation app's output
+(`blueprints/0025`, TOK-02), not by a spec: the whole suite stayed green through the original
+rename because no example asserted the convention. One now does, in
+`spec/security/event_sink_spec.cr`, naming four events and the id each must carry.
+
 ### 4. A failing sink is counted, not silenced and not fatal
 
 ```crystal

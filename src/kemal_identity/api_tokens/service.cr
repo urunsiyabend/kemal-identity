@@ -92,7 +92,9 @@ module KemalIdentity::ApiTokens
       Log.info &.emit(
         "api_token.issued",
         subject: account.id,
-        token: record.id,
+        # The token's id, under the field name every other event uses for a credential id. Named
+        # `token:` until v0.8.2, which read as though the secret itself were in the log line.
+        credential: record.id,
         expires_at: expires_at.to_s,
         # How wide the credential is, for whoever reviews what was handed out. The scope names
         # themselves are permission names, not secrets.
@@ -167,7 +169,7 @@ module KemalIdentity::ApiTokens
     def revoke(token_id : String) : Bool
       revoked = @tokens.revoke(token_id, @clock.now)
 
-      Log.info &.emit("api_token.revoked", token: token_id) if revoked
+      Log.info &.emit("api_token.revoked", credential: token_id) if revoked
 
       revoked
     end

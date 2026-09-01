@@ -81,6 +81,53 @@ describe "OPS-02: a typed security event sink" do
     revoked.data.should be_empty
   end
 
+  # Every event that mints or kills a credential must name it in the typed field, not bury an id
+  # in the bag under a field name of its own. Found by reading a consumer app's log output, where
+  # `api_token.issued` printed `token: "_OTDjk6pl9-..."` -- a token *id*, under a field name that
+  # reads as though the secret itself were in the line (`blueprints/0025`, TOK-02).
+  it "names the credential on every event that mints or kills one" do
+    sink = RecordingSink.new
+    accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
+    account = accounts.find_by_id("a1").or_fail
+
+    sessions = KemalIdentity::Sessions::Service.new(
+      sessions: KemalIdentity::Testing::MemorySessionRepository.new(accounts),
+      clock: clock,
+      random: KemalIdentity::Testing::DeterministicRandom.new(seed: 21),
+    )
+    api = KemalIdentity::ApiTokens::Service.new(
+      tokens: KemalIdentity::Testing::MemoryApiTokenRepository.new(accounts),
+      clock: clock,
+      random: KemalIdentity::Testing::DeterministicRandom.new(seed: 22),
+    )
+
+    session = uninitialized KemalIdentity::Sessions::Issued
+    issued = uninitialized KemalIdentity::ApiTokens::Issued
+
+    deliver(sink) do
+      session = sessions.start(account, KemalIdentity::AssuranceLevel::Password)
+      issued = api.issue(account: account, name: "ci")
+      api.revoke(issued.record.id)
+      sessions.revoke(session.record.id)
+    end
+
+    expected = {
+      "session.started"   => session.record.id,
+      "api_token.issued"  => issued.record.id,
+      "api_token.revoked" => issued.record.id,
+      "session.revoked"   => session.record.id,
+    }
+
+    expected.each do |name, id|
+      event = sink.events.find { |candidate| candidate.name == name }.or_fail("no #{name} event")
+      event.credential.should eq(id)
+      # And the id is not also sitting in the bag under an older name.
+      event.data.has_key?("token").should be_false
+      event.data.has_key?("session").should be_false
+    end
+  end
+
   # docs/02-security-model.md's list of what must never be logged, checked at the sink rather than
   # at the log line -- a consumer's SIEM is one more place a secret could land.
   it "carries no credential material" do

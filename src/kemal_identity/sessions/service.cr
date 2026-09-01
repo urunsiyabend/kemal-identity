@@ -52,7 +52,7 @@ module KemalIdentity::Sessions
       # one, and an investigator wants those distinguishable.
       Log.info &.emit(
         "session.started",
-        subject: account.id, session: issued.record.id, assurance: assurance.to_s
+        subject: account.id, credential: issued.record.id, assurance: assurance.to_s
       )
 
       issued

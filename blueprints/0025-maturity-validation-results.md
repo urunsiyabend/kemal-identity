@@ -50,6 +50,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | OPS-06 | High | M3 | **M3** | Shipped adapters hard-code their own table names |
 | OPS-07 | High | M3 | **M3 → M4** | Fixed after measurement: CI resolves three consumers and checks what each gets |
 | DEV-01 | High | M3 | **M3 → M4** | Fixed with HTTP-01: the shard emits the accurate challenge, so a replacement handler no longer has to guess |
+| TOK-02 | High | High | **M3** | Fine-grained restriction works and survives a global role; the shard supplies the credential id and the target, the selection table is the application's |
 | TOK-05 | High | Medium | **M3** | Four families work, but a shape may have only one owner — the chain's built-in half is not reorderable |
 | TOK-04 | High | M3 | **M2 → M3** | Fixed after measurement: `bearer_authenticators:` — the contract was implementable and had nowhere to go |
 | HTTP-03 | High | M3 | **M2 → M3** | Fixed after measurement: `AuthenticationHandler.new(precedence: ...)`, and remember-me survives the reversal |
@@ -1472,3 +1473,92 @@ this scenario needs that, because a shape has one owner either way — but the c
 asks for a consumer-supplied chain, and half of it is composed for you. The M4 step is an explicit
 override (`bearer:` taking the whole chain), which is additive and can wait until something needs
 it. `tools/validation/tok05_spec.cr` holds the eight examples.
+
+---
+
+## TOK-02 — Resource- or tenant-restricted personal token
+
+**Result: M3.** Applicable.
+
+Built the way GitHub's fine-grained tokens actually work, rather than the way the scenario's
+wording suggests: the token carries *permissions*, and the *resources* it may touch are a
+selection stored server-side against the token's identity. One human, member of `org-a` and
+`org-b` with a `developer` role in each, and two tokens:
+
+| Token | Scopes | Selected for |
+|---|---|---|
+| narrow | `repo.read` | `org-a`, repositories 17 and 24 |
+| wide | `repo.read`, `repo.write` | all of `org-b` |
+
+**Every pass condition holds.**
+
+*"The authorization call receives both the current credential identity and the target
+tenant/resource"* — `principal.credential.id` keys the selection table and `context.tenant_id` plus
+`context.resource` name the target. Counted: one lookup per decision.
+
+*"Scope cannot be inferred only from `Principal#tenant_id`"* — asserted directly, and the fixture
+is built to make it impossible: this human belongs to two organisations, so `tenant_id` is **nil**
+on both principals. Two tokens, one account, no account-level tenant, and the answers still
+differ.
+
+*"Global roles do not accidentally erase token attenuation"* — a global `operator` assignment
+(`tenant_id: nil`, needing no membership, the sharpest thing in `Authz::Membership`) grants
+`org.admin` everywhere. The narrow token still cannot reach `org-b`, and still cannot use
+`org.admin` in `org-a` — its scopes do not name it. The same global role through the *browser
+session* is unattenuated, which is the intersection behaving in both directions.
+
+*"Denial is identical for unknown and unavailable resources"* — repository 31 (exists, wrong
+organisation) and repository 9999 (does not exist) produce the same `reason`, the same `code` and
+the same `step_up?`.
+
+**Horizontal access attempted over HTTP**, which is what the scenario asks for — the same URL with
+the organisation or the repository id changed:
+
+| Request with the narrow token | Result |
+|---|---|
+| `GET /orgs/org-a/repos/17` | 200 |
+| `GET /orgs/org-a/repos/24` | 200 |
+| `GET /orgs/org-a/repos/31` — another org's repo id | 403 |
+| `GET /orgs/org-a/repos/9999` — no such repo | 403 |
+| `GET /orgs/org-b/repos/31` — organisation swapped | 403 |
+| `GET /orgs/org-b` — organisation swapped, no repo | 403 |
+| `PUT /orgs/org-a/repos/17` — outside the token's scopes | 403 |
+
+And with the wide token: `GET`/`PUT` inside `org-b` succeed, `GET /orgs/org-a/repos/17` is 403.
+
+**Both halves of the intersection have teeth, proven by breaking each.** Dropping the
+application's organisation check fails three examples; dropping the shard's own credential
+attenuation in `Authz::RBAC` fails two. Neither half is carrying the other.
+
+**Why M3 and not M4.** The selection table, and the wrapper that reads it, are the application's
+to write — about seventy lines here. That is the right split (`blueprints/0018`: a role grants a
+permission everywhere or nowhere; per-object rules are an `Authorizer`), but there is no worked
+example in the repository and no documentation of the pattern, which is what M4 asks for.
+
+**A defect found by reading the app's own log output, and fixed.** The validation server printed:
+
+```
+api_token.issued -- subject: "ada", token: "IXDSymFfxYt9eOeZr6BafhRGZErzH6a78ySXLIoMaoI", ...
+```
+
+That value is the token's *id*, not the secret — but under a field named `token` it reads exactly
+like the secret, in the one log line an incident responder would look at first. Measured through
+the typed sink, the field name was worse than cosmetic:
+
+| Event | `SecurityEvent#credential` | `data` |
+|---|---|---|
+| `api_token.issued` | **nil** | `{"token" => "...", "scopes" => "..."}` |
+| `session.started` | **nil** | `{"session" => "...", "assurance" => "..."}` |
+| `api_token.revoked` | **nil** | `{"token" => "..."}` |
+
+So the three events that mint or kill a credential were the three that did not populate the typed
+correlation field OPS-02 exists for. `blueprints/0027` renamed `session.revoked` and
+`session.ended` to `credential:` and missed `session.started` and the whole `api_token.*` family —
+and nothing tested the convention, which is why the whole suite stayed green through the rename.
+
+Fixed: all three now emit `credential:`, and
+`spec/security/event_sink_spec.cr` has an example that names the four events and the id each must
+carry. Restoring any one of the old field names fails it.
+
+**Breaking for a log reader**, exactly as `blueprints/0027`'s rename was, and for the same reason:
+aliasing at the bridge would leave `grep` inconsistent.
