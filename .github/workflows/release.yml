@@ -46,9 +46,14 @@ jobs:
       # tree that does not build — the tag is what people will actually resolve.
       - name: Verify the tagged tree
         run: |
+          set -e
           crystal tool format --check
           crystal build --no-codegen src/kemal_identity.cr
-          crystal build --no-codegen examples/browser_session/app.cr
+          # Globbed, like the CI job: a release cut from a tree where one of the examples no
+          # longer compiles ships an example nobody can run.
+          for app in examples/*/app.cr; do
+            crystal build --no-codegen "$app"
+          done
           crystal spec spec/unit spec/security spec/integration/sqlite_spec.cr
 
       # The section between this version's heading and the next one. Written once, in the
@@ -73,11 +78,27 @@ jobs:
           echo "Release notes:"
           cat release-notes.md
 
+      # Idempotent, because a job that has already done the work should not fail on its last
+      # line. Two ways this step used to be reached with the release already present: somebody
+      # published it by hand before the workflow got there, and a re-run of this job. Both ended
+      # in `HTTP 422: Release.tag_name already exists` after every check above had passed — a red
+      # run with nothing actually wrong, which is the kind of red that teaches people to ignore
+      # red.
+      #
+      # Updating rather than skipping is deliberate: the notes in CHANGELOG.md are the source, so
+      # a release published by hand with something else in it gets corrected here.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
-            --notes-file release-notes.md \
-            --verify-tag
+          set -e
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "::notice::$GITHUB_REF_NAME already exists; updating its notes from CHANGELOG.md"
+            gh release edit "$GITHUB_REF_NAME" --notes-file release-notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file release-notes.md \
+              --verify-tag
+          fi

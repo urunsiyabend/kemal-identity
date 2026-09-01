@@ -169,6 +169,33 @@ original purpose — noticing the `HEAD` and router-filter fixes on release — 
 
 Ameba runs from `master` (1.7.0-dev): no ameba release compiles against Crystal 1.21.
 
-Every job runs: `crystal tool format --check`, `ameba`, `crystal spec`, and a build of
-`examples/browser_session`. The example failing to compile is a CI failure — an example
-that has drifted from the API is worse than no example.
+Every job runs: `crystal tool format --check`, `ameba`, `crystal spec`, and a build of **every**
+`examples/*/app.cr`. The list is globbed rather than enumerated, so an example added without a CI
+line cannot rot. An example failing to compile is a CI failure — one that has drifted from the API
+is worse than no example.
+
+## Releasing
+
+**The whole procedure is pushing the tag.**
+
+```bash
+# bump shard.yml, src/kemal_identity/version.cr, and the ~> constraints in README.md
+# write the CHANGELOG section, heading `## vX.Y.Z — <date>`
+git push origin main
+git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z
+```
+
+`.github/workflows/release.yml` does the rest: it refuses a tag that disagrees with `shard.yml`
+or `VERSION`, re-runs the database-free suite **against the tagged tree** rather than trusting
+that main was green, extracts the notes from the `CHANGELOG.md` section for that version, and
+publishes the GitHub release.
+
+**Do not run `gh release create` by hand.** The tag push already publishes; doing both leaves the
+workflow's last step failing with `HTTP 422: Release.tag_name already exists` — after every check
+has passed, which is a red run with nothing wrong and the kind of red that teaches people to
+ignore red. It happened on v0.8.1 and v0.9.0. The publish step is now idempotent — it updates an
+existing release's notes from the changelog instead of failing — so a re-run of the job is safe,
+but the procedure is still one command.
+
+A release is cut from the tag, and the tag is what people resolve, so nothing about it is taken on
+trust from main.
