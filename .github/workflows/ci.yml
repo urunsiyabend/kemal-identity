@@ -107,8 +107,15 @@ jobs:
 
       # An example that has drifted from the API is worse than no example, so this failing is
       # a CI failure rather than a warning.
-      - name: Build the example
-        run: crystal build --no-codegen examples/browser_session/app.cr
+      #
+      # Globbed rather than listed: an example added without a CI line is an example that rots.
+      - name: Build every example
+        run: |
+          set -e
+          for app in examples/*/app.cr; do
+            echo "-- $app"
+            crystal build --no-codegen "$app"
+          done
 
       # The benchmarks are not run here — docs/05-testing.md keeps them out of CI, since a
       # shared runner's numbers mean nothing. Compiling them still catches API drift, which it

@@ -157,6 +157,43 @@ describe "revoking an API token" do
     service.authenticate(second.token.reveal).should be_a(KemalIdentity::Authenticated)
   end
 
+  # A route that lets a client name the token to revoke -- `DELETE /tokens/:id` -- is the obvious
+  # thing to write, and with the one-argument form it revokes anybody's token. Token ids are not
+  # secret: they appear in audit lines and in management listings.
+  describe "scoped to an owner" do
+    it "revokes a token the account owns" do
+      service, _, accounts, _ = token_harness
+      issued = issue(service, accounts)
+
+      service.revoke(issued.record.id, "a1").should be_true
+
+      KemalIdentity::Testing.should_fail_with(
+        service.authenticate(issued.token.reveal), KemalIdentity::FailureReason::Revoked
+      )
+    end
+
+    it "refuses to revoke a token belonging to somebody else, and says nothing about it" do
+      accounts = KemalIdentity::Testing::MemoryAccountRepository.new([
+        KemalIdentity::Testing.account,
+        KemalIdentity::Testing.account(id: "a2", login: "grace@example.com"),
+      ])
+      service = KemalIdentity::ApiTokens::Service.new(
+        tokens: KemalIdentity::Testing::MemoryApiTokenRepository.new(accounts),
+        clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW),
+        random: KemalIdentity::Testing::DeterministicRandom.new,
+      )
+
+      victim = service.issue(accounts.find_by_id("a1").or_fail, "laptop")
+
+      service.revoke(victim.record.id, "a2").should be_false
+      # Same answer for an id that does not exist at all, so the caller learns nothing.
+      service.revoke("no-such-token", "a2").should be_false
+
+      # And the token still works, which is the property that matters.
+      service.authenticate(victim.token.reveal).should be_a(KemalIdentity::Authenticated)
+    end
+  end
+
   it "revokes every token at once when asked" do
     service, _, accounts, _ = token_harness
     tokens = Array.new(3) { |i| issue(service, accounts, "token-#{i}") }

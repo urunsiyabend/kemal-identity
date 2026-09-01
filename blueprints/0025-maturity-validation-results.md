@@ -1624,7 +1624,28 @@ somebody already signed in, not a recovery one: an application offering it calls
 `Accounts::Repository#update_password_digest` behind its own session guard. Recovery is for a
 credential that exists.
 
-**Why M3 and not M4.** Nothing in the repository shows an application how to run a workload
-identity: no example, no documented recipe, and the human/workload tag is left entirely to the
-consumer with no guidance on where to put it. The capability is complete; the shelf it sits on is
-empty. `tools/validation/tok07_spec.cr` holds the six examples.
+**Two corrections to how this was measured, both worth keeping.**
+
+*Disabling an account is not something the shard can do.* This validation called
+`MemoryAccountRepository#disable`, which exists on the **double** and not in
+`Accounts::Repository` — the contract has five methods and none of them writes `disabled_at`.
+That is the right split, and deliberate: the application owns its accounts table, so turning an
+account off is its `UPDATE`, and the shard only ever *reads* the flag, on every authentication.
+The measured property is unaffected — `examples/service_account/app.cr` does the same thing
+against SQLite with a plain `UPDATE` and gets the same `DisabledAccount` — but a reader of this
+section should not conclude that a repository must implement `disable`.
+
+*`revoke` was not account-scoped, which the example turned into a defect.* Writing
+`DELETE /tokens/:id` for `examples/api_tokens` produced `ApiTokens::Service#revoke(token_id)` and
+nothing else, so the obvious route ends whichever token the *caller* names. A token id is not
+secret material: it appears in `api_token.issued` and `api_token.revoked` audit lines and in any
+management listing built on `list`. Fixed additively with `revoke(token_id, account_id)`, which
+answers `false` both for somebody else's token and for one that does not exist, so the caller
+learns nothing from the difference. Two examples in `spec/security/api_token_spec.cr`.
+
+**Now M3, with the example gap closed.** `examples/service_account/app.cr` is the worked example
+this section said was missing: provisioning without human-only fields, a scoped credential, every
+interactive path proven closed — including the reset that used to be sent — and both forms of
+deprovisioning. What still keeps it from M4 is the human/workload tag, which stays the
+application's with no `service_account?` flag anywhere in the shard: what counts as a workload is
+a product question. `tools/validation/tok07_spec.cr` holds the six examples.

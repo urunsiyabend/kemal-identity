@@ -166,12 +166,37 @@ module KemalIdentity::ApiTokens
 
     # Ends one token. Takes effect on the very next request, because validity is read from
     # storage rather than asserted by a signature.
+    #
+    # **Revokes by id alone, so it is an administrative call.** A route that lets a client name
+    # the token to revoke — `DELETE /tokens/:id` — must use the two-argument form below, or it
+    # will happily end a token belonging to somebody else. A token id is not secret material:
+    # it appears in `api_token.revoked` and `api_token.issued` audit lines, in a management
+    # listing, and in whatever an operator exports from either.
     def revoke(token_id : String) : Bool
       revoked = @tokens.revoke(token_id, @clock.now)
 
       Log.info &.emit("api_token.revoked", credential: token_id) if revoked
 
       revoked
+    end
+
+    # Ends one token **only if it belongs to `account_id`**, which is what a "revoke this token"
+    # button in a user's own settings needs.
+    #
+    # Answers `false` for a token that exists and belongs to somebody else, and for one that does
+    # not exist at all — the same answer, so a caller cannot use it to discover whether an id is
+    # real. Costs one extra read; this is a management action, not a request-path one.
+    def revoke(token_id : String, account_id : String) : Bool
+      owned = @tokens.list_for_account(account_id).any? { |token| token.id == token_id }
+
+      unless owned
+        Log.info &.emit(
+          "api_token.revoke_refused", subject: account_id, credential: token_id, reason: "not_owned"
+        )
+        return false
+      end
+
+      revoke(token_id)
     end
 
     # Ends every token for an account, returning how many. The right response to a compromised

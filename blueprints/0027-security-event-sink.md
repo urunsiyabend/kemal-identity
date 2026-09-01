@@ -150,7 +150,11 @@ strings. Recording that as the remaining gap rather than inventing a scheme for 
 names, and `#failures` as the thing to alarm on. Not written here: that file is being edited
 elsewhere.
 
-Two more items are owed to that same file, recorded here because this is where the list started.
-Its ownership example shows the `return decision if resource.nil?` shape that fails **open**
-(`blueprints/0025`, AUT-01), and the credential-precedence section an earlier commit added is gone
-from the current README — both now live in `docs/`, and the README will want to point at them.
+One more item is owed to that same file, recorded here because this is where the list started:
+the credential-precedence section an earlier commit added is gone from the current README, and
+now lives in `docs/04-kemal-integration.md`.
+
+The fail-open ownership example this list used to name is **no longer there** — the README rewrite
+removed the section entirely. The guidance moved to `docs/02-security-model.md`, and
+`examples/ownership/app.cr` now carries the fail-closed version with the wrong line quoted beside
+it, which is a better home than either.

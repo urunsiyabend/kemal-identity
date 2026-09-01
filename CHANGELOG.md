@@ -28,6 +28,29 @@ the shape entirely — hold every issuer's validator yourself and do not configu
 what `JWT.unverified_issuer` is for — or move the shapes apart with `api_token_prefix:`. See
 `docs/01-architecture.md`.
 
+### Six runnable examples, and CI compiles all of them
+
+`examples/` now holds `browser_session`, `api_tokens`, `ownership`, `custom_bearer`,
+`multi_issuer_jwt` and `service_account`, each a single self-contained `app.cr` over SQLite with
+no setup. `examples/README.md` says which problem each one is for. The CI step that used to build
+one example now globs the directory, so an example added without a CI line cannot rot.
+
+Three of them exist because the validation catalogue kept recording "capability complete, no
+worked example" as the reason a scenario stopped at M3.
+
+### `ApiTokens::Service#revoke` can be scoped to the token's owner
+
+```crystal
+APP.api!.revoke(token_id, principal.subject)   # a user revoking their own
+APP.api!.revoke(token_id)                      # administrative: revokes whoever's it is
+```
+
+Writing `DELETE /tokens/:id` for the new API example turned up that only the one-argument form
+existed, so the obvious route ends whichever token the caller names. A token id is not secret
+material — it appears in `api_token.issued` and `api_token.revoked` audit lines and in any
+listing built on `#list`. The two-argument form answers `false` both for somebody else's token
+and for one that does not exist, so a caller learns nothing from the difference.
+
 ### ⚠ Behaviour change: no password reset for an account with no password
 
 `request_password_reset` now refuses, silently, when the account's `password_digest` is nil —
