@@ -258,6 +258,8 @@ without breaking anybody. `blueprints/0020` lists them so that missing them stay
 
 ## v0.8.x — Additive, after the freeze list was settled
 
+**Released as `v0.8.1` on 2026-09-01.**
+
 Nothing here moves a signature v1.0 freezes, so none of it needed to be in v0.8.0. All of it came
 out of running the catalogue — `blueprints/0025-maturity-validation-results.md` names the scenario
 each one closes.

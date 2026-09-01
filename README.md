@@ -45,7 +45,7 @@ Add the shard to your application's `shard.yml`:
 dependencies:
   kemal_identity:
     github: urunsiyabend/kemal-identity
-    version: ~> 0.8.0
+    version: ~> 0.8.1
 ```
 
 Then install dependencies:
@@ -61,7 +61,7 @@ application:
 dependencies:
   kemal_identity:
     github: urunsiyabend/kemal-identity
-    version: ~> 0.8.0
+    version: ~> 0.8.1
   pg:
     github: will/crystal-pg
 ```

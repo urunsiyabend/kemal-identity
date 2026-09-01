@@ -1,5 +1,99 @@
 # Changelog
 
+## v0.8.1 — 2026-09-01
+
+Additive only. Every signature v0.8.0 published still means what it meant; each item here adds a
+constructor argument, a module function or a contract option, and the defaults reproduce v0.8.0's
+behaviour exactly.
+
+All of it came out of running the validation catalogue rather than from a wish list —
+`blueprints/0025-maturity-validation-results.md` names the scenario each item closes and records
+the re-measurement.
+
+### Credential precedence is a handler argument
+
+A request can carry both a session cookie and an `Authorization: Bearer` header, and only one of
+them can answer it. The order is now a choice:
+
+```crystal
+use KemalIdentity::Kemal::AuthenticationHandler.new(
+  precedence: KemalIdentity::Kemal::AuthenticationHandler::Precedence::Bearer
+)
+```
+
+`Precedence::Cookie` is the default and is v0.8.0's behaviour unchanged. It has a sharp edge,
+confirmed over HTTP rather than inferred: a session cookie that has idle-expired, been revoked or
+been tampered with **masks a valid bearer token**, because a cookie that was presented and failed
+ends the resolution rather than falling through. A same-origin SPA sending a stale cookie beside a
+good token gets 401s.
+
+`Precedence::Bearer` resolves the bearer credential first, and deliberately does **not** fall back
+to the cookie when it fails — a request that presented a token is asking to be authenticated by
+it, and falling through would let a stale session paper over a revoked one.
+
+Remember-me keeps working under both, which is why this is an argument rather than an invitation
+to replace the handler: a remembered login is restored only on a request carrying no session cookie
+at all, and getting that ordering wrong widens the window in which parallel requests both present
+the remember token and one reads as theft.
+
+Documented in `docs/04-kemal-integration.md`.
+
+### `JWT.unverified_issuer`, so several issuers can be routed
+
+An application validating tokens from more than one issuer needs to know which validator to reach
+for before any validator has run. Reading `iss` out of an unverified token is the only way to do
+that, and everyone who needs it was writing their own base64 split:
+
+```crystal
+issuer = KemalIdentity::JWT.unverified_issuer(credential)
+validator = VALIDATORS[issuer]?
+```
+
+Bounded before it decodes anything, and it reuses the validator's own strict base64url rather than
+a second decoder that almost agrees — that is how one token comes to mean two different things.
+The name says `unverified` because the value is routing input and nothing else; the chosen
+validator still verifies everything.
+
+### Providers can carry their own authorization parameters
+
+```crystal
+KemalIdentity::OIDC::Provider.new(
+  # ...
+  authorization_params: {"audience" => "https://api.example.com"}
+)
+```
+
+Auth0 wants `audience`, Google wants `access_type` and `hd`, Microsoft wants `domain_hint`. The
+nine parameters the flow builds itself — `response_type`, `client_id`, `redirect_uri`, `scope`,
+`state`, `nonce`, `code_challenge`, `code_challenge_method`, `prompt` — are refused at
+construction, not silently ignored: the dangerous version of this feature is the one that lets a
+configuration file turn PKCE off.
+
+### The account contract can be told an adapter is single-tenant
+
+```crystal
+it_behaves_like_an_account_repository(tenanted: false) { MyRepository.new(db) }
+```
+
+Replaces the tenancy examples with one that demands a tenant-scoped lookup answer `nil`, rather
+than skipping them. An adapter that *ignores* `tenant_id` is the unsafe way to be single-tenant,
+and it passed everything else.
+
+### CI resolves three consumers and checks what each gets
+
+`kemal_identity` has kept its database drivers out of `dependencies` since v0.7.0 so that an
+application depending on it does not compile PostgreSQL bindings it never uses. Nothing kept that
+true. Three throwaway projects now resolve the shard in CI, and the step was verified to fail when
+`pg` is moved back.
+
+### Documentation
+
+- `docs/02-security-model.md` gains *Authorization rules an application writes itself*: what
+  `Authz::Cache` costs on a list endpoint, measured — one store read per page with it, a hundred
+  without, and its TTL is the revocation delay either way — next to the downcast in an ownership
+  rule that fails **open** when written the obvious way.
+- `docs/04-kemal-integration.md` documents credential precedence, both tables and the reasoning.
+
 ## v0.8.0 — 2026-08-29
 
 **The last breaking release before the v1.0 API freeze.**

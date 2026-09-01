@@ -4,11 +4,11 @@ module KemalIdentity::Testing
   # Mints JSON Web Tokens, including ones no honest issuer would produce.
   #
   # The shard validates tokens and deliberately does not issue them, so this lives in
-  # `kemal_identity/testing` rather than the production entry point. It exists to *attack* the validator: every knob a
-  # forger would want — the algorithm, the `kid`, an unsigned token, a header that lies
-  # about what the signature covers, arbitrary bytes in any segment — is reachable from
-  # here, because a validator spec that can only produce well-formed tokens tests nothing
-  # an attacker would ever send.
+  # `kemal_identity/testing` rather than the production entry point. It exists to *attack* the
+  # validator: every knob a forger would want — the algorithm, the `kid`, an unsigned token, a
+  # header that lies about what the signature covers, arbitrary bytes in any segment — is
+  # reachable from here, because a validator spec that can only produce well-formed tokens tests
+  # nothing an attacker would ever send.
   module JWTForge
     DIGESTS = {"HS256" => ::OpenSSL::Algorithm::SHA256,
                "HS384" => ::OpenSSL::Algorithm::SHA384,
