@@ -46,7 +46,20 @@ that way rather than in-process.
 | `jwt_family_spec.cr` | JWT-01 to JWT-04 — two issuers, chaining in both orders, hand-rolled `iss` routing, claim mapping, per-audience and per-issuer policy |
 | `dev03_raw_http.cr` | DEV-03 — a whole server over raw `HTTP::Server`, no Kemal. A server: build, run, probe |
 | `dev03_http07_spec.cr` | DEV-03's application object, and HTTP-07 — a job's principal with no request |
+| `tok04_gateway.cr` | TOK-04 — a consumer-written `RequestAuthenticator` for a gateway-issued token |
+| `tok04_spec.cr` | TOK-04 — the authenticator alone, and in a chain the consumer built |
+| `tok04_order_spec.cr` | TOK-04 — every position among the shipped authenticators, every credential family. The evidence behind "extras go last" |
+| `tok04_register_probe.cr` | TOK-04 — **does not compile, on purpose**: `configure(bearer:)` before the fix. The error is the finding |
+| `tok04_app_chain.cr` | TOK-04 — registration by reaching into `AuthenticatorChain#authenticators`. A server: build, run, probe. Works, and is an accident |
+| `tok04_app_only.cr` | TOK-04 — the gateway token as the *only* bearer credential, resolved by a handler of the consumer's own. A server. This is the one that loses the challenge and the CSRF exemption |
+| `tok04_app_fixed.cr` | TOK-04 — the same app through `bearer_authenticators:`, with no handler of its own. A server |
 | `idp_family_spec.cr` | IDP-01, IDP-02, IDP-04 — two providers, out-of-order callbacks, the provider-switch case, linking conflicts, tenant lookups |
+
+## The ones that are supposed to fail
+
+`tok04_register_probe.cr` does not compile, and that is the TOK-04 finding as the compiler stated
+it: before `bearer_authenticators:` existed, `configure` had no parameter for a consumer's
+authenticator and `Application` had no setter. Kept as it was written.
 
 ## The one that is supposed to fail
 

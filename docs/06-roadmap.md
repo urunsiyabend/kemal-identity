@@ -273,6 +273,15 @@ each one closes.
 | The account contract can be told an adapter is single-tenant | **done** — IDP-03 M3 → M4. `tenanted: false` replaces the tenancy group with an example demanding that a tenant-scoped lookup answer `nil`, rather than skipping — ignoring the argument is the unsafe way to be single-tenant, and it passed everything else |
 | CI resolves three consumers and checks what each gets | **done** — OPS-07 M3 → M4. The property v0.7.0 exists for had nothing keeping it true; verified to fail when `pg` is moved back into `dependencies` |
 
+### Unreleased — the catalogue's second pass
+
+Same rule: additive, measured first, and the scenario is named.
+
+| Deliverable | State |
+|---|---|
+| An application's own bearer authenticator | **done** — TOK-04 M2 → M3. `bearer_authenticators:`. The contract was always implementable; `app.bearer` had no way in — and it also gates the RFC 6750 challenge and the CSRF exemption, so an application whose only bearer credential was its own silently lost both |
+| `AuthenticatorChain#authenticators` should not hand out its mutable array | **open** — it is what made an accidental registration route work before the parameter existed, and it contradicts "configuration is boot-time and immutable". Returning a copy changes a published getter's behaviour, so it waits for a minor release |
+
 ## v1.0 — API freeze
 
 The criterion is contract stability, not feature count.
@@ -308,9 +317,9 @@ result for this library.
 
 That pass is under way in `blueprints/0025-maturity-validation-results.md`, run from a separate
 consumer project rather than from inside this repository — several scenarios are about what an
-application can reach from outside, which cannot be answered from in here. **All seven very-high
-scenarios are done — five M3, two M2 — plus fourteen high-frequency and two medium. One reached
-M4; five are M2.**
+application can reach from outside, which cannot be answered from in here. **Twenty-four of fifty
+are recorded, and nothing sits below M3 any more: eighteen M3 and six M4.** All seven very-high
+scenarios are done. Every M2 the first pass found was fixed after measurement rather than filed.
 `tools/validation/` keeps the attempts so a later revision is measured against the same ones.
 
 Two of the findings are about the shared contract specs rather than about any feature, and both
@@ -319,10 +328,15 @@ examples while allowing 2.2× its global limit across processes, and an `Account
 real application's single-tenant `users` table cannot run the account contract at all. Closing
 those is the same work as DEV-02.
 
-The largest single gap found so far is JWT-01: two `JWT::Validator`s cannot be chained, because
-`AuthenticatorChain` routes on shape and every JWT has the same one. A B2B API accepting two
-customers' issuers has to route on `iss` itself, unbounded, before validating. A bounded
-`JWT.unverified_issuer` would close it and is additive.
+The two largest gaps turned out to be the same gap, and both are closed. `AuthenticatorChain`
+routes on shape, so two `JWT::Validator`s could not be chained (JWT-01) — `JWT.unverified_issuer`
+now gives an application a bounded way to route on `iss` itself. And a consumer's own
+authenticator had nowhere to be registered (TOK-04), which silently also cost it the RFC 6750
+challenge and the CSRF exemption, because `Application#bearer` is what gates both —
+`bearer_authenticators:` closes it.
+
+The pattern in both: the frozen contract was fine, and the *composition around it* was where an
+application could not reach. That is what the freeze list does not cover and the catalogue does.
 
 ## Migration path for existing Kemal apps
 

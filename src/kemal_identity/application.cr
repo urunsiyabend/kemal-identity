@@ -82,9 +82,16 @@ module KemalIdentity
 
     # What resolves an `Authorization: Bearer` header, whichever kind of token it holds.
     #
-    # One authenticator when only one is configured, and an `AuthenticatorChain` when both are:
-    # the header does not say which kind it carries, so they are tried in turn on shape. Nil
+    # One authenticator when only one is configured, and an `AuthenticatorChain` when several
+    # are: the header does not say which kind it carries, so they are tried in turn on shape. Nil
     # when the application accepts no bearer credential at all.
+    #
+    # An application's own authenticators arrive through `bearer_authenticators:` and are part of
+    # this. That matters beyond the resolution itself: this is also the signal
+    # `Kemal::ErrorHandler` uses to decide whether to send an RFC 6750 challenge, and
+    # `Kemal::CSRFHandler` uses to decide whether a token-only request is exempt. An application
+    # whose only bearer credential is its own — a gateway-issued key, a legacy token — used to
+    # get neither, because there was nowhere to put it (`blueprints/0025`, TOK-04).
     getter bearer : RequestAuthenticator?
 
     # What decides whether a principal may perform an action, or `nil` when the application has
@@ -114,6 +121,7 @@ module KemalIdentity
       @api_tokens : ApiTokens::Repository? = nil,
       api_token_prefix : String = ApiTokens::Service::DEFAULT_PREFIX,
       @jwt : JWT::Validator? = nil,
+      bearer_authenticators : Array(RequestAuthenticator) = [] of RequestAuthenticator,
       @authorizer : Authz::Authorizer? = nil,
       @mfa_factors : MFA::Repository? = nil,
       mfa_secret_key : Secret? = nil,
@@ -148,7 +156,14 @@ module KemalIdentity
 
       # Opaque tokens first: they are the credential this shard recommends, and their shape
       # check is exact rather than a bound, so the fall-through to JWT costs a comparison.
-      candidates = [@api, @jwt].compact.map(&.as(RequestAuthenticator))
+      #
+      # An application's own authenticators come after both, in the order it listed them.
+      # Measured rather than chosen: with every family checking shape exactly, inserting a
+      # consumer's authenticator at any position among the built-ins produces an identical answer
+      # for every credential — so "last, in order" is deterministic without an interleaving API,
+      # and it means a loose shape check in a consumer's authenticator cannot shadow a credential
+      # this shard issued.
+      candidates = ([@api, @jwt].compact.map(&.as(RequestAuthenticator)) + bearer_authenticators)
 
       @bearer =
         case candidates.size
@@ -307,6 +322,7 @@ module KemalIdentity
     api_tokens : ApiTokens::Repository? = nil,
     api_token_prefix : String = ApiTokens::Service::DEFAULT_PREFIX,
     jwt : JWT::Validator? = nil,
+    bearer_authenticators : Array(RequestAuthenticator) = [] of RequestAuthenticator,
     authorizer : Authz::Authorizer? = nil,
     mfa_factors : MFA::Repository? = nil,
     mfa_secret_key : Secret? = nil,
@@ -335,6 +351,7 @@ module KemalIdentity
       remember_tokens: remember_tokens,
       api_tokens: api_tokens,
       jwt: jwt,
+      bearer_authenticators: bearer_authenticators,
       authorizer: authorizer,
       mfa_factors: mfa_factors,
       mfa_secret_key: mfa_secret_key,

@@ -50,6 +50,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | OPS-06 | High | M3 | **M3** | Shipped adapters hard-code their own table names |
 | OPS-07 | High | M3 | **M3 → M4** | Fixed after measurement: CI resolves three consumers and checks what each gets |
 | DEV-01 | High | M3 | **M3 → M4** | Fixed with HTTP-01: the shard emits the accurate challenge, so a replacement handler no longer has to guess |
+| TOK-04 | High | M3 | **M2 → M3** | Fixed after measurement: `bearer_authenticators:` — the contract was implementable and had nowhere to go |
 | HTTP-03 | High | M3 | **M2 → M3** | Fixed after measurement: `AuthenticationHandler.new(precedence: ...)`, and remember-me survives the reversal |
 | JWT-01 | High | M3 | **M2 → M3** | Fixed after measurement: `JWT.unverified_issuer`, bounded and strict |
 | JWT-02 | High | M3 | **M3** | — |
@@ -1312,3 +1313,96 @@ asserts the denial, so the fix has a test rather than a paragraph.
 `ops01_worker.cr` and `ops01_setup.cr`, then run several workers against one database file and sum
 what they report. The numbers in the OPS-01 section came from six workers, twenty attempts each,
 a global limit of ten.
+
+---
+
+## TOK-04 — Custom bearer authenticator
+
+**Result: M2 → M3.** Applicable. The first scenario of the second pass.
+
+A `GatewayAuthenticator` was written in the consumer project against the published contract —
+`gw.<subject>.<hmac>`, deliberately neither of the shard's own shapes, so that shape routing had
+something real to route on. Every method body was *called*, not merely compiled: a file that
+defines an authenticator compiles even when its bodies would not.
+
+**Four of the five pass conditions held on the first attempt.**
+
+| Condition | Result |
+|---|---|
+| ordering is deterministic | holds — `AuthenticatorChain` asks in list order |
+| "not my credential" distinct from "my credential but invalid" | holds — `Failed(MalformedCredential)` is the only reason that falls through |
+| a recognised rejection stops the chain | holds — a revoked gateway token was not offered to the JWT validator |
+| the authenticator can attach credential metadata | holds — `CredentialKind::Custom`, an id, a name and scopes, all readable from `env.auth.credential` |
+| **registration needs no custom HTTP handler** | **failed** |
+
+**The fifth failed, and the compiler said so twice.**
+
+```
+Error: no parameter named 'bearer'
+Error: undefined method 'bearer=' for KemalIdentity::Application
+```
+
+`Application#bearer` was assembled internally from `api_tokens:` and `jwt:` and from nothing else.
+A consumer's authenticator had no way in.
+
+**One accidental route existed, and it is worth recording as an accident.** With *both* built-ins
+configured, `app.bearer` is an `AuthenticatorChain`, and `AuthenticatorChain#authenticators` is a
+getter over a mutable array:
+
+```crystal
+KemalIdentity.app.bearer.as(KemalIdentity::AuthenticatorChain).authenticators.insert(1, GATEWAY)
+```
+
+Measured over HTTP, that worked completely: `200` with `kind: Custom`, the correct
+`WWW-Authenticate: Bearer realm="api", error="invalid_token"` on a bad signature, CSRF exemption
+honoured on a token-only `POST`, and the shard's own token still routed to the shard. But it is a
+post-boot mutation of what `docs/01-architecture.md` calls a frozen configuration object, it races
+with the fibers reading the chain, and it only exists when the application happens to have
+configured two shipped authenticators — with one configured, `app.bearer` *is* that service and
+there is no chain to reach into. Not an API.
+
+**Without it, the failure cascades past authentication, and this is the actual finding.** The
+persona's real shape is the gateway token being the *only* bearer credential. Then `app.bearer` is
+`nil`, and a consumer resolving the credential in a handler of its own was measured over HTTP:
+
+| Request | With a consumer's handler | Root cause |
+|---|---|---|
+| valid gateway token | 200, `kind: Custom` | — |
+| bad signature | 401 **with no `WWW-Authenticate`** | `ErrorHandler#bearer_configured?` asks `app.bearer` |
+| no credential | 401 **with no `WWW-Authenticate`** | same |
+| `POST` with only the token | **403 `invalid CSRF token`** | `CSRFHandler#bearer_only?` asks `app.bearer` |
+
+So an application whose bearer credential is its own silently lost HTTP-01's challenge — the thing
+this shard reached M4 on — and had its API mutations rejected as forgeries, for a request no
+browser can make.
+
+**Fixed after measurement, additively: `bearer_authenticators:`** on `configure` and
+`Application.new`. The application's authenticators join the same chain, after the shipped ones,
+in the order given. Re-measured, same app, same probes, **no handler of the consumer's own**:
+
+| Request | Before | After |
+|---|---|---|
+| valid gateway token | 200 (needed a handler) | 200, no handler |
+| bad signature | 401, no header | 401, `Bearer realm="api", error="invalid_token"` |
+| no credential | 401, no header | 401, `Bearer realm="api"` |
+| `POST`, token only | **403 CSRF** | **200** |
+
+**Why "after the shipped ones" rather than an interleaving API.** Measured, not assumed: the
+consumer's authenticator was placed at all three positions of a three-authenticator chain and
+every credential family — an issued opaque token, a gateway token, a JWT, garbage, nothing —
+produced an identical answer at every position. Every family checks shape exactly, so position
+does not decide anything. What the fixed order buys is that a *loose* shape check in a consumer's
+authenticator cannot shadow a credential this shard issued.
+
+`spec/unit/custom_bearer_authenticator_spec.cr` holds nine examples, including the challenge and
+the CSRF exemption driven through the real handlers. Teeth checked by mutation: dropping the
+extras from the composition fails eight of the nine.
+
+**Why M3 and not M4.** No worked example under `examples/`, and the README says nothing about
+implementing the contract. The documentation is in `docs/01-architecture.md`.
+
+**Recorded, not fixed: `AuthenticatorChain#authenticators` hands out its mutable array.** That is
+what made the accidental route above possible, and it contradicts "configuration is boot-time and
+immutable". Returning a copy would close it, and `AuthenticatorChain` is outside the freeze list —
+but it changes the behaviour of a published getter, so it belongs in a minor release rather than
+in the patch that adds a parameter.

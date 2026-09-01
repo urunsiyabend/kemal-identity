@@ -164,6 +164,35 @@ transliterated Devise, and it is why the benchmark suite measures application
 latency under concurrent logins rather than hashes per second. See
 `docs/02-security-model.md`.
 
+### An application's own bearer credential is configuration, not a handler
+
+A company arriving with a gateway-issued key, a legacy token from the system being migrated off,
+or an HTTP Message Signature implements `RequestAuthenticator` — one method — and passes it in:
+
+```crystal
+KemalIdentity.configure(
+  # ...
+  bearer_authenticators: [GatewayAuthenticator.new(secret).as(KemalIdentity::RequestAuthenticator)],
+)
+```
+
+They land after the shipped authenticators, in the order given, in the same `AuthenticatorChain`.
+Position among the shipped ones changes no answer — every family checks its shape exactly, and
+that was measured across all three positions (`blueprints/0025`, TOK-04) — and going last means a
+loose shape check in an application's authenticator cannot shadow a credential this shard issued.
+
+`AuthenticatorChain` reads exactly one thing as "not my credential, try the next":
+`Failed(MalformedCredential)`. Any other failure means the credential *was* recognised and then
+rejected, and the chain **stops** — falling through there would let a revoked token get a second
+opinion from an authenticator that never issued it.
+
+**Why this is a configuration parameter rather than something an application wires itself.**
+`Application#bearer` is not only what resolves the header. `Kemal::ErrorHandler` asks it whether
+to send an RFC 6750 challenge, and `Kemal::CSRFHandler` asks it whether a token-only mutation is
+exempt from CSRF. An application that resolved its own credential in a handler of its own got
+neither: measured over HTTP, no `WWW-Authenticate` on any 401, and `403 invalid CSRF token` on a
+`POST` carrying nothing but an `Authorization` header — a request no browser can forge.
+
 ### Configuration is boot-time and immutable
 
 `KemalIdentity.configure` builds a frozen configuration object. Nothing mutates it
