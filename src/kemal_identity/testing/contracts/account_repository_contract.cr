@@ -7,7 +7,10 @@
 # Seeding is per-implementation on purpose: `create` is deliberately *not* on the contract,
 # because an adapter over somebody's existing `users` table has no business inserting rows
 # into it.
-def it_behaves_like_an_account_repository(&build : Array(KemalIdentity::Accounts::Account) -> KemalIdentity::Accounts::Repository)
+def it_behaves_like_an_account_repository(
+  tenanted : Bool = true,
+  &build : Array(KemalIdentity::Accounts::Account) -> KemalIdentity::Accounts::Repository
+)
   now = KemalIdentity::Testing::FIXED_NOW
 
   account = ->(id : String, login : String, tenant : String?) do
@@ -57,33 +60,56 @@ def it_behaves_like_an_account_repository(&build : Array(KemalIdentity::Accounts
       repo.find_by_login("  ada@example.com  ").should be_nil
     end
 
-    describe "tenancy" do
-      it "matches only the null tenant when given nil" do
-        repo = build.call([
-          account.call("a1", "ada@example.com", nil),
-          account.call("a2", "ada@example.com", "t1"),
-        ])
-        repo.find_by_login("ada@example.com", nil).try(&.id).should eq("a1")
-      end
+    # An adapter over an application's own `users` table often has no tenant column, because the
+    # application has one tenant. Pass `tenanted: false` and the group below is replaced by the
+    # one after it -- not skipped, because "this adapter does not do tenants" is itself a claim
+    # with a safe answer and an unsafe one.
+    #
+    # IDP-03 in `blueprints/0025-maturity-validation-results.md` is why this exists: the scenario's
+    # persona is a mature application with a `users` table, most of which are single-tenant, and
+    # they could not run this contract at all without adding a column they did not want.
+    if tenanted
+      describe "tenancy" do
+        it "matches only the null tenant when given nil" do
+          repo = build.call([
+            account.call("a1", "ada@example.com", nil),
+            account.call("a2", "ada@example.com", "t1"),
+          ])
+          repo.find_by_login("ada@example.com", nil).try(&.id).should eq("a1")
+        end
 
-      it "matches only the given tenant" do
-        repo = build.call([
-          account.call("a1", "ada@example.com", nil),
-          account.call("a2", "ada@example.com", "t1"),
-        ])
-        repo.find_by_login("ada@example.com", "t1").try(&.id).should eq("a2")
-      end
+        it "matches only the given tenant" do
+          repo = build.call([
+            account.call("a1", "ada@example.com", nil),
+            account.call("a2", "ada@example.com", "t1"),
+          ])
+          repo.find_by_login("ada@example.com", "t1").try(&.id).should eq("a2")
+        end
 
-      # `= NULL` matches nothing in SQL, so this is the case an implementation gets wrong by
-      # writing the obvious query.
-      it "does not treat a nil tenant as a wildcard" do
-        repo = build.call([account.call("a2", "ada@example.com", "t1")])
-        repo.find_by_login("ada@example.com", nil).should be_nil
-      end
+        # `= NULL` matches nothing in SQL, so this is the case an implementation gets wrong by
+        # writing the obvious query.
+        it "does not treat a nil tenant as a wildcard" do
+          repo = build.call([account.call("a2", "ada@example.com", "t1")])
+          repo.find_by_login("ada@example.com", nil).should be_nil
+        end
 
-      it "does not leak an account across tenants" do
-        repo = build.call([account.call("a2", "ada@example.com", "t1")])
-        repo.find_by_login("ada@example.com", "t2").should be_nil
+        it "does not leak an account across tenants" do
+          repo = build.call([account.call("a2", "ada@example.com", "t1")])
+          repo.find_by_login("ada@example.com", "t2").should be_nil
+        end
+      end
+    else
+      describe "a single-tenant adapter" do
+        # The unsafe answer is to ignore the argument and hand back the untenanted row. It passes
+        # every other example in this contract, and it is a cross-tenant leak the day the
+        # application grows a second tenant -- so refusing to answer is the behaviour, and this
+        # is the example that says so.
+        it "answers nil for a tenant-scoped lookup rather than falling back to the untenanted row" do
+          repo = build.call([account.call("a1", "ada@example.com", nil)])
+
+          repo.find_by_login("ada@example.com", nil).try(&.id).should eq("a1")
+          repo.find_by_login("ada@example.com", "t1").should be_nil
+        end
       end
     end
   end

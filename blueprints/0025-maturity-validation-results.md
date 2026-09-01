@@ -43,7 +43,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | DEV-02 | Very high | M4 | **M2 → M4** | Fixed after measurement: `require "kemal_identity/testing"` |
 | OPS-02 | Very high | M4 | **M2 → M3** | Fixed after measurement: a typed sink, and a failure that is counted rather than fatal or silent |
 | OPS-01 | Very high | M4 | **M3** | The shared contract's concurrency example passes for an adapter that over-allows across processes |
-| IDP-03 | Very high | M4 | **M3** | The shared `AccountRepository` contract cannot be run by a single-tenant adapter |
+| IDP-03 | Very high | M4 | **M3 → M4** | Fixed after measurement: `it_behaves_like_an_account_repository(tenanted: false)` |
 | TOK-03 | High | M3 | **M4** | — |
 | AUT-01 | High | M3 | **M3** | The no-N+1 condition needs a cache that is off by default |
 | OPS-04 | High | M3 | **M3** | One repository of eight validated; reaching the contract depends on DEV-02 |
@@ -511,6 +511,27 @@ likely to be written.
 a `tenanted: false` argument, or the tenancy examples split into a separate opt-in group — plus a
 worked example of the whole migration, which is what `blueprints/0019` describes and this
 validation had to reconstruct.
+
+### Fixed — re-measured at M4
+
+`it_behaves_like_an_account_repository(tenanted: false)` and the same adapter now passes the whole
+contract: **22 examples, 0 failures**, against 25 with 3 failures before.
+
+**It asserts rather than skips**, which is the part worth having. The unsafe way to be
+single-tenant is to ignore the `tenant_id` argument and hand back the untenanted row — that passes
+every other example in the contract, and it is a cross-tenant leak the day the application grows a
+second tenant. So `tenanted: false` replaces the tenancy group with one example demanding a
+tenant-scoped lookup answer `nil`.
+
+Verified to fail when it should, by writing an adapter with exactly that bug:
+
+```
+#find_by_login a single-tenant adapter answers nil for a tenant-scoped lookup
+rather than falling back to the untenanted row  — FAILED
+```
+
+Existing callers are untouched: `tenanted` defaults to `true`, and the suite's 1511 examples were
+unchanged by the addition.
 
 ---
 
