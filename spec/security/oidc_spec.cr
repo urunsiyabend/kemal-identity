@@ -105,6 +105,81 @@ private def complete_with(client, endpoint, clock, **options)
   client.complete(request.pending, state: request.pending.state, code: "provider-code")
 end
 
+# IDP-01. Provider-specific parameters could not be sent at all before v0.8.1, so an application
+# needing Google's `hd` rebuilt the URL itself. These are about the guard rail, because the
+# dangerous version of this feature lets an application turn PKCE off by configuration.
+describe "provider-specific authorization parameters" do
+  private_provider = ->(params : Hash(String, String)?) do
+    KemalIdentity::OIDC::Provider.new(
+      issuer: ISSUER, client_id: CLIENT_ID,
+      authorization_endpoint: "#{ISSUER}/authorize", token_endpoint: "#{ISSUER}/token",
+      redirect_uri: "https://app.example.com/auth/callback",
+      keys: provider_keys, authorization_params: params,
+    )
+  end
+
+  it "sends what the provider asked for" do
+    client = KemalIdentity::OIDC::Client.new(
+      provider: private_provider.call({"hd" => "example.com", "login_hint" => "ada@example.com"}),
+      clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW),
+      random: KemalIdentity::Testing::DeterministicRandom.new,
+    )
+
+    params = URI.parse(client.authorize.url).query_params
+    params["hd"].should eq("example.com")
+    params["login_hint"].should eq("ada@example.com")
+
+    # And the flow's own parameters are still there and still first.
+    params["code_challenge_method"].should eq("S256")
+    params["state"].should_not be_empty
+  end
+
+  # The whole point of the guard rail: an application that could set these could disable PKCE,
+  # redirect the code somewhere else, or replay one flow's state into another.
+  it "refuses at boot every parameter the flow builds itself" do
+    KemalIdentity::OIDC::Provider::RESERVED.each do |reserved|
+      expect_raises(KemalIdentity::ConfigurationError, reserved) do
+        private_provider.call({reserved => "attacker-chosen"})
+      end
+    end
+  end
+
+  it "names the four that are the flow's security" do
+    %w[state nonce code_challenge code_challenge_method].each do |key|
+      KemalIdentity::OIDC::Provider::RESERVED.should contain(key)
+    end
+  end
+
+  it "refuses an empty parameter name" do
+    expect_raises(KemalIdentity::ConfigurationError, "must not be empty") do
+      private_provider.call({"" => "value"})
+    end
+  end
+
+  # `URI::Params` escapes, so a value cannot introduce a separator or a newline of its own.
+  it "escapes a value that tries to add a parameter of its own" do
+    client = KemalIdentity::OIDC::Client.new(
+      provider: private_provider.call({"hd" => "example.com&scope=evil"}),
+      clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW),
+      random: KemalIdentity::Testing::DeterministicRandom.new,
+    )
+
+    params = URI.parse(client.authorize.url).query_params
+    params["hd"].should eq("example.com&scope=evil")
+    params["scope"].should eq("openid email profile")
+  end
+
+  it "changes nothing when no parameters were configured" do
+    client = KemalIdentity::OIDC::Client.new(
+      provider: private_provider.call(nil),
+      clock: KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW),
+      random: KemalIdentity::Testing::DeterministicRandom.new,
+    )
+
+    URI.parse(client.authorize.url).query_params.has_key?("hd").should be_false
+  end
+end
+
 describe "starting a flow" do
   it "sends the browser to the provider with everything the flow needs" do
     client, _, _ = oidc_harness

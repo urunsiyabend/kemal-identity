@@ -96,6 +96,10 @@ module KemalIdentity::OIDC
         form.add("code_challenge", pending.code_challenge)
         form.add("code_challenge_method", "S256")
         form.add("prompt", prompt) if prompt
+
+        # Last, and unable to overwrite anything above: `Provider` refuses a reserved name at
+        # construction, so by here the keys are known not to collide.
+        @provider.authorization_params.try &.each { |key, value| form.add(key, value) }
       end
 
       uri = @provider.authorization_endpoint.dup

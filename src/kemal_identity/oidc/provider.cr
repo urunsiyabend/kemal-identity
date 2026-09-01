@@ -44,6 +44,30 @@ module KemalIdentity::OIDC
 
     getter algorithms : Array(String)
 
+    # Extra query parameters to add to the authorization request, for the things a provider wants
+    # and no standard names: Google's `hd`, Okta's `login_hint`, Azure's `domain_hint`.
+    #
+    # ### Allowlisted by exclusion, and refused at boot
+    #
+    # `RESERVED` below is every parameter `Client#authorize` builds itself, and a key matching one
+    # of them raises `ConfigurationError` at construction rather than being silently dropped or
+    # silently winning. Four of them — `state`, `nonce`, `code_challenge`, `code_challenge_method`
+    # — are the flow's security, and an application that could overwrite them could turn PKCE off
+    # by configuration. The rest name the client and where the code comes back to.
+    #
+    # `prompt` is reserved too, and is not a security value: `Client#authorize(prompt:)` sets it,
+    # and two `prompt` parameters in one query string is a request the provider gets to interpret
+    # however it likes.
+    #
+    # Values are escaped by `URI::Params`, so nothing here can inject a separator.
+    getter authorization_params : Hash(String, String)?
+
+    # Everything `Client#authorize` puts in the query string itself.
+    RESERVED = %w[
+      response_type client_id redirect_uri scope
+      state nonce code_challenge code_challenge_method prompt
+    ]
+
     def initialize(
       @issuer : String,
       @client_id : String,
@@ -54,6 +78,7 @@ module KemalIdentity::OIDC
       @client_secret : Secret? = nil,
       @scopes : Array(String) = ["openid", "email", "profile"],
       @algorithms : Array(String) = ["RS256"],
+      @authorization_params : Hash(String, String)? = nil,
     )
       @authorization_endpoint = Provider.https!(authorization_endpoint, "authorization_endpoint")
       @token_endpoint = Provider.https!(token_endpoint, "token_endpoint")
@@ -70,6 +95,25 @@ module KemalIdentity::OIDC
       end
 
       validate_redirect_uri!
+      validate_authorization_params!
+    end
+
+    private def validate_authorization_params! : Nil
+      params = @authorization_params
+      return if params.nil?
+
+      params.each_key do |key|
+        if key.blank?
+          raise ConfigurationError.new("an authorization parameter name must not be empty")
+        end
+
+        next unless RESERVED.includes?(key)
+
+        raise ConfigurationError.new(
+          "authorization parameter #{key.inspect} is built by the flow and must not be " \
+          "overridden; #{key == "prompt" ? "pass prompt: to Client#authorize" : "it is part of what makes the flow safe"}"
+        )
+      end
     end
 
     # The client secret, for a confidential client. `nil` for a public one.

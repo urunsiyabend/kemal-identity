@@ -57,7 +57,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | JWT-04 | Medium | M2–M3 | **M3** | Works, but inherits JWT-01's hand-rolled routing to get per-issuer validators |
 | HTTP-07 | High | M3 | **M3** | Works and was entirely undocumented, including the trust boundary |
 | DEV-03 | Medium | M2–M3 | **M3** | The claim holds and links no Kemal; there is no worked example |
-| IDP-01 | High | M3 | **M2** | `Pending` does not bind the provider, and provider-specific parameters cannot be sent |
+| IDP-01 | High | M3 | **M2 → M3** | Provider-specific parameters ship; `Pending` still does not bind the provider |
 | IDP-02 | High | M3 | **M3** | — |
 | IDP-04 | High | M3 | **M3** | — |
 
@@ -1102,6 +1102,37 @@ than M3 because neither answer was written down anywhere, and one of them is a s
 
 **Fixed in this commit:** the README now has a `### More than one provider` section carrying the
 callback-routing warning, the measured provider-switch behaviour, and the URL-rebuilding recipe.
+
+### Half fixed — re-measured at M3
+
+`Provider` gained `authorization_params`, so `hd`, `login_hint` and `domain_hint` are sent by the
+shipped call and nobody rebuilds the URL:
+
+```crystal
+KemalIdentity::OIDC::Provider.new(
+  # ...
+  authorization_params: {"hd" => "example.com"},
+)
+```
+
+**The guard rail is the feature.** The dangerous version of this lets an application overwrite
+`state`, `nonce`, `code_challenge` or `code_challenge_method` — turning PKCE off by configuration
+— or `redirect_uri`, sending the code somewhere else. `Provider::RESERVED` names all nine
+parameters `authorize` builds, and a key matching one raises `ConfigurationError` **at
+construction**: a boot failure rather than a silent drop or a silent win. A spec loops over all
+nine and asserts each is refused.
+
+`prompt` is reserved too, and is not a security value — `authorize(prompt:)` sets it, and two
+`prompt` parameters in one query string is a request the provider interprets however it likes.
+
+Values are escaped by `URI::Params`, asserted with a value that tries to add a `scope` of its
+own: it arrives as data and the real `scope` is untouched.
+
+**Still M3, and the reason is the other half.** `Pending` does not bind the provider, so a
+callback can still be completed by the wrong provider's client and the boundary is carried by the
+application's routing. Binding it means putting the issuer in the flow state and comparing it in
+`complete` — a change to `Pending` and `PendingCodec`, both of which v1.0 freezes, so it is not a
+patch-release change.
 
 ---
 
