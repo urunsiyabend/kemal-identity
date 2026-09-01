@@ -1,10 +1,23 @@
 # Changelog
 
-## Unreleased — v0.8.0
+## v0.8.0 — 2026-08-29
 
-The last breaking release before the v1.0 API freeze. `blueprints/0020-api-freeze-blockers.md`
-records the scan that decided what belongs here: the contracts that cannot reach their targets
-once frozen, and nothing else.
+**The last breaking release before the v1.0 API freeze.**
+
+A scan of every contract v1.0 would freeze asked one question of each: if this froze exactly as it
+is, would the scenarios in `blueprints/maturity-validation-scenarios.md` still be reachable? Most
+gaps that scan found are closed by *adding* something, and adding is not breaking — so they can
+wait. A minority needed a signature to move, and those are what this release is.
+`blueprints/0020-api-freeze-blockers.md` records the scan and what it got wrong.
+
+Then the catalogue itself was run, from a separate consumer project rather than from inside this
+repository, because several of its scenarios are about what an application can reach from outside.
+Twenty-three of fifty are recorded in `blueprints/0025-maturity-validation-results.md`. That pass
+found six documentation defects — including an ownership example that failed open — and four gaps
+worth closing before a release rather than after: the missing bearer challenge, the unreachable
+contract specs, the untyped event sink, and a rate limiter that could not say its store was gone.
+
+**If you are upgrading**, the four breaking changes are first below. Each says what to change.
 
 ### ⚠ Breaking: `Principal` names the credential that proved the request
 
@@ -38,198 +51,6 @@ second half of `blueprints/0021-credential-reference.md` and land in this same r
 
 No new query anywhere. Every value comes from a row that was already read to authenticate the
 request.
-
-### A typed security event sink
-
-```crystal
-class SiemSink < KemalIdentity::SecurityEventSink
-  def record(event : KemalIdentity::SecurityEvent) : Nil
-    @queue.push({name: event.name, actor: event.subject, at: event.at})
-  end
-end
-
-bridge = KemalIdentity.event_sink = SiemSink.new
-```
-
-`SecurityEvent` types the fields a SIEM correlates on — `subject`, `credential`, `tenant`, `ip`,
-`reason`, plus `name`, `severity` and `at` — and leaves event-specific detail in `data`. A rename
-of a correlation field is now a compile error for a consumer rather than a silent breakage.
-
-Fed by an `EventBridge` over the events the shard already emits, so nothing was added beside
-sixty-four call sites and the `Log` output is untouched.
-
-**A failing sink is counted, never fatal and never silent.** An exception from `record` cannot
-reach the caller — measured before this: a raising `Log::Backend` under `:direct` dispatch turned
-every login into a 500, and under `:async` it killed the dispatcher fiber and the trail went quiet
-with nothing said. `bridge.failures` is the number to alarm on. `Log` remains the fallback, so a
-broken sink loses the SIEM copy and not the audit trail.
-
-⚠ **Breaking for a log pipeline keyed on field names.** Writing the bridge showed the emissions
-were inconsistent: `authz.*` events used `account:` where everything else used `subject:`, and
-`session.revoked`/`session.ended` used `session:` where `authz.denied` already used `credential:`.
-Both are normalised — `subject` and `credential` — in the `Log` output as well as in the sink.
-
-`blueprints/0027-security-event-sink.md`.
-
-### ⚠ Refusals now carry the RFC 6750 challenge
-
-`WWW-Authenticate` was absent from every response. It is a MUST in RFC 6750 §3 for a request that
-carried no credentials or a token that did not grant access, and
-`blueprints/0025-maturity-validation-results.md` measured its absence against a running server.
-
-| Request | Status | Challenge |
-|---|---|---|
-| no credential presented | 401 | `Bearer realm="api"` |
-| a bearer token that did not hold | 401 | `error="invalid_token"` |
-| a token narrower than the action | 403 | `error="insufficient_scope"` |
-| any other denial | 403 | no error code |
-
-Only an out-of-scope credential is described, because RFC 6750 registers no code for "the account
-does not hold this permission" — and that is the distinction worth keeping hidden. `scope=` is
-never sent. Nothing is announced when the application configured no bearer credential.
-
-`ForbiddenError` gains `challenge_error : String?`, set by `authorize!`, and it carries a
-projection rather than the `DenialReason` — `"insufficient_scope"` or `nil`. The handler cannot
-render a reason it was never given.
-
-Set the realm with `ErrorHandler.new(realm: "your-api")`.
-
-**⚠ Breaking: a request that presented a bearer credential is never redirected.** Before this, a
-client sending `Authorization: Bearer` with no `Accept` header received `302 Location: /login`,
-because the redirect was decided purely by content negotiation. It now receives 401 with the
-challenge. If you have a client relying on that redirect, it will see a 401.
-
-Statuses are otherwise unchanged; RFC 6750 asks for 403 on `insufficient_scope`, which is what
-this already did. Whether `FreshAuthenticationRequiredError` should become 401 to match RFC 9470's
-examples is deferred — that document requires no status code, so it is a compatibility decision
-rather than a compliance one. `blueprints/0026-bearer-challenges.md`.
-
-### The test doubles and shared contracts are published API
-
-```crystal
-require "kemal_identity/testing"            # in-memory doubles, fixtures, assertions
-require "kemal_identity/testing/contracts"  # the shared contract specs
-
-it_behaves_like_a_session_repository { |accounts| MyRedisSessionRepository.new(redis, accounts) }
-```
-
-If you implement any contract in this shard, you can now check it against the same examples the
-shipped adapters run, and build fixtures from the same doubles. Before this they lived under
-`spec/` and were reachable only by requiring this repository's own `spec_helper` — a private
-path, undocumented, and pulling in every double whether wanted or not.
-
-**Requiring `kemal_identity` compiles none of it.** Verified against a built binary: a production
-consumer has zero `Spec::` and zero `KemalIdentity::Testing` symbols, and
-`spec/unit/source_hygiene_spec.cr` now asserts that no production entry point requires the tree.
-
-⚠ **Breaking for anyone who was reaching into `spec/`:** `KemalIdentity::SpecHelper` is now
-`KemalIdentity::Testing`, alongside the doubles that were already there. `spec/support/*` and
-`spec/contract/*` moved to `src/kemal_identity/testing/` and
-`src/kemal_identity/testing/contracts/`.
-
-Two limits are documented rather than left to be discovered: the contracts exercise concurrency
-with fibers in one process, so a store shared between processes needs its own test; and
-`it_behaves_like_an_account_repository` requires multi-tenant behaviour, so a single-tenant
-adapter cannot pass three of its examples.
-
-### ⚠ Breaking: the shared half of federation moved out of the `OIDC` namespace
-
-```
-KemalIdentity::Federation::Identity        (was OIDC::Identity)
-KemalIdentity::Federation::Link            (was OIDC::Link)
-KemalIdentity::Federation::LinkRepository  (was OIDC::LinkRepository)
-```
-
-`OIDC::Provider`, `OIDC::Client`, `OIDC::Pending` and `OIDC::PendingCodec` are unchanged;
-`Client#complete` now returns `Federation::Identity | Failed`. If you implement
-`LinkRepository` or name `Identity` in a signature, change the namespace — nothing else about
-those types moved.
-
-The roadmap listed a type called `IdentityProvider` among the ones v1.0 freezes, and no such
-type existed. Rather than invent it, v0.8 answers the question it was standing in for: **a
-second federation protocol added after 1.0 must not require a breaking change.** Everything a
-`SAML::Client` would touch was checked, and only these three names would have forced one —
-protocol-neutral concepts sitting inside a protocol's namespace, one of which consumers
-implement. `blueprints/0024-federation-namespace.md`.
-
-`LinkRepository` is shared for a specific reason: `for_account` answers "which providers is this
-account linked to", and the guard against unlinking somebody's last way in reads it. Against a
-second table it answers from half the rows.
-
-### `Identity#email_verified` is now `Bool?`
-
-`nil` means the issuer asserted nothing, `false` means it said the address is not verified,
-`true` means it says it verified it. Previously both of the first two arrived as `false`, so a
-policy of "only accept issuers that verify addresses" could not be written.
-
-`#email_verified?` still answers a `Bool` and still treats `nil` as unverified, so the security
-behaviour is unchanged. It is written out rather than generated, because `getter?` over a `Bool?`
-returns `Bool?` — falsy in a conditional, but not a boolean, and a security predicate should not
-have a third answer.
-
-### A rate limiter can say that its store is gone
-
-`Verdict` gains a third state. A limiter over shared storage used to have three ways to lie
-when Redis was unreachable — allow and run unmetered, deny and take the endpoint down, or raise
-into a 500 — and all three made a decision that belongs to the application:
-
-```crystal
-def consume(key : String) : KemalIdentity::Verdict
-  # ...
-rescue Redis::Error
-  KemalIdentity::Verdict.unavailable
-end
-```
-
-Additive: `consume` and `reset` keep their signatures, and neither shipped limiter can produce
-the new state — `NullRateLimiter` has no store and `FixedWindowRateLimiter`'s store is the
-process. No existing deployment changes behaviour.
-
-**The default is fail-closed.** All five of this shard's call sites — login, password reset, and
-three ways of proving a second factor — refuse rather than run unmetered, and log
-`rate_limiter.unavailable` at error level. An application that prefers availability on a given
-path wraps that limiter in `FailOpenRateLimiter`; per endpoint, since each service takes its
-own.
-
-`Verdict.unavailable` reads as `allowed? == false`, so code that has not learned about the third
-state fails closed rather than open. `FailureReason::RateLimiterUnavailable` is kept apart from
-`RateLimited` because one is the limiter working and the other is an incident — the same
-argument that keeps `InvalidClaim` apart from `InvalidCredential`. Neither is visible in a
-response.
-
-`blueprints/0023-rate-limiter-store-failure.md`.
-
-### Per-token scopes, intersected with account permissions
-
-`ApiTokens::Service#issue` takes `scopes:`, `auth_api_tokens` gains a nullable `scopes` column,
-and `RBAC` refuses a permission the presenting credential does not carry:
-
-```crystal
-KemalIdentity.app.api!.issue(account, "reporting", scopes: ["reports.read"])
-```
-
-Additive — no frozen contract moved, and `ApiTokens` is not on the freeze list. `Token#scopes`
-and `Service#issue(scopes:)` are defaulted, so existing calls are unchanged, and a token issued
-without scopes reads back `nil`, which means *unrestricted*.
-
-The account's grant is checked first and the scope only ever narrows: naming a permission its
-owner was never given grants nothing. There is no wildcard — `["*"]` is a scope named `*` and
-matches nothing, for the same reason `Permission` refuses `*`. An out-of-scope denial does not
-ask for step-up, because re-authenticating does not widen a token that was issued narrow.
-
-This reverses the v0.4 position that "scopes are deliberately absent: a token authenticates, it
-does not authorize". That was right while there was no authorizer for a scope to intersect
-with; v0.6 shipped one.
-
-⚠ **A permission left at the default assurance is unreachable by any token.**
-`Permission#minimum_assurance` defaults to `Password` and `AssuranceLevel::ApiToken` is below
-it, so declare the permissions automation may perform at `ApiToken` assurance. The assurance
-answers "may a machine do this at all"; the scope answers "may this token".
-
-⚠ **If you implement `ApiTokens::Repository`, persist the new column.** The field is defaulted,
-so an adapter written before v0.8 keeps compiling and silently drops it — and a dropped scope
-reads back as `nil`, which means unrestricted. The shared contract suite has three examples that
-fail on exactly this.
 
 ### ⚠ Breaking: `Authorizer#decide` takes a context, and a denial is built by name
 
@@ -278,6 +99,198 @@ exist and who is in them.
 axes, one authority. The flag is not a parameter of the general constructor — `initialize` is
 private — so `RBAC` cannot build an assurance denial and forget it and leave step-up silently
 broken. The one place it is chosen is `.policy`, where this shard cannot know the answer.
+
+### ⚠ Breaking: the shared half of federation moved out of the `OIDC` namespace
+
+```
+KemalIdentity::Federation::Identity        (was OIDC::Identity)
+KemalIdentity::Federation::Link            (was OIDC::Link)
+KemalIdentity::Federation::LinkRepository  (was OIDC::LinkRepository)
+```
+
+`OIDC::Provider`, `OIDC::Client`, `OIDC::Pending` and `OIDC::PendingCodec` are unchanged;
+`Client#complete` now returns `Federation::Identity | Failed`. If you implement
+`LinkRepository` or name `Identity` in a signature, change the namespace — nothing else about
+those types moved.
+
+The roadmap listed a type called `IdentityProvider` among the ones v1.0 freezes, and no such
+type existed. Rather than invent it, v0.8 answers the question it was standing in for: **a
+second federation protocol added after 1.0 must not require a breaking change.** Everything a
+`SAML::Client` would touch was checked, and only these three names would have forced one —
+protocol-neutral concepts sitting inside a protocol's namespace, one of which consumers
+implement. `blueprints/0024-federation-namespace.md`.
+
+`LinkRepository` is shared for a specific reason: `for_account` answers "which providers is this
+account linked to", and the guard against unlinking somebody's last way in reads it. Against a
+second table it answers from half the rows.
+
+### ⚠ Refusals now carry the RFC 6750 challenge
+
+`WWW-Authenticate` was absent from every response. It is a MUST in RFC 6750 §3 for a request that
+carried no credentials or a token that did not grant access, and
+`blueprints/0025-maturity-validation-results.md` measured its absence against a running server.
+
+| Request | Status | Challenge |
+|---|---|---|
+| no credential presented | 401 | `Bearer realm="api"` |
+| a bearer token that did not hold | 401 | `error="invalid_token"` |
+| a token narrower than the action | 403 | `error="insufficient_scope"` |
+| any other denial | 403 | no error code |
+
+Only an out-of-scope credential is described, because RFC 6750 registers no code for "the account
+does not hold this permission" — and that is the distinction worth keeping hidden. `scope=` is
+never sent. Nothing is announced when the application configured no bearer credential.
+
+`ForbiddenError` gains `challenge_error : String?`, set by `authorize!`, and it carries a
+projection rather than the `DenialReason` — `"insufficient_scope"` or `nil`. The handler cannot
+render a reason it was never given.
+
+Set the realm with `ErrorHandler.new(realm: "your-api")`.
+
+**⚠ Breaking: a request that presented a bearer credential is never redirected.** Before this, a
+client sending `Authorization: Bearer` with no `Accept` header received `302 Location: /login`,
+because the redirect was decided purely by content negotiation. It now receives 401 with the
+challenge. If you have a client relying on that redirect, it will see a 401.
+
+Statuses are otherwise unchanged; RFC 6750 asks for 403 on `insufficient_scope`, which is what
+this already did. Whether `FreshAuthenticationRequiredError` should become 401 to match RFC 9470's
+examples is deferred — that document requires no status code, so it is a compatibility decision
+rather than a compliance one. `blueprints/0026-bearer-challenges.md`.
+
+### Per-token scopes, intersected with account permissions
+
+`ApiTokens::Service#issue` takes `scopes:`, `auth_api_tokens` gains a nullable `scopes` column,
+and `RBAC` refuses a permission the presenting credential does not carry:
+
+```crystal
+KemalIdentity.app.api!.issue(account, "reporting", scopes: ["reports.read"])
+```
+
+Additive — no frozen contract moved, and `ApiTokens` is not on the freeze list. `Token#scopes`
+and `Service#issue(scopes:)` are defaulted, so existing calls are unchanged, and a token issued
+without scopes reads back `nil`, which means *unrestricted*.
+
+The account's grant is checked first and the scope only ever narrows: naming a permission its
+owner was never given grants nothing. There is no wildcard — `["*"]` is a scope named `*` and
+matches nothing, for the same reason `Permission` refuses `*`. An out-of-scope denial does not
+ask for step-up, because re-authenticating does not widen a token that was issued narrow.
+
+This reverses the v0.4 position that "scopes are deliberately absent: a token authenticates, it
+does not authorize". That was right while there was no authorizer for a scope to intersect
+with; v0.6 shipped one.
+
+⚠ **A permission left at the default assurance is unreachable by any token.**
+`Permission#minimum_assurance` defaults to `Password` and `AssuranceLevel::ApiToken` is below
+it, so declare the permissions automation may perform at `ApiToken` assurance. The assurance
+answers "may a machine do this at all"; the scope answers "may this token".
+
+⚠ **If you implement `ApiTokens::Repository`, persist the new column.** The field is defaulted,
+so an adapter written before v0.8 keeps compiling and silently drops it — and a dropped scope
+reads back as `nil`, which means unrestricted. The shared contract suite has three examples that
+fail on exactly this.
+
+### A rate limiter can say that its store is gone
+
+`Verdict` gains a third state. A limiter over shared storage used to have three ways to lie
+when Redis was unreachable — allow and run unmetered, deny and take the endpoint down, or raise
+into a 500 — and all three made a decision that belongs to the application:
+
+```crystal
+def consume(key : String) : KemalIdentity::Verdict
+  # ...
+rescue Redis::Error
+  KemalIdentity::Verdict.unavailable
+end
+```
+
+Additive: `consume` and `reset` keep their signatures, and neither shipped limiter can produce
+the new state — `NullRateLimiter` has no store and `FixedWindowRateLimiter`'s store is the
+process. No existing deployment changes behaviour.
+
+**The default is fail-closed.** All five of this shard's call sites — login, password reset, and
+three ways of proving a second factor — refuse rather than run unmetered, and log
+`rate_limiter.unavailable` at error level. An application that prefers availability on a given
+path wraps that limiter in `FailOpenRateLimiter`; per endpoint, since each service takes its
+own.
+
+`Verdict.unavailable` reads as `allowed? == false`, so code that has not learned about the third
+state fails closed rather than open. `FailureReason::RateLimiterUnavailable` is kept apart from
+`RateLimited` because one is the limiter working and the other is an incident — the same
+argument that keeps `InvalidClaim` apart from `InvalidCredential`. Neither is visible in a
+response.
+
+`blueprints/0023-rate-limiter-store-failure.md`.
+
+### A typed security event sink
+
+```crystal
+class SiemSink < KemalIdentity::SecurityEventSink
+  def record(event : KemalIdentity::SecurityEvent) : Nil
+    @queue.push({name: event.name, actor: event.subject, at: event.at})
+  end
+end
+
+bridge = KemalIdentity.event_sink = SiemSink.new
+```
+
+`SecurityEvent` types the fields a SIEM correlates on — `subject`, `credential`, `tenant`, `ip`,
+`reason`, plus `name`, `severity` and `at` — and leaves event-specific detail in `data`. A rename
+of a correlation field is now a compile error for a consumer rather than a silent breakage.
+
+Fed by an `EventBridge` over the events the shard already emits, so nothing was added beside
+sixty-four call sites and the `Log` output is untouched.
+
+**A failing sink is counted, never fatal and never silent.** An exception from `record` cannot
+reach the caller — measured before this: a raising `Log::Backend` under `:direct` dispatch turned
+every login into a 500, and under `:async` it killed the dispatcher fiber and the trail went quiet
+with nothing said. `bridge.failures` is the number to alarm on. `Log` remains the fallback, so a
+broken sink loses the SIEM copy and not the audit trail.
+
+⚠ **Breaking for a log pipeline keyed on field names.** Writing the bridge showed the emissions
+were inconsistent: `authz.*` events used `account:` where everything else used `subject:`, and
+`session.revoked`/`session.ended` used `session:` where `authz.denied` already used `credential:`.
+Both are normalised — `subject` and `credential` — in the `Log` output as well as in the sink.
+
+`blueprints/0027-security-event-sink.md`.
+
+### The test doubles and shared contracts are published API
+
+```crystal
+require "kemal_identity/testing"            # in-memory doubles, fixtures, assertions
+require "kemal_identity/testing/contracts"  # the shared contract specs
+
+it_behaves_like_a_session_repository { |accounts| MyRedisSessionRepository.new(redis, accounts) }
+```
+
+If you implement any contract in this shard, you can now check it against the same examples the
+shipped adapters run, and build fixtures from the same doubles. Before this they lived under
+`spec/` and were reachable only by requiring this repository's own `spec_helper` — a private
+path, undocumented, and pulling in every double whether wanted or not.
+
+**Requiring `kemal_identity` compiles none of it.** Verified against a built binary: a production
+consumer has zero `Spec::` and zero `KemalIdentity::Testing` symbols, and
+`spec/unit/source_hygiene_spec.cr` now asserts that no production entry point requires the tree.
+
+⚠ **Breaking for anyone who was reaching into `spec/`:** `KemalIdentity::SpecHelper` is now
+`KemalIdentity::Testing`, alongside the doubles that were already there. `spec/support/*` and
+`spec/contract/*` moved to `src/kemal_identity/testing/` and
+`src/kemal_identity/testing/contracts/`.
+
+Two limits are documented rather than left to be discovered: the contracts exercise concurrency
+with fibers in one process, so a store shared between processes needs its own test; and
+`it_behaves_like_an_account_repository` requires multi-tenant behaviour, so a single-tenant
+adapter cannot pass three of its examples.
+
+### `Identity#email_verified` is now `Bool?`
+
+`nil` means the issuer asserted nothing, `false` means it said the address is not verified,
+`true` means it says it verified it. Previously both of the first two arrived as `false`, so a
+policy of "only accept issuers that verify addresses" could not be written.
+
+`#email_verified?` still answers a `Bool` and still treats `nil` as unverified, so the security
+behaviour is unchanged. It is written out rather than generated, because `getter?` over a `Bool?`
+returns `Bool?` — falsy in a conditional, but not a boolean, and a security predicate should not
+have a third answer.
 
 ## v0.7.0 — 2026-08-29
 

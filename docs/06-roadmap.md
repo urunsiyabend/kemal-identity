@@ -225,6 +225,8 @@ reporting convenience, weeks before the contracts freeze.
 
 ## v0.8 — The last breaking release
 
+**Released as `v0.8.0` on 2026-08-29.**
+
 Everything that has to change *before* the contracts freeze, and nothing that does not.
 
 `blueprints/maturity-validation-scenarios.md` is the catalogue this project will be judged
