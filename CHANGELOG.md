@@ -1,5 +1,61 @@
 # Changelog
 
+## Unreleased
+
+The catalogue's second pass. Additive except where noted — two changes alter behaviour an
+application may be observing, and both are called out below.
+
+### An application can register its own bearer authenticator
+
+```crystal
+KemalIdentity.configure(
+  # ...
+  bearer_authenticators: [GatewayAuthenticator.new(secret).as(KemalIdentity::RequestAuthenticator)],
+)
+```
+
+`RequestAuthenticator` was always implementable and had nowhere to go: `Application#bearer` was
+assembled from `api_tokens:` and `jwt:` and from nothing else. That mattered more than
+registration, because `bearer` is also what `Kemal::ErrorHandler` asks before sending an RFC 6750
+challenge and what `Kemal::CSRFHandler` asks before exempting a token-only mutation. An
+application whose only bearer credential was its own got neither: no `WWW-Authenticate` on any
+401, and `403 invalid CSRF token` on a `POST` carrying nothing but an `Authorization` header.
+
+Your authenticators go after the shipped ones, in the order given. **One owner per shape:** the
+chain stops at the first authenticator that recognises a credential and rejects it, so an
+authenticator of yours that handles a shape the shard also handles will never see it. Either own
+the shape entirely — hold every issuer's validator yourself and do not configure `jwt:`, which is
+what `JWT.unverified_issuer` is for — or move the shapes apart with `api_token_prefix:`. See
+`docs/01-architecture.md`.
+
+### ⚠ Behaviour change: no password reset for an account with no password
+
+`request_password_reset` now refuses, silently, when the account's `password_digest` is nil —
+alongside the refusals already there for an unknown login and a disabled account. The response
+does not change and the three remain indistinguishable.
+
+Completing a reset does not *reset* a password on such an account, it **creates** one, turning a
+workload identity — a CI job, a daemon — into one that can be logged into interactively. The proof
+of identity in that flow is reaching a mailbox, and a service account's login is often a team
+alias. The same applied to a human who signs in only through a federated provider.
+
+Setting a *first* password is a profile action for somebody already signed in: call
+`Accounts::Repository#update_password_digest` behind your own session guard. Recovery is for a
+credential that exists. Django filters the same case out of its reset form
+(`has_usable_password()`).
+
+### ⚠ Breaking for log readers: three events renamed their credential field
+
+`session.started`, `api_token.issued` and `api_token.revoked` now emit `credential:` instead of
+`session:` and `token:`. They were the three events that *mint or kill* a credential, and the
+three that left `SecurityEvent#credential` nil with the id buried in `data` — so the typed
+correlation field a SIEM reads was empty for exactly the events an incident starts from.
+`api_token.issued` called it `token:`, which reads as though the secret itself were in the log
+line; the value was always the id.
+
+This completes the normalisation v0.8.0 started and did not test. `spec/security/event_sink_spec.cr`
+now names the four events and the id each must carry.
+
 ## v0.8.1 — 2026-09-01
 
 Additive only. Every signature v0.8.0 published still means what it meant; each item here adds a

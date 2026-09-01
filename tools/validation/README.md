@@ -46,6 +46,7 @@ that way rather than in-process.
 | `jwt_family_spec.cr` | JWT-01 to JWT-04 — two issuers, chaining in both orders, hand-rolled `iss` routing, claim mapping, per-audience and per-issuer policy |
 | `dev03_raw_http.cr` | DEV-03 — a whole server over raw `HTTP::Server`, no Kemal. A server: build, run, probe |
 | `dev03_http07_spec.cr` | DEV-03's application object, and HTTP-07 — a job's principal with no request |
+| `tok07_spec.cr` | TOK-07 — a workload identity: no password, no email, prompt deprovisioning, and the reset link it used to be sent |
 | `tok02_fine_grained.cr` | TOK-02 — a GitHub-shaped fine-grained token: the selection table and the authorizer that reads it |
 | `tok02_spec.cr` | TOK-02 — two tokens for one account, the intersection in both directions, and identical denials for unknown and unavailable |
 | `tok02_app.cr` | TOK-02 — the horizontal-access attempt. A server: build, run, change the organisation and the repository id in the URL |

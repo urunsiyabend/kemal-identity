@@ -280,6 +280,7 @@ Same rule: additive, measured first, and the scenario is named.
 | Deliverable | State |
 |---|---|
 | An application's own bearer authenticator | **done** — TOK-04 M2 → M3. `bearer_authenticators:`. The contract was always implementable; `app.bearer` had no way in — and it also gates the RFC 6750 challenge and the CSRF exemption, so an application whose only bearer credential was its own silently lost both |
+| No reset link for an account with no password | **done** — found while validating TOK-07. Completing a reset *creates* a password, so the flow was a way to obtain interactive access to a workload identity whose login is a team alias. Refused silently, like the unknown-login and disabled branches |
 | Every credential-minting event names its credential | **done** — found while validating TOK-02. `session.started`, `api_token.issued` and `api_token.revoked` left `SecurityEvent#credential` nil and put the id in the bag — `api_token.issued` under a field called `token`, which reads as though the secret were in the log line. Breaking for a log reader, and now asserted |
 | An explicit `bearer:` override taking the whole chain | **open** — TOK-05 M3. Four families work and a shape has one owner either way, so nothing needs it yet; the condition it would close is "the chain is consumer-supplied", of which half is composed for you |
 | `AuthenticatorChain#authenticators` should not hand out its mutable array | **open** — it is what made an accidental registration route work before the parameter existed, and it contradicts "configuration is boot-time and immutable". Returning a copy changes a published getter's behaviour, so it waits for a minor release |
@@ -319,8 +320,8 @@ result for this library.
 
 That pass is under way in `blueprints/0025-maturity-validation-results.md`, run from a separate
 consumer project rather than from inside this repository — several scenarios are about what an
-application can reach from outside, which cannot be answered from in here. **Twenty-six of fifty
-are recorded, and nothing sits below M3 any more: twenty M3 and six M4.** All seven very-high
+application can reach from outside, which cannot be answered from in here. **Twenty-seven of fifty
+are recorded, and nothing sits below M3 any more: twenty-one M3 and six M4.** All seven very-high
 scenarios are done. Every M2 the first pass found was fixed after measurement rather than filed.
 `tools/validation/` keeps the attempts so a later revision is measured against the same ones.
 

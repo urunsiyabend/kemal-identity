@@ -47,6 +47,44 @@ describe KemalIdentity::Accounts::Service do
         .should be_a(KemalIdentity::Accounts::PasswordWasReset)
     end
 
+    # A privilege boundary, not tidiness: completing a reset *creates* a password where there
+    # was none, so a flow whose only proof is reaching a mailbox would hand interactive access
+    # to a workload identity whose login is a team alias -- or to a federated account whose
+    # owner has no password by choice. `blueprints/0025`, TOK-07, walked that end to end.
+    it "mints nothing for an account with no password credential" do
+      accounts = KemalIdentity::Testing::MemoryAccountRepository.new([
+        KemalIdentity::Testing.account(
+          id: "svc", login: "ci-bot@example.com", password_digest: nil
+        ),
+      ])
+      hasher = KemalIdentity::Testing::FastTestHasher.new
+      tokens = KemalIdentity::Testing::MemoryActionTokenRepository.new
+      notifier = KemalIdentity::Testing::RecordingNotifier.new
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
+
+      service = KemalIdentity::Accounts::Service.new(
+        accounts: accounts,
+        tokens: tokens,
+        notifier: notifier,
+        sessions: KemalIdentity::Sessions::Service.new(
+          sessions: KemalIdentity::Testing::MemorySessionRepository.new(accounts),
+          clock: clock,
+          random: KemalIdentity::Testing::DeterministicRandom.new(seed: 41),
+        ),
+        hasher: hasher,
+        policy: KemalIdentity::Passwords::LengthPolicy.for(hasher),
+        clock: clock,
+        random: KemalIdentity::Testing::DeterministicRandom.new(seed: 42),
+      )
+
+      # Returns normally, like the unknown-login and disabled-account branches: the response an
+      # application builds from this must not reveal which of the three happened.
+      service.request_password_reset("ci-bot@example.com")
+
+      notifier.resets.should be_empty
+      tokens.size.should eq(0)
+    end
+
     # A link sitting in a mailbox somebody else now controls stops working the moment the real
     # owner asks for a fresh one.
     it "invalidates the previous link when a new one is issued" do

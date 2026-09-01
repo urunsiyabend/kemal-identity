@@ -126,6 +126,29 @@ module KemalIdentity::Accounts
         return
       end
 
+      # Neither does an account with no password credential, and this one is a privilege
+      # boundary rather than a tidiness rule.
+      #
+      # `password_digest` is nil for a workload identity -- a CI job, a daemon -- and for a
+      # human who has only ever signed in through a federated provider. Completing a reset
+      # *creates* a password where there was none, so a recovery flow whose only proof is
+      # reaching a mailbox would be a way to obtain interactive access to a service account
+      # whose login is a team alias. Measured end to end in `blueprints/0025`, TOK-07.
+      #
+      # Django filters the same case out of its reset form for the same reason
+      # (`has_usable_password()`). Setting a *first* password is a profile action for somebody
+      # already signed in, not a recovery one: an application offering it calls
+      # `Accounts::Repository#update_password_digest` behind its own session guard.
+      #
+      # Silent and indistinguishable, like the two branches above: the response does not change,
+      # and neither does the timing story, because the token was minted before the branch.
+      if account.password_digest.nil?
+        Log.info &.emit(
+          "password_reset.refused", subject: account.id, reason: "no_password_credential"
+        )
+        return
+      end
+
       # Issuing a new link invalidates the old ones, so a link sitting in a mailbox somebody
       # else now controls stops working the moment the real owner asks for a fresh one.
       @tokens.revoke_all_for_account(account.id, ActionPurpose::Reset, @clock.now)

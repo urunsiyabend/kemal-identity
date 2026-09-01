@@ -50,6 +50,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | OPS-06 | High | M3 | **M3** | Shipped adapters hard-code their own table names |
 | OPS-07 | High | M3 | **M3 → M4** | Fixed after measurement: CI resolves three consumers and checks what each gets |
 | DEV-01 | High | M3 | **M3 → M4** | Fixed with HTTP-01: the shard emits the accurate challenge, so a replacement handler no longer has to guess |
+| TOK-07 | High | High | **M3** | Workload identities work and deprovision promptly; a password reset used to mint a link for an account that had no password |
 | TOK-02 | High | High | **M3** | Fine-grained restriction works and survives a global role; the shard supplies the credential id and the target, the selection table is the application's |
 | TOK-05 | High | Medium | **M3** | Four families work, but a shape may have only one owner — the chain's built-in half is not reorderable |
 | TOK-04 | High | M3 | **M2 → M3** | Fixed after measurement: `bearer_authenticators:` — the contract was implementable and had nowhere to go |
@@ -1562,3 +1563,68 @@ carry. Restoring any one of the old field names fails it.
 
 **Breaking for a log reader**, exactly as `blueprints/0027`'s rename was, and for the same reason:
 aliasing at the bridge would leave `grep` inconsistent.
+
+---
+
+## TOK-07 — Machine/service accounts
+
+**Result: M3.** Applicable.
+
+A `svc-deploy` account was created with `password_digest: nil`, `password_scheme: nil`,
+`email_verified_at: nil` and a login that is not an address, alongside an ordinary human account
+for comparison.
+
+**Three of the four pass conditions hold.**
+
+*"The account repository does not require human-only fields"* — holds. Every human-shaped field is
+nilable, the login need not be an address, and `find_by_login("svc-deploy")` resolves, which is
+what makes a provisioning script idempotent.
+
+*"Destructive interactive actions are unavailable"* — password login fails closed for every input
+tried, including the login as its own password and the empty string. `Passwords::Authenticator`
+reaches a nil digest and refuses rather than treating "no credential" as "any credential".
+
+*"Deprovisioning the service account revokes access promptly"* — measured across the boundary: a
+token authenticates, the account is disabled, the *same* token then answers
+`Failed(DisabledAccount)` on the next call. No sweeper, no TTL, no cache to expire.
+
+*"Audit events distinguish human and workload identity"* — holds, but the distinction is the
+application's. `Accounts::Account` has no field for it and should not: what counts as a workload
+is a product question. The application keeps the set and tags at the sink, and the events carry
+everything that needs — `subject` and, since TOK-02's fix, `credential`. Measured: two
+`api_token.issued` events, one tagged `workload`, one `human`, each naming its token id with no
+join.
+
+**A defect found on the way, and this one is a privilege boundary.**
+
+`request_password_reset` minted a reset token and delivered a link for `svc-deploy` — an account
+with **no password credential at all**:
+
+```
+workload: 1 reset mail, 1 action tokens
+human:    1 reset mail, 1 action tokens
+```
+
+And `reset_password` sets a digest unconditionally, so completing that link does not *reset* a
+password, it **creates** one — turning a non-interactive identity into one that can be logged into
+with a password. The proof of identity for that flow is reaching a mailbox, and a service
+account's login is very often a team alias. The same applies to a human who has only ever signed
+in through a federated provider and has no password by choice.
+
+**Fixed:** `request_password_reset` now refuses when `password_digest` is nil, silently and
+indistinguishably from the two refusals already there — unknown login, disabled account. The
+token is minted before the branch either way, so the timing story does not change, and the
+response an application builds cannot tell the three apart.
+
+Django filters exactly this case out of its reset form, for exactly this reason
+(`has_usable_password()`), which is the precedent this follows rather than an invention.
+
+**What that deliberately does not remove.** Setting a *first* password is a profile action for
+somebody already signed in, not a recovery one: an application offering it calls
+`Accounts::Repository#update_password_digest` behind its own session guard. Recovery is for a
+credential that exists.
+
+**Why M3 and not M4.** Nothing in the repository shows an application how to run a workload
+identity: no example, no documented recipe, and the human/workload tag is left entirely to the
+consumer with no guidance on where to put it. The capability is complete; the shelf it sits on is
+empty. `tools/validation/tok07_spec.cr` holds the six examples.
