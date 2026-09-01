@@ -111,9 +111,70 @@ jobs:
         run: crystal build --no-codegen examples/browser_session/app.cr
 
       # The benchmarks are not run here — docs/05-testing.md keeps them out of CI, since a
-      # shared runner's numbers mean nothing. Compiling them still catches API drift.
+      # shared runner's numbers mean nothing. Compiling them still catches API drift, which it
+      # did: v0.8.0 shipped with this step red because the testing tree moved and the benchmark's
+      # requires did not follow.
       - name: Benchmarks compile
         run: crystal build --no-codegen bench/hashing_latency.cr
+
+      # What a consumer actually resolves, which nothing else here checks.
+      #
+      # `Core compiles without the Kemal adapter` proves the core references no Kemal types, but
+      # it compiles *inside this repository*, where both database drivers are installed as
+      # development dependencies. It cannot notice `pg` moving back into `dependencies` — the
+      # property v0.7.0 exists for. Measured from a consumer project in blueprints/0025 (OPS-07)
+      # and found to hold, with nothing keeping it that way.
+      #
+      # Three projects, because the property is per-driver: a core-only consumer must resolve
+      # neither, and each driver-specific one exactly its own.
+      - name: A consumer resolves only the driver it asked for
+        if: matrix.crystal == '1.21.0'
+        run: |
+          set -euo pipefail
+
+          for kind in core sqlite pg; do
+            work="$(mktemp -d)"
+            cp -r tools/validation/ops07/"$kind"/. "$work"/
+
+            # The example shard.yml points at a checkout path; here the shard is this tree.
+            sed -i "s|path: .*|path: $GITHUB_WORKSPACE|" "$work"/shard.yml
+
+            ( cd "$work" && shards install --quiet && crystal build --no-codegen src/main.cr )
+
+            installed="$(ls "$work"/lib)"
+            echo "$kind resolves: $(echo $installed | tr '\n' ' ')"
+
+            case "$kind" in
+              core)
+                if echo "$installed" | grep -qE '^(pg|sqlite3)$'; then
+                  echo "::error::a core-only consumer resolved a database driver"
+                  exit 1
+                fi
+                ;;
+              sqlite)
+                echo "$installed" | grep -qx sqlite3 || { echo "::error::sqlite3 missing"; exit 1; }
+                if echo "$installed" | grep -qx pg; then
+                  echo "::error::a SQLite-only consumer resolved pg"
+                  exit 1
+                fi
+                ;;
+              pg)
+                echo "$installed" | grep -qx pg || { echo "::error::pg missing"; exit 1; }
+                if echo "$installed" | grep -qx sqlite3; then
+                  echo "::error::a PostgreSQL-only consumer resolved sqlite3"
+                  exit 1
+                fi
+                ;;
+            esac
+
+            # Development dependencies must not leak into a consumer either.
+            for dev in ameba spec-kemal; do
+              if echo "$installed" | grep -qx "$dev"; then
+                echo "::error::$kind resolved the development dependency $dev"
+                exit 1
+              fi
+            done
+          done
 
   # The supported floor, run on every push. A floor recorded only in a comment is a floor that
   # quietly rises the first time somebody uses a newer Kemal API; this makes it a claim CI

@@ -256,6 +256,16 @@ it was measured rather than assumed — request attributes for DPoP and trusted-
 All of those are real gaps against the catalogue's targets and all of them can land after 1.0
 without breaking anybody. `blueprints/0020` lists them so that missing them stays a decision.
 
+## v0.8.x — Additive, after the freeze list was settled
+
+Nothing here moves a signature v1.0 freezes, so none of it needed to be in v0.8.0. All of it came
+out of running the catalogue — `blueprints/0025-maturity-validation-results.md` names the scenario
+each one closes.
+
+| Deliverable | State |
+|---|---|
+| CI resolves three consumers and checks what each gets | **done** — OPS-07 M3 → M4. The property v0.7.0 exists for had nothing keeping it true; verified to fail when `pg` is moved back into `dependencies` |
+
 ## v1.0 — API freeze
 
 The criterion is contract stability, not feature count.

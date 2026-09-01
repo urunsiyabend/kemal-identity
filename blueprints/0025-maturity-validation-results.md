@@ -48,7 +48,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | AUT-01 | High | M3 | **M3** | The no-N+1 condition needs a cache that is off by default |
 | OPS-04 | High | M3 | **M3** | One repository of eight validated; reaching the contract depends on DEV-02 |
 | OPS-06 | High | M3 | **M3** | Shipped adapters hard-code their own table names |
-| OPS-07 | High | M3 | **M3** | Nothing in CI guards the property against regression |
+| OPS-07 | High | M3 | **M3 → M4** | Fixed after measurement: CI resolves three consumers and checks what each gets |
 | DEV-01 | High | M3 | **M3 → M4** | Fixed with HTTP-01: the shard emits the accurate challenge, so a replacement handler no longer has to guess |
 | HTTP-03 | High | M3 | **M2** | An invalid cookie masks a valid bearer; precedence was undocumented and is not per-route |
 | JWT-01 | High | M3 | **M2** | Two validators cannot be chained, and there is no bounded way to read `iss` first |
@@ -665,6 +665,22 @@ development dependencies. It proves the core references no Kemal types. It does 
 consumer resolving only the shard gets no drivers — so moving `pg` back into `dependencies` would
 break the property with a green build. A CI step that resolves a throwaway consumer and asserts
 `lib/` holds neither driver would close it.
+
+### Fixed — re-measured at M4
+
+CI now resolves all three projects from `tools/validation/ops07/` and checks what each one got:
+a core-only consumer must resolve neither driver, each driver-specific one exactly its own, and
+none of them a development dependency.
+
+**Verified to fail when it should**, which is the half that makes a green run mean something. `pg`
+was temporarily moved back into `dependencies` and the check caught it:
+
+```
+core resolves: backtracer db exception_page kemal kemal_identity pg radix
+→ the step failed
+```
+
+Then reverted. A step that only ever passes is a step nobody has tested.
 
 ---
 
