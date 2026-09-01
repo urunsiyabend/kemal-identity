@@ -51,7 +51,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | OPS-07 | High | M3 | **M3 → M4** | Fixed after measurement: CI resolves three consumers and checks what each gets |
 | DEV-01 | High | M3 | **M3 → M4** | Fixed with HTTP-01: the shard emits the accurate challenge, so a replacement handler no longer has to guess |
 | HTTP-03 | High | M3 | **M2** | An invalid cookie masks a valid bearer; precedence was undocumented and is not per-route |
-| JWT-01 | High | M3 | **M2** | Two validators cannot be chained, and there is no bounded way to read `iss` first |
+| JWT-01 | High | M3 | **M2 → M3** | Fixed after measurement: `JWT.unverified_issuer`, bounded and strict |
 | JWT-02 | High | M3 | **M3** | — |
 | JWT-03 | High | M3 | **M3** | — |
 | JWT-04 | Medium | M2–M3 | **M3** | Works, but inherits JWT-01's hand-rolled routing to get per-issuer validators |
@@ -872,6 +872,43 @@ above.
 **Smallest change that would reach M3:** a bounded, non-trusting `JWT.unverified_issuer(credential) : String?`
 — the same length check the validator already does, then one segment decoded, no signature
 implied by the name. Additive, so it can land after 1.0.
+
+### Fixed — re-measured at M3
+
+`KemalIdentity::JWT.unverified_issuer` shipped, and the routing this scenario needs is now four
+lines a consumer does not have to get right themselves:
+
+```crystal
+issuer = KemalIdentity::JWT.unverified_issuer(credential)
+validator = issuer.try { |i| VALIDATORS[i]? }
+outcome = validator.try(&.authenticate(credential)) ||
+          KemalIdentity::Failed.new(KemalIdentity::FailureReason::InvalidClaim)
+```
+
+**Bounded, which was the whole reason M2 rather than M3.** `max_bytesize` defaults to what
+`Validator` uses and is checked before anything is decoded, so a hostile header costs one integer
+comparison. And it reuses the validator's own `decode_segment` rather than a second decoder — the
+strict base64url of RFC 7515 §2, refusing `+`, `/` and `=`, because a decoder that agreed
+*almost* with the validator is how one token comes to mean two things. Those helpers were lifted
+to class level with no behaviour change; the suite was unchanged by the refactor.
+
+**Nine examples, mostly about what it refuses:** nil, empty, not-three-segments, past the byte
+limit, standard-base64 or padded segments, a payload that is not a JSON object, and a missing,
+empty or non-string `iss`.
+
+Two are the ones that matter. It reads the issuer out of a token **signed with a key nobody here
+holds** — which is the point, since selection has to happen before verification can. And a token
+whose claimed issuer *is* configured but whose signature is another issuer's is still refused, by
+the validator: **selection proves nothing.**
+
+The name carries the warning and the documentation states the two rules the return value is
+subject to — never an identity, and never a URL. The second is the sharp one: fetching JWKS from
+the issuer a token names is server-side request forgery with the attacker choosing the host, so
+the lookup must be exact equality against a map configured at boot.
+
+**Still M3 rather than M4:** `AuthenticatorChain` remains unable to route JWTs, so a consumer
+writes the four lines rather than registering two validators and having it work. Whether the
+chain should learn to route on a discriminator is a design question this does not settle.
 
 **Fixed in this commit:** the README described shape-only routing accurately and left the
 consequence for the reader to derive. It now says plainly that two JWT validators cannot be

@@ -497,6 +497,17 @@ module KemalIdentity::JWT
     end
 
     private def decode_json(segment : String) : Hash(String, ::JSON::Any)?
+      Validator.decode_json(segment)
+    end
+
+    private def decode_segment(segment : String) : Bytes?
+      Validator.decode_segment(segment)
+    end
+
+    # Class-level so that `JWT.unverified_issuer` can reuse exactly this discipline rather than
+    # reimplementing it. Neither reads instance state, and a second decoder that agreed *almost*
+    # with this one is how a token means two things to one application.
+    def self.decode_json(segment : String) : Hash(String, ::JSON::Any)?
       bytes = decode_segment(segment)
       return if bytes.nil?
 
@@ -512,7 +523,7 @@ module KemalIdentity::JWT
     # padding, are all rejected. A decoder that accepts several encodings of one token is
     # a decoder two systems can disagree about, and disagreement is where signature-
     # stripping bugs live.
-    private def decode_segment(segment : String) : Bytes?
+    def self.decode_segment(segment : String) : Bytes?
       return unless segment.matches?(OpaqueToken::PATTERN)
 
       # No valid base64 has this length; `Base64.decode` would otherwise accept it.
@@ -525,5 +536,68 @@ module KemalIdentity::JWT
     rescue Base64::Error
       nil
     end
+  end
+
+  # The `iss` a token *claims*, read without verifying anything at all.
+  #
+  # ### What this is for
+  #
+  # One `Validator` holds one issuer, so an API accepting tokens from several customer identity
+  # providers has one validator each — and has to decide which one to ask. It cannot ask them in
+  # turn: every JWT is three base64url segments, so `AuthenticatorChain` routes them all to the
+  # first validator, which fails the signature and stops the chain. Measured, in both orders, in
+  # `blueprints/0025-maturity-validation-results.md` (JWT-01): whichever issuer is registered
+  # second has its customers refused.
+  #
+  # So the choice has to be made from the token, before any validation, and this is that read —
+  # bounded and strict, so an application does not write its own.
+  #
+  # ```
+  # issuer = KemalIdentity::JWT.unverified_issuer(credential)
+  # validator = issuer.try { |i| VALIDATORS[i]? }
+  # outcome = validator.try(&.authenticate(credential)) ||
+  #           KemalIdentity::Failed.new(KemalIdentity::FailureReason::InvalidClaim)
+  # ```
+  #
+  # ### What it is not for, and the name says so
+  #
+  # **The return value is attacker-controlled.** Nothing has been verified — not the signature,
+  # not `exp`, not `aud`. Two rules follow, and both are load-bearing:
+  #
+  # 1. **Never treat it as an identity.** It selects a validator and nothing else. The trustworthy
+  #    issuer is the one on `Validator`, after `authenticate` succeeded — that one was compared
+  #    against a configured value.
+  # 2. **Never build a URL from it.** Fetching JWKS from the issuer a token names is
+  #    server-side request forgery with extra steps: the attacker chooses the host. Look the
+  #    validator up in a map the application configured at boot, by exact string equality, and
+  #    refuse anything not in it.
+  #
+  # ### Bounded, like the validator itself
+  #
+  # `max_bytesize` defaults to what `Validator` uses, and is checked before anything is decoded,
+  # so a two-megabyte `Authorization` header costs one integer comparison. The segment alphabet is
+  # the strict base64url of RFC 7515 §2 — the same decoder the validator uses, not a second one
+  # that might disagree with it.
+  #
+  # Answers `nil` for anything that is not a well-formed JWT carrying a non-empty string `iss`.
+  # A `nil` means "no validator can be chosen", which the caller must treat as a refusal rather
+  # than as permission to pick a default.
+  def self.unverified_issuer(
+    credential : String?,
+    max_bytesize : Int32 = Validator::DEFAULT_MAX_BYTESIZE,
+  ) : String?
+    return if credential.nil? || credential.empty?
+    return if credential.bytesize > max_bytesize
+
+    parts = credential.split('.')
+    return unless parts.size == 3
+
+    claims = Validator.decode_json(parts[1])
+    return if claims.nil?
+
+    issuer = claims["iss"]?.try(&.as_s?)
+    return if issuer.nil? || issuer.empty?
+
+    issuer
   end
 end
