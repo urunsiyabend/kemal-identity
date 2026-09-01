@@ -50,7 +50,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | OPS-06 | High | M3 | **M3** | Shipped adapters hard-code their own table names |
 | OPS-07 | High | M3 | **M3 → M4** | Fixed after measurement: CI resolves three consumers and checks what each gets |
 | DEV-01 | High | M3 | **M3 → M4** | Fixed with HTTP-01: the shard emits the accurate challenge, so a replacement handler no longer has to guess |
-| HTTP-03 | High | M3 | **M2** | An invalid cookie masks a valid bearer; precedence was undocumented and is not per-route |
+| HTTP-03 | High | M3 | **M2 → M3** | Fixed after measurement: `AuthenticationHandler.new(precedence: ...)`, and remember-me survives the reversal |
 | JWT-01 | High | M3 | **M2 → M3** | Fixed after measurement: `JWT.unverified_issuer`, bounded and strict |
 | JWT-02 | High | M3 | **M3** | — |
 | JWT-03 | High | M3 | **M3** | — |
@@ -808,6 +808,62 @@ file that defined a handler calling it. Crystal only analyses method bodies that
 reached, and nothing called that handler. The visibility error appeared only once the handler was
 wired into a running app. **Compiling a file that merely defines a class proves nothing about its
 method bodies** — a trap worth knowing about for the scenarios still unrun.
+
+**Fixed after measurement — M2 → M3, and not by the change this section proposed.** The smallest
+change named above was to make `authenticate_bearer!` and `restore_remembered!` public. That was
+rejected on second look: it hands an application two methods whose *ordering* is the subtle part,
+and `blueprints/0012-remember-me.md` is explicit that restoring on a failed cookie is the wrong
+order. Publishing them would document the trap and then invite it.
+
+What shipped instead is the policy as an argument:
+
+```crystal
+use KemalIdentity::Kemal::AuthenticationHandler.new(
+  precedence: KemalIdentity::Kemal::AuthenticationHandler::Precedence::Bearer
+)
+```
+
+`Precedence::Cookie` is the default and preserves every row of the first table above, byte for
+byte. `Precedence::Bearer` resolves a presented bearer credential first and does **not** fall back
+to the cookie when it fails — the mirror of the defect, and deliberate: a request that presented a
+token is asking to be authenticated by it, and falling through would let a stale session paper
+over a revoked token.
+
+Both branches keep remember-me, which is the whole reason this is an argument rather than a
+replaceable handler. Measured, in `spec/unit/authentication_handler_spec.cr` — eleven examples
+driving the handler directly, because Kemal's chain is process-global and this is about two chains
+differing in one constructor argument:
+
+| Under `Precedence::Bearer` | Result |
+|---|---|
+| invalid cookie + valid bearer | the token's account, `kind: ApiToken` |
+| valid cookie + valid bearer | the token's account |
+| valid cookie + garbage bearer | not authenticated, and no fall-back |
+| valid cookie, no bearer | the cookie's account, `kind: Session` |
+| invalid cookie, no bearer | `failed?`, and the cookie is cleared |
+| remember cookie only | restored, `assurance: Remembered`, both cookies written |
+| remember cookie + valid bearer | the token's account; no remember cookie written |
+
+**The specs have teeth, proven by breaking the code rather than by reading it.** Pointing
+`Precedence::Bearer` at `resolve_cookie_first` — a one-line mutation — failed exactly the three
+examples that assert the reversal, and none of the eight that assert the unchanged default or the
+preserved remember-me path.
+
+**One incidental finding, which cost two examples.** A handler driven directly with no successor
+answers 404 through `HTTP::Server::Response#respond_with_status`, and that calls `reset` — which
+clears the headers and the cookie jar, taking the `Set-Cookie` under assertion with it. Any spec
+asserting on a cookie a handler wrote needs a no-op `handler.next`, or it measures the reset
+instead of the handler.
+
+**Documented in `docs/04-kemal-integration.md`**, under *When a request presents both a cookie and
+a bearer token*: both tables, the sharp edge, the no-fall-back rule and the remember-me reasoning.
+The section the earlier commit put in the README is gone from the current README, so `docs/` is
+where this now lives.
+
+**Still M3, not M4.** M4 wants precedence declarable per route subtree. Kemal's `use` registers one
+chain for every route and this handler does not consult `only_match?`, so the setting is app-wide
+— the same per-subtree parameter HTTP-02 wants on `PathGuard`, and the same reason both stop at
+M3.
 
 ---
 

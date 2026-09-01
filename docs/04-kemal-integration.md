@@ -49,7 +49,7 @@ dispatching on an allowlist of methods would have silently not covered it.
 
 ## Handler chain
 
-Order matters and is not obvious, so it gets its own section in the README.
+Order matters and is not obvious, so the README's quick start spells the three `use` lines out.
 
 ```
 Kemal::InitHandler
@@ -90,6 +90,63 @@ what stops every stale cookie from producing a 401 on the homepage.
 `AuthenticationHandler` should also skip work entirely for requests carrying no
 credential — the common case for static assets — so the cost on an anonymous request is one
 cookie-map lookup and nothing else.
+
+## When a request presents both a cookie and a bearer token
+
+Both credentials can arrive on one request, and only one of them can answer it. Which one is
+tried first is a policy, so it is a constructor argument rather than a hidden rule.
+
+**The default is `Precedence::Cookie`:** the session cookie is resolved first, and a bearer token
+is examined only when no cookie was presented at all.
+
+| Cookie | Bearer | Result under `Precedence::Cookie` |
+|---|---|---|
+| valid | valid | the cookie's account, `kind: Session` |
+| valid | invalid or revoked | the cookie's account — the bearer is never examined |
+| absent | valid | the token's account, `kind: ApiToken` |
+| **present but invalid** | **valid** | **401** |
+
+That last row is the sharp edge, and it is measured over HTTP in
+`blueprints/0025-maturity-validation-results.md` (HTTP-03): a session cookie that has
+idle-expired, been revoked or been tampered with **masks a perfectly good bearer token**, because
+a cookie that was presented and failed ends the resolution rather than falling through. It is
+fail-closed rather than dangerous, but a same-origin SPA that keeps sending a stale cookie beside
+an `Authorization` header gets 401s it did not expect.
+
+**`Precedence::Bearer` reverses it**, which is what an API-first monolith wants:
+
+```crystal
+use KemalIdentity::Kemal::AuthenticationHandler.new(
+  precedence: KemalIdentity::Kemal::AuthenticationHandler::Precedence::Bearer
+)
+```
+
+| Cookie | Bearer | Result under `Precedence::Bearer` |
+|---|---|---|
+| present but invalid | valid | the token's account, `kind: ApiToken` |
+| valid | valid | the token's account, `kind: ApiToken` |
+| valid | **invalid or revoked** | **401 — no fall-back to the cookie** |
+| absent or invalid | absent | the cookie's answer, as under the default |
+
+The third row is deliberate and is the mirror of the sharp edge above: a request that presented a
+bearer credential is asking to be authenticated by it, and falling through to the cookie would let
+a stale session paper over a revoked token.
+
+Identities never merge under either setting. Two valid credentials naming two different people
+produce exactly one principal, and `env.auth.credential` — a `CredentialRef`, whose `kind` is
+`Session`, `ApiToken`, `Jwt` or `Custom` — says which one proved it.
+
+**Remember-me keeps working under both.** This is the reason precedence is an option here rather
+than something an application gets by writing its own handler: `authenticate_bearer!` and
+`restore_remembered!` are `protected`, and the ordering they enforce is subtle — a remembered
+login is restored only on a request carrying no session cookie at all, because restoring on a
+*failed* cookie widens the window in which parallel requests both present the remember token and
+one of them reads as theft (`blueprints/0012-remember-me.md`). A replacement handler would have to
+reimplement that; changing this argument does not.
+
+**Precedence is app-wide.** Kemal's `use` registers one chain for every route, and this handler
+does not consult `only_match?`, so there is no per-route override. An application that genuinely
+needs two policies needs two applications, or a front handler of its own that delegates.
 
 ## Guarding routes
 

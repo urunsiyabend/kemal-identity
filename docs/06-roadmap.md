@@ -264,6 +264,7 @@ each one closes.
 
 | Deliverable | State |
 |---|---|
+| Credential precedence as a handler argument | **done** — HTTP-03 M2 → M3. `AuthenticationHandler.new(precedence: Precedence::Bearer)` instead of publishing `restore_remembered!`: the ordering is the subtle part, so handing it over would document the trap and then invite it |
 | Provider-specific authorization parameters | **done** — IDP-01 M2 → M3. Allowlisted by exclusion: the nine parameters the flow builds are refused at construction, because the dangerous version of this feature turns PKCE off by configuration |
 | `JWT.unverified_issuer`, so several issuers can be routed | **done** — JWT-01 M2 → M3. Bounded before decoding and reusing the validator's own strict base64url, because a second decoder that almost agrees is how one token means two things |
 | The account contract can be told an adapter is single-tenant | **done** — IDP-03 M3 → M4. `tenanted: false` replaces the tenancy group with an example demanding that a tenant-scoped lookup answer `nil`, rather than skipping — ignoring the argument is the unsafe way to be single-tenant, and it passed everything else |
