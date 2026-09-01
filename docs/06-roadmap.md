@@ -288,6 +288,17 @@ because two items change behaviour an application may be observing, though no si
 | An explicit `bearer:` override taking the whole chain | **open** — TOK-05 M3. Four families work and a shape has one owner either way, so nothing needs it yet; the condition it would close is "the chain is consumer-supplied", of which half is composed for you |
 | `AuthenticatorChain#authenticators` should not hand out its mutable array | **open** — it is what made an accidental registration route work before the parameter existed, and it contradicts "configuration is boot-time and immutable". Returning a copy changes a published getter's behaviour, so it waits for a minor release |
 
+## Storage adapters beyond `crystal-db`
+
+Postgres and SQLite ship, both written against `crystal-db` directly. Adapters for the ORMs
+applications already keep their models in — Avram, Granite — are the next storage work, and they
+are additive: a repository is a contract, so an ORM-backed one is a new class rather than a change
+to anything frozen. `docs/00-scope.md` has always said these belong outside the repository shard;
+this records that they are intended rather than merely permitted.
+
+The shared contract specs are what make it safe to promise: an adapter is finished when it passes
+the same examples the shipped two pass, not when it looks right.
+
 ## v1.0 — API freeze
 
 The criterion is contract stability, not feature count.
