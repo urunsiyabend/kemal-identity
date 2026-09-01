@@ -138,7 +138,7 @@ module KemalIdentity::Authz
       invalidate(account_id)
 
       Log.info &.emit(
-        "authz.granted", account: account_id, role: role, tenant: tenant_id, by: granted_by
+        "authz.granted", subject: account_id, role: role, tenant: tenant_id, by: granted_by
       ) if granted
 
       granted
@@ -148,7 +148,7 @@ module KemalIdentity::Authz
       revoked = @store.revoke(account_id, role, tenant_id)
       invalidate(account_id)
 
-      Log.info &.emit("authz.revoked", account: account_id, role: role, tenant: tenant_id) if revoked
+      Log.info &.emit("authz.revoked", subject: account_id, role: role, tenant: tenant_id) if revoked
 
       revoked
     end
@@ -160,7 +160,7 @@ module KemalIdentity::Authz
 
       invalidate(account_id)
 
-      Log.info &.emit("authz.member_added", account: account_id, tenant: tenant_id) if added
+      Log.info &.emit("authz.member_added", subject: account_id, tenant: tenant_id) if added
 
       added
     end
@@ -171,7 +171,7 @@ module KemalIdentity::Authz
       removed = @store.remove_member(account_id, tenant_id)
       invalidate(account_id)
 
-      Log.info &.emit("authz.member_removed", account: account_id, tenant: tenant_id) if removed
+      Log.info &.emit("authz.member_removed", subject: account_id, tenant: tenant_id) if removed
 
       removed
     end

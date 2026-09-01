@@ -181,7 +181,7 @@ describe "the audit trail" do
       )
 
       entries = captured { h.service.revoke(issued.record.id) }
-      entry(entries, "session.revoked").data[:session].should eq(issued.record.id)
+      entry(entries, "session.revoked").data[:credential].should eq(issued.record.id)
     end
 
     # Revoking an already-revoked session is not an event. Logging it would put a line in the

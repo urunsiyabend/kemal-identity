@@ -5,6 +5,8 @@ require "crypto/subtle"
 
 require "./kemal_identity/version"
 require "./kemal_identity/log"
+require "./kemal_identity/security_event"
+require "./kemal_identity/event_bridge"
 require "./kemal_identity/core/errors"
 require "./kemal_identity/core/assurance_level"
 require "./kemal_identity/core/failure_reason"

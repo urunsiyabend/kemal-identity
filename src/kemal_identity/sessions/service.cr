@@ -140,7 +140,7 @@ module KemalIdentity::Sessions
 
       # Only when something changed. Revoking an already-revoked session is not an event, and
       # logging it would put a line in the trail for every double-submitted logout.
-      Log.info &.emit("session.revoked", session: session_id) if revoked
+      Log.info &.emit("session.revoked", credential: session_id) if revoked
 
       revoked
     end

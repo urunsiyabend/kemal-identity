@@ -133,7 +133,7 @@ module KemalIdentity::Kemal
       in Authz::Forbidden
         Log.info &.emit(
           "authz.denied",
-          account: principal.subject,
+          subject: principal.subject,
           permission: permission,
           tenant: tenant,
           reason: decision.reason.to_s,
@@ -320,7 +320,7 @@ module KemalIdentity::Kemal
       clear_cookie!
       @outcome = Anonymous.new
 
-      Log.info &.emit("session.ended", session: session_id) if session_id
+      Log.info &.emit("session.ended", credential: session_id) if session_id
 
       revoked
     end

@@ -41,7 +41,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | AUT-03 | Very high | M4 | **M3** | As TOK-01 — same machinery, same gap |
 | HTTP-01 | Very high | M4 | **M3 → M4** | Fixed after measurement: the shard sends the challenge |
 | DEV-02 | Very high | M4 | **M2 → M4** | Fixed after measurement: `require "kemal_identity/testing"` |
-| OPS-02 | Very high | M4 | **M2** | No typed sink; two undocumented failure modes when the sink throws |
+| OPS-02 | Very high | M4 | **M2 → M3** | Fixed after measurement: a typed sink, and a failure that is counted rather than fatal or silent |
 | OPS-01 | Very high | M4 | **M3** | The shared contract's concurrency example passes for an adapter that over-allows across processes |
 | IDP-03 | Very high | M4 | **M3** | The shared `AccountRepository` contract cannot be run by a single-tenant adapter |
 | TOK-03 | High | M3 | **M4** | — |
@@ -358,6 +358,35 @@ place that has neither the policy knob nor the documentation.
 **Smallest change that would reach M3:** document the two dispatch modes and their consequences.
 M4 wants a typed `SecurityEvent` sink with declared failure semantics, versioned event names, and
 correlation without global state.
+
+### Fixed — re-measured at M3
+
+`SecurityEvent` and `SecurityEventSink` shipped, fed by an `EventBridge` that translates the
+events the shard already emits. Re-run from the consumer project:
+
+| Attempt | Result |
+|---|---|
+| implement the sink, read `event.subject` as a getter | works — typed, not a hash lookup |
+| a dead SIEM during a login | the login is refused on the credential, `InvalidCredential`, not on the sink |
+| a dead SIEM across two events | `bridge.failures == 2` |
+| a healthy sink beside a broken one | keeps receiving |
+
+Both measured failure modes are gone: an exception cannot leave `authenticate`, and a failing sink
+is a rising counter rather than an absence. `Log` remains the fallback, so a broken sink loses the
+SIEM copy and not the audit trail.
+
+**Writing the bridge is what found something the first pass missed.** Reading all sixty-four
+emissions to decide which keys were correlation fields showed they were not consistent:
+`subject:` in twenty-eight places and `account:` in four, both the account id; and `session:`
+where `authz.denied` already said `credential:`. Normalised at the source rather than aliased in
+the bridge, so the `Log` output an operator greps is consistent too. Breaking for a log pipeline
+keyed on the old names.
+
+**M3 rather than M4, for one stated reason.** The pass condition asks that "event names and
+required fields are versioned". They are catalogued and now partly compile-checked — a rename of
+a correlation field breaks a consumer reading `SecurityEvent`'s getters — but the event names and
+the `data` keys are still documented strings with no version attached. Inventing a versioning
+scheme to close a checkbox would be worse than recording the gap. `blueprints/0027-security-event-sink.md`.
 
 ---
 

@@ -27,7 +27,8 @@ that way rather than in-process.
 | `dev02_after_spec.cr` | DEV-02 after the fix — `require "kemal_identity/testing"`, nothing reaching into `spec/` |
 | `before-dev02-fix/` | The three attempts that produced DEV-02's original M2. They no longer run: the fix deleted the paths they used. See that directory's README |
 | `ops02_spec.cr` | OPS-02 — subscribing to events, and the absence of a typed sink |
-| `ops02_failure_spec.cr` | OPS-02 — a sink that raises, in both `Log` dispatch modes |
+| `ops02_failure_spec.cr` | OPS-02 — a sink that raises, in both `Log` dispatch modes. **Pre-fix**: measured the two failure modes of a raw `Log::Backend` |
+| `ops02_after_spec.cr` | OPS-02 after the fix — a typed `SecurityEventSink`, a dead SIEM that neither fails the login nor goes silent |
 | `http01_app.cr` | HTTP-01 — an API-only Kemal app. Now uses the shipped `ErrorHandler`, since the shard emits the challenge itself; the consumer-written version it replaced is in the git history of this file |
 | `shared_limiter.cr` | OPS-01 — a `RateLimiter` over a store more than one process can see |
 | `ops01_spec.cr` | OPS-01 — the shard's own limiter contract plus atomicity, `retry_after`, key hygiene and store failure |

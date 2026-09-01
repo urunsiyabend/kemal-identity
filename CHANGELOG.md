@@ -39,6 +39,38 @@ second half of `blueprints/0021-credential-reference.md` and land in this same r
 No new query anywhere. Every value comes from a row that was already read to authenticate the
 request.
 
+### A typed security event sink
+
+```crystal
+class SiemSink < KemalIdentity::SecurityEventSink
+  def record(event : KemalIdentity::SecurityEvent) : Nil
+    @queue.push({name: event.name, actor: event.subject, at: event.at})
+  end
+end
+
+bridge = KemalIdentity.event_sink = SiemSink.new
+```
+
+`SecurityEvent` types the fields a SIEM correlates on — `subject`, `credential`, `tenant`, `ip`,
+`reason`, plus `name`, `severity` and `at` — and leaves event-specific detail in `data`. A rename
+of a correlation field is now a compile error for a consumer rather than a silent breakage.
+
+Fed by an `EventBridge` over the events the shard already emits, so nothing was added beside
+sixty-four call sites and the `Log` output is untouched.
+
+**A failing sink is counted, never fatal and never silent.** An exception from `record` cannot
+reach the caller — measured before this: a raising `Log::Backend` under `:direct` dispatch turned
+every login into a 500, and under `:async` it killed the dispatcher fiber and the trail went quiet
+with nothing said. `bridge.failures` is the number to alarm on. `Log` remains the fallback, so a
+broken sink loses the SIEM copy and not the audit trail.
+
+⚠ **Breaking for a log pipeline keyed on field names.** Writing the bridge showed the emissions
+were inconsistent: `authz.*` events used `account:` where everything else used `subject:`, and
+`session.revoked`/`session.ended` used `session:` where `authz.denied` already used `credential:`.
+Both are normalised — `subject` and `credential` — in the `Log` output as well as in the sink.
+
+`blueprints/0027-security-event-sink.md`.
+
 ### ⚠ Refusals now carry the RFC 6750 challenge
 
 `WWW-Authenticate` was absent from every response. It is a MUST in RFC 6750 §3 for a request that
