@@ -321,6 +321,25 @@ observing and one adds a method to a contract:
 | Freshness declarable per permission | **open** — AUT-07's remaining gap. `Permission` carries `minimum_assurance` and no maximum age, so recency is asked for at each call site while strength is declared once. Needs a decision about where it would be enforced, since `RBAC#decide` deliberately does not raise |
 | Atomic revocation of a token *family* | **open** — TOK-08's remaining gap. `revoke_all` is account-scoped; two `revoke` calls are two statements. An application that needs the pair to fall together implements the repository over its own table, where it owns the transaction |
 
+## v0.11.0 — second-factor rate limiting
+
+**Released on 2026-09-02.** Not a scheduled catalogue pass: a consumer asked why a throttled TOTP
+submission renders the same message as a wrong code, and answering it against six other
+implementations found three defects and a NIST requirement this shard did not meet.
+`blueprints/0029-second-factor-rate-limiting.md` is the decision; MFA-01 and MFA-04 in
+`blueprints/0025` are re-run with the measurements.
+
+| Deliverable | State |
+|---|---|
+| A lifetime bound on guessing a factor | **done** — `Factor#consecutive_failures`/`#disabled_at` and `mfa_max_consecutive_failures:`. A window resets forever: measured at **103,680 attempts in thirty days**, ~27% against six digits. After: 100 attempts, ~0.03%, factor disabled. Ships as `nil`, which does not meet the SHALL, because defaulting it on would disable factors carrying years of accumulated typos |
+| A quota per flow | **done** — twelve wrong TOTP codes left a **valid recovery code** refused, and a replacement factor unconfirmable. The key carries the flow now, separated by what is being guessed: six digits versus a 43-character CSPRNG string |
+| An address dimension for MFA | **done** — `verify(..., ip:)` and siblings consume an account key *and* an address key, which `Passwords::Authenticator` has done since v0.1. The asymmetry was the sharpest finding: the shard already knew to do this one step earlier in the same login |
+| `ExponentialBackoffRateLimiter` | **done** — django-otp's `factor × 2^(n-1)`, which NIST names as the mitigation for the lockout a flat limit causes. Opt-in: it is kinder, not stronger, and is no substitute for the bound |
+| The limiter contract described one strategy | **done** — `it_behaves_like_a_rate_limiter_of_any_strategy`. The window suite could not be run against a backoff limiter, which is a contract telling the next adapter author to implement the wrong thing — found by writing a second real implementation rather than a fake |
+| What a refusal may tell the user | **done** — `docs/02-security-model.md`. The login step's uniform message does not carry over to a second factor whose account is already known, and `RateLimiterUnavailable` rendered as "wrong code" sends somebody to re-enrol a working authenticator |
+| A worked example for the MFA family | **open** — both scenarios stay M3 for this reason. Throttling a second factor properly is now five lines of configuration whose reasoning is three documents long, which is the shape that wants an example |
+| The shipped limiters are still per process | **open** — a replicated deployment multiplies every window by the number of processes (2.2× with six workers, OPS-01). The lifetime bound is immune because it lives on the row; the window is not. A shared store behind `RateLimiter` remains the answer |
+
 ## Storage adapters beyond `crystal-db`
 
 Postgres and SQLite ship, both written against `crystal-db` directly. Adapters for the ORMs

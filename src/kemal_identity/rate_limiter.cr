@@ -174,6 +174,141 @@ module KemalIdentity
     end
   end
 
+  # An escalating delay between attempts, in memory.
+  #
+  # Where `FixedWindowRateLimiter` allows N attempts and then nothing, this allows attempts
+  # further and further apart: after the *n*-th consecutive failure the next attempt must wait
+  # `factor × 2^(n-1)`. With the default factor of one second that is 1, 2, 4, 8, 16 … seconds,
+  # capped at `max_delay`.
+  #
+  # This is django-otp's curve, and its `ThrottlingMixin` is the reference — there the pair
+  # (`throttling_failure_count`, `throttling_failure_timestamp`) lives on the device row and
+  # the delay is `throttle_factor × 2^(n-1)`. Keycloak's brute-force detector is the same shape
+  # under different names: a wait incremented per failure, bounded by a maximum wait.
+  #
+  # ### Why the shape is worth having
+  #
+  # A flat window is the same for an honest user and an attacker. Somebody who fat-fingers a
+  # code twice waits a second and never notices; a machine guessing six digits is at hours per
+  # attempt within a dozen tries, while a fixed window of twelve per five minutes hands out
+  # 103,680 attempts a month indefinitely — measured, in `blueprints/0025` (MFA-04).
+  #
+  # NIST SP 800-63B lists exactly this as a mitigation for the lockout its rate-limiting
+  # requirement would otherwise cause: *"Requiring the claimant to wait after a failed attempt
+  # for a period of time that increases as the subscriber account approaches its maximum
+  # allowance for consecutive failed attempts (e.g., 30 seconds up to an hour)"*.
+  #
+  # ### What it does not do
+  #
+  # **It is not the lifetime bound.** The delay grows without ever refusing outright, so this
+  # alone does not satisfy the SHALL that a verifier disable an authenticator after 100
+  # consecutive failures. `MFA::Service#max_consecutive_failures` is that, and the two are
+  # meant to be used together: this one makes guessing slow, that one makes it stop.
+  #
+  # **It is per process**, like its sibling, for the same reason and with the same answer — a
+  # shared store behind this contract.
+  #
+  # ### `reset` is what makes it "consecutive"
+  #
+  # A success calls `reset` and the curve starts over. Nothing decays with time: an account
+  # that failed eight times last year is still at eight until something succeeds. That is the
+  # deliberate reading of "consecutive", and the reason `MFA::Service` clears a factor's
+  # counter on success rather than on a timer.
+  class ExponentialBackoffRateLimiter < RateLimiter
+    # Bounds memory, exactly as `FixedWindowRateLimiter::DEFAULT_MAX_KEYS` does.
+    DEFAULT_MAX_KEYS = 100_000
+
+    # One second, so the first repeat is barely felt and the tenth is over eight minutes.
+    DEFAULT_FACTOR = 1.second
+
+    # An hour, which is the upper end of the example NIST gives.
+    DEFAULT_MAX_DELAY = 1.hour
+
+    record Attempts, count : Int32, last_at : Time
+
+    getter factor : Time::Span
+    getter max_delay : Time::Span
+
+    def initialize(
+      @factor : Time::Span = DEFAULT_FACTOR,
+      @max_delay : Time::Span = DEFAULT_MAX_DELAY,
+      @clock : Clock = SystemClock.new,
+      @max_keys : Int32 = DEFAULT_MAX_KEYS,
+    )
+      raise ConfigurationError.new("factor must be positive") unless @factor > Time::Span::ZERO
+
+      unless @max_delay >= @factor
+        raise ConfigurationError.new("max_delay must not be shorter than factor")
+      end
+
+      raise ConfigurationError.new("max_keys must be positive") unless @max_keys > 0
+
+      @mutex = Mutex.new
+      @attempts = {} of String => Attempts
+    end
+
+    def consume(key : String) : Verdict
+      @mutex.synchronize do
+        now = @clock.now
+        current = @attempts[key]?
+
+        if current.nil?
+          purge_stale(now) if @attempts.size >= @max_keys
+          @attempts[key] = Attempts.new(count: 1, last_at: now)
+          next Verdict.allow
+        end
+
+        required = delay_for(current.count)
+        waited = now - current.last_at
+
+        if waited < required
+          # The attempt is **not** counted. Counting a refused attempt would let a client that
+          # retries in a tight loop push its own next window out exponentially — a caller
+          # hurting only itself, but it also means the number handed back a moment ago becomes
+          # a lie. `retry_after` stays honest and shrinks as time passes.
+          next Verdict.deny(retry_after: required - waited)
+        end
+
+        @attempts[key] = Attempts.new(count: current.count + 1, last_at: now)
+        Verdict.allow
+      end
+    end
+
+    def reset(key : String) : Nil
+      @mutex.synchronize { @attempts.delete(key) }
+    end
+
+    # How long the caller must wait before its next attempt, given `count` consecutive ones.
+    def delay_for(count : Int32) : Time::Span
+      return Time::Span.zero if count < 1
+
+      # Shifting rather than exponentiating, and bailing out early: `2 ** 62` overflows, and a
+      # count that high is a caller that has been failing for centuries.
+      return @max_delay if count > 40
+
+      delay = @factor * (1_i64 << (count - 1))
+      delay > @max_delay ? @max_delay : delay
+    end
+
+    # How many keys are being tracked.
+    def size : Int32
+      @mutex.synchronize { @attempts.size }
+    end
+
+    # Drops keys whose delay has long since elapsed, so the cap is not reached by abandoned
+    # ones. Clearing everything would forgive whoever is mid-attack, which is the opposite of
+    # what this is for.
+    private def purge_stale(now : Time) : Nil
+      @attempts.reject! { |_, attempts| now - attempts.last_at > @max_delay * 2 }
+
+      # Still full: every tracked key is recent, so this is a flood of distinct keys rather
+      # than an accumulation of abandoned ones. Keep the oldest attempts — they are the ones
+      # closest to being forgiven anyway — and drop the newest, which fails *closed* for the
+      # keys that are dropped only in the sense that they start again at one.
+      @attempts.clear if @attempts.size >= @max_keys
+    end
+  end
+
   # A fixed-window counter, in memory.
   #
   # Usable, and honest about its limits:

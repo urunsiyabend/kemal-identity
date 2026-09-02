@@ -28,6 +28,7 @@ that way rather than in-process.
 | `aut07_spec.cr` | AUT-07 — assurance per permission, strength against freshness, and a token with a recent timestamp |
 | `aut07_app.cr` | AUT-07 — the server the challenge table was measured against. Needs `AUT07_DB`, `AUT07_CREDS`, `AUT07_PORT` and `KEMAL_IDENTITY_ROOT` |
 | `http02_app.cr` | HTTP-02 — pages, an SPA and API clients in one process, wired with `credentials:` and `api_prefixes:`. Needs `HTTP02_DB`, `HTTP02_CREDS`, `HTTP02_PORT` and `KEMAL_IDENTITY_ROOT` |
+| `mfa_throttle_spec.cr` | MFA-01/MFA-04 re-run against the *limiter*: one bucket for three flows, the missing address dimension, and the month of guessing a flat window allows. Prints both measurements — before, 103,680 attempts and ~27%; after, 100 and ~0.03% |
 | `mfa_family_spec.cr` | MFA-01 and MFA-04 — three factors and a lost device, factor removal scoped to its owner, recovery's own assurance level, and the recovery-code alphabet |
 | `tok08_spec.cr` | TOK-08 — rotation with an overlap: two auditable halves, a bounded window through `expire`, and family revocation that is one call per member |
 | `tok09_spec.cr` | TOK-09 — a lifetime policy: refused before storage, testable on its own, and what happens to existing tokens when it is tightened |

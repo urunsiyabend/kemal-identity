@@ -1,6 +1,15 @@
 require "../spec_helper"
 
 describe KemalIdentity::FixedWindowRateLimiter do
+  it_behaves_like_a_rate_limiter_of_any_strategy do
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
+    {
+      KemalIdentity::FixedWindowRateLimiter.new(limit: 5, window: 1.minute, clock: clock)
+        .as(KemalIdentity::RateLimiter),
+      clock,
+    }
+  end
+
   it_behaves_like_a_rate_limiter(limit: 5, window: 1.minute) do
     clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
     {
@@ -114,5 +123,102 @@ describe KemalIdentity::NullRateLimiter do
 
   it "accepts a reset without complaint" do
     KemalIdentity::NullRateLimiter.new.reset("key")
+  end
+end
+
+# The second real strategy, and the reason the contract above was split: this one cannot
+# satisfy the fixed-window suite, because it is not a window. django-otp's `ThrottlingMixin` is
+# the reference — `throttle_factor × 2^(n-1)` — and NIST SP 800-63B names an increasing wait as
+# the mitigation for the lockout a flat limit would otherwise cause. MFA-04 in
+# `blueprints/0025` measured what a flat limit costs: 103,680 attempts in thirty days.
+private def backoff(factor : Time::Span = 1.second, max_delay : Time::Span = 1.hour)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
+  {KemalIdentity::ExponentialBackoffRateLimiter.new(
+    factor: factor, max_delay: max_delay, clock: clock
+  ), clock}
+end
+
+describe KemalIdentity::ExponentialBackoffRateLimiter do
+  it_behaves_like_a_rate_limiter_of_any_strategy do
+    clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
+    {
+      KemalIdentity::ExponentialBackoffRateLimiter.new(clock: clock)
+        .as(KemalIdentity::RateLimiter),
+      clock,
+    }
+  end
+
+  it "allows the first attempt and then doubles the wait" do
+    limiter, clock = backoff
+
+    limiter.consume("key").allowed?.should be_true
+
+    # 1s, 2s, 4s, 8s: each attempt allowed only once its own delay has elapsed.
+    [1, 2, 4, 8].each do |seconds|
+      limiter.consume("key").allowed?.should be_false
+
+      clock.advance(seconds.seconds - 1.millisecond)
+      limiter.consume("key").allowed?.should be_false
+
+      clock.advance(1.millisecond)
+      limiter.consume("key").allowed?.should be_true
+    end
+  end
+
+  it "does not count a refused attempt, so retrying cannot push the wait out" do
+    limiter, clock = backoff
+
+    limiter.consume("key")
+
+    first = limiter.consume("key").retry_after.or_fail
+    20.times { limiter.consume("key") }
+    still = limiter.consume("key").retry_after.or_fail
+
+    # Same delay, and shrinking only with the clock. A limiter that counted refusals would
+    # make a client in a retry loop wait exponentially longer for having asked.
+    still.should eq(first)
+
+    clock.advance(500.milliseconds)
+    limiter.consume("key").retry_after.or_fail.should be_close(first - 500.milliseconds, 1.millisecond)
+  end
+
+  it "caps the delay" do
+    limiter, _clock = backoff(factor: 1.second, max_delay: 10.seconds)
+
+    limiter.delay_for(1).should eq(1.second)
+    limiter.delay_for(4).should eq(8.seconds)
+    limiter.delay_for(5).should eq(10.seconds)
+    limiter.delay_for(60).should eq(10.seconds)
+    limiter.delay_for(0).should eq(Time::Span.zero)
+  end
+
+  it "starts the curve over on reset, and not with the passage of time" do
+    limiter, clock = backoff
+
+    limiter.consume("key")
+    clock.advance(1.second)
+    limiter.consume("key")
+    clock.advance(2.seconds)
+    limiter.consume("key").allowed?.should be_true
+
+    # Three consecutive attempts, so the next wait is 4s — a year later it is still 4s from
+    # the last attempt, because "consecutive" means since the last success and nothing here
+    # decays.
+    clock.advance(365.days)
+    limiter.consume("key").allowed?.should be_true
+
+    limiter.reset("key")
+    limiter.consume("key").allowed?.should be_true
+    limiter.consume("key").retry_after.or_fail.should eq(1.second)
+  end
+
+  it "refuses a contradictory configuration at construction" do
+    expect_raises(KemalIdentity::ConfigurationError, /factor must be positive/) do
+      KemalIdentity::ExponentialBackoffRateLimiter.new(factor: Time::Span.zero)
+    end
+
+    expect_raises(KemalIdentity::ConfigurationError, /max_delay/) do
+      KemalIdentity::ExponentialBackoffRateLimiter.new(factor: 1.minute, max_delay: 1.second)
+    end
   end
 end

@@ -44,6 +44,25 @@ module KemalIdentity::MFA
 
     getter drift : Int32
 
+    # How many consecutive wrong codes disable a factor, or `nil` for no bound.
+    #
+    # `nil` is the shipped default and does not meet NIST SP 800-63B, which says the verifier
+    # **SHALL** limit consecutive failed attempts against one authenticator "to no more than
+    # 100 by disabling that authenticator". A rate limiter cannot stand in for it: a window
+    # resets and grants the same budget again forever. Measured with a five-minute window of
+    # twelve — the configuration a real consumer had — that is **103,680 attempts in thirty
+    # days**, which against six digits with `drift: 1` is about a 27% chance of being guessed.
+    # `blueprints/0025` (MFA-04) has the measurement and `blueprints/0029` the decision.
+    #
+    # It defaults to `nil` rather than to 100 because switching it on can disable a factor,
+    # and a deployment that has been running without it may have factors sitting on hundreds
+    # of accumulated failures from ordinary typos over years — turning the bound on would
+    # lock those people out at once. Set it deliberately, after deciding what your support
+    # path for a disabled factor is. New deployments should set it.
+    getter max_consecutive_failures : Int32?
+
+    @recovery_rate_limiter : RateLimiter
+
     def initialize(
       @factors : Repository,
       @secret_box : SecretBox,
@@ -58,7 +77,10 @@ module KemalIdentity::MFA
       @algorithm : TOTP::Algorithm = TOTP::Algorithm::SHA1,
       @recovery_code_count : Int32 = DEFAULT_RECOVERY_CODES,
       @quota_prefix : String = DEFAULT_QUOTA_PREFIX,
+      recovery_rate_limiter : RateLimiter? = nil,
+      @max_consecutive_failures : Int32? = nil,
     )
+      @recovery_rate_limiter = recovery_rate_limiter || @rate_limiter
       raise ConfigurationError.new("issuer must not be empty") if @issuer.blank?
       raise ConfigurationError.new("issuer must not contain a colon") if @issuer.includes?(':')
       raise ConfigurationError.new("drift must not be negative") if @drift < 0
@@ -135,13 +157,19 @@ module KemalIdentity::MFA
     # factor id from a client should pass it, for the reason `#remove` gives. Confirming
     # somebody else's pending enrolment also needs a code from their secret, so this is the
     # cheaper of the two guards rather than the load-bearing one.
-    def confirm(factor_id : String, code : String, account_id : String? = nil) : Confirmed?
+    def confirm(
+      factor_id : String,
+      code : String,
+      account_id : String? = nil,
+      ip : String? = nil,
+    ) : Confirmed?
       factor = @factors.find_factor(factor_id)
       return if factor.nil?
       return if account_id && factor.account_id != account_id
       return if factor.confirmed?
 
-      verdict = @rate_limiter.consume(quota_key(factor.account_id))
+      keys = quota_keys("confirm", factor.account_id, ip)
+      verdict = consume(@rate_limiter, keys)
 
       if verdict.unavailable?
         Log.error &.emit("rate_limiter.unavailable", endpoint: "mfa_confirm", subject: factor.account_id)
@@ -159,7 +187,7 @@ module KemalIdentity::MFA
 
       return unless @factors.confirm_factor(factor.id, counter, @clock.now)
 
-      @rate_limiter.reset(quota_key(factor.account_id))
+      reset(@rate_limiter, keys)
 
       confirmed = @factors.find_factor(factor.id) || factor
 
@@ -184,8 +212,9 @@ module KemalIdentity::MFA
     #
     # Every confirmed factor is tried, because a person with two devices should be able to use
     # either, and only the factor that actually matched has its counter spent.
-    def verify(account_id : String, code : String) : VerificationResult
-      verdict = @rate_limiter.consume(quota_key(account_id))
+    def verify(account_id : String, code : String, ip : String? = nil) : VerificationResult
+      keys = quota_keys("code", account_id, ip)
+      verdict = consume(@rate_limiter, keys)
 
       # A second factor whose attempt counter cannot be read is a second factor that can be
       # brute-forced, and six digits do not take long unmetered.
@@ -199,10 +228,12 @@ module KemalIdentity::MFA
         return Failed.new(FailureReason::RateLimited, verdict.retry_after)
       end
 
-      confirmed = @factors.factors_for_account(account_id).select(&.confirmed?)
-      return failure(account_id, FailureReason::InvalidCredential) if confirmed.empty?
+      # `usable?` rather than `confirmed?`: a factor disabled for consecutive failures must
+      # stop authenticating, exactly like one whose enrolment never finished.
+      usable = @factors.factors_for_account(account_id).select(&.usable?)
+      return failure(account_id, FailureReason::InvalidCredential) if usable.empty?
 
-      confirmed.each do |factor|
+      usable.each do |factor|
         counter = match(factor, code)
         next if counter.nil?
 
@@ -213,14 +244,44 @@ module KemalIdentity::MFA
           return failure(account_id, FailureReason::ReplayedToken, factor.id)
         end
 
-        @rate_limiter.reset(quota_key(account_id))
+        reset(@rate_limiter, keys)
+
+        # "Consecutive" means since the last success, so a success is what clears it.
+        @factors.clear_failures(factor.id)
 
         Log.info &.emit("mfa.verified", subject: account_id, factor: factor.id)
 
         return Verified.new(factor: factor)
       end
 
+      # Nothing matched. Every usable factor saw a failed attempt, which is what NIST bounds:
+      # "consecutive failed authentication attempts using a specific authenticator".
+      record_failures(usable)
+
       failure(account_id, FailureReason::InvalidCredential)
+    end
+
+    # Counts a wrong code against every factor it was offered to, disabling any that reaches
+    # `max_consecutive_failures`.
+    #
+    # Disabling is logged at **warning**: a factor that stops working is something somebody has
+    # to be told about, and if it was an attacker's guessing that did it, the account holder is
+    # about to call support.
+    private def record_failures(factors : Array(Factor)) : Nil
+      limit = @max_consecutive_failures
+
+      factors.each do |factor|
+        count = @factors.record_failure(factor.id, @clock.now)
+        next if count.nil? || limit.nil?
+        next if count < limit
+
+        next unless @factors.disable_factor(factor.id, @clock.now)
+
+        Log.warn &.emit(
+          "mfa.factor_disabled",
+          subject: factor.account_id, factor: factor.id, failures: count
+        )
+      end
     end
 
     # Spends a recovery code.
@@ -243,12 +304,22 @@ module KemalIdentity::MFA
     # half-way through a login. Pass it, or the person is signed out by their own recovery.
     # Requires a `Sessions::Service`; with none configured the codes still work and nothing is
     # revoked, which is a weaker arrangement and one an application has to choose deliberately.
+    # ### Its quota is its own
+    #
+    # A recovery code is spent by somebody whose second factor has just failed them, so
+    # sharing a bucket with `#verify` meant the credential for that exact situation was
+    # unavailable in that exact situation — measured in `blueprints/0025` (MFA-04). The bucket
+    # is separate, and `recovery_rate_limiter:` can give it a different limit as well as a
+    # different key. Safe because a recovery code is a 43-character CSPRNG string rather than
+    # six digits: throttling it protects the endpoint, not the secret.
     def redeem_recovery_code(
       account_id : String,
       code : String,
       except_session_id : String? = nil,
+      ip : String? = nil,
     ) : VerificationResult
-      verdict = @rate_limiter.consume(quota_key(account_id))
+      keys = quota_keys("recovery", account_id, ip)
+      verdict = consume(@recovery_rate_limiter, keys)
 
       # Recovery codes are the last way in, so an unmetered guessing window here is the worst
       # of the three.
@@ -274,7 +345,7 @@ module KemalIdentity::MFA
         return failure(account_id, FailureReason::InvalidCredential)
       end
 
-      @rate_limiter.reset(quota_key(account_id))
+      reset(@recovery_rate_limiter, keys)
 
       remaining = @factors.unused_recovery_codes(account_id)
 
@@ -285,12 +356,15 @@ module KemalIdentity::MFA
       Verified.new(by_recovery_code: true)
     end
 
-    # Whether this account has at least one factor that has been proved.
+    # Whether this account has at least one factor that has been proved and still works.
     #
     # Unconfirmed factors deliberately do not count: a half-finished enrolment must not make
-    # the login screen start demanding a code nobody can produce.
+    # the login screen start demanding a code nobody can produce. Nor do **disabled** ones,
+    # for the same reason from the other end — a factor switched off for consecutive failures
+    # cannot produce an accepted code either, and an account left with only those must fall
+    # back to recovery rather than being asked for a code that can never work.
     def enrolled?(account_id : String) : Bool
-      @factors.factors_for_account(account_id).any?(&.confirmed?)
+      @factors.factors_for_account(account_id).any?(&.usable?)
     end
 
     # Every factor on the account, for a management screen. Unconfirmed ones included, since
@@ -367,14 +441,15 @@ module KemalIdentity::MFA
       remove(factor_id, allow_last: allow_last)
     end
 
-    # Whether this factor is the only confirmed one its account has.
+    # Whether this factor is the only *usable* one its account has.
     #
-    # An unconfirmed factor does not count: a half-finished enrolment cannot be the thing
-    # standing between an account and having no second factor.
+    # Neither an unconfirmed nor a disabled factor counts: a half-finished enrolment and a
+    # factor switched off for consecutive failures are both things that cannot produce an
+    # accepted code, so neither is standing between the account and having no second factor.
     private def last_confirmed?(factor : Factor) : Bool
-      return false unless factor.confirmed?
+      return false unless factor.usable?
 
-      @factors.factors_for_account(factor.account_id).count(&.confirmed?) <= 1
+      @factors.factors_for_account(factor.account_id).count(&.usable?) <= 1
     end
 
     # Turns MFA off for an account: every factor, and every recovery code with them.
@@ -528,10 +603,79 @@ module KemalIdentity::MFA
       Failed.new(reason)
     end
 
-    # Keyed by account rather than by login: by the time a second factor is being asked for,
-    # the account is known, and an attacker guessing codes is guessing against one account.
-    private def quota_key(account_id : String) : String
-      "#{@quota_prefix}:#{account_id}"
+    # The quota keys one attempt consumes: one per flow, and one per source address when the
+    # caller passed one.
+    #
+    # ### Why the flow is part of the key
+    #
+    # It used to be `mfa:<account_id>` for everything, and the consequence was measured: twelve
+    # wrong TOTP codes left the person unable to spend a **recovery code** — the credential
+    # that exists for the moment their phone is gone — and unable to confirm a replacement
+    # device. One flow's failures closed the whole MFA surface.
+    #
+    # The buckets are separated by what is actually being guessed, which is the honest
+    # boundary:
+    #
+    # * `code` — six digits, so the throttle is the security control. `drift: 1` accepts three
+    #   counters, making a guess worth about 3 in a million;
+    # * `confirm` — six digits belonging to a factor the caller has just enrolled and whose
+    #   secret they therefore hold. Nothing is being guessed, so this bucket exists to stop
+    #   somebody hammering the endpoint, not to protect a secret;
+    # * `recovery` — a 43-character CSPRNG string. Guessing it is not a threat at any rate, so
+    #   this throttle is also about the endpoint rather than the secret.
+    #
+    # Separating them raises the total number of attempts an account can absorb, and that is
+    # the right trade precisely because the three credentials are not equally guessable.
+    # django-otp reaches the same arrangement from the other direction: its counter lives on
+    # the device row, so a static (recovery-code) device has its own bucket by construction.
+    #
+    # ### Why the address is a second key rather than part of the first
+    #
+    # `Passwords::Authenticator#quota_keys` has done this since v0.1: consume an account key
+    # *and* an `ip:` key, so a limit is enforced on both dimensions at once. The account key
+    # bounds how fast one account can be attacked from anywhere; the address key bounds how
+    # fast one address can attack anything. Only the pair prevents both a distributed attack on
+    # one account and one address sweeping many accounts.
+    #
+    # Auth0 buckets on the pair `(IP, user identifier)` instead, which has the property this
+    # arrangement lacks — an attacker cannot lock the real owner out, because the block lands
+    # on the attacker's address. The cost is that a botnet gets a fresh budget per address.
+    # This shard keeps the account dimension, so the lockout is possible; what it adds here is
+    # the second dimension, so a single address cannot spend every account's budget in turn.
+    #
+    # `ip` is nilable and defaulted throughout: an application driving these services outside
+    # a request — a CLI, a job — has no address to give, and inventing one would be worse than
+    # the missing dimension.
+    private def quota_keys(flow : String, account_id : String, ip : String?) : Array(String)
+      keys = ["#{@quota_prefix}:#{flow}:#{account_id}"]
+      keys << "#{@quota_prefix}:#{flow}:ip:#{ip}" if ip && !ip.empty?
+      keys
+    end
+
+    # Consumes every key for this attempt and returns the sharpest verdict.
+    #
+    # Every key is consumed rather than stopping at the first denial, so a request that is
+    # over one limit still counts against the other — otherwise an attacker who has already
+    # exhausted the account bucket could hammer from any number of addresses for free.
+    private def consume(limiter : RateLimiter, keys : Array(String)) : Verdict
+      verdicts = keys.map { |key| limiter.consume(key) }
+
+      # Unavailable outranks denied: the caller has to fail closed rather than be told to come
+      # back, because nothing counted this attempt at all.
+      if unavailable = verdicts.find(&.unavailable?)
+        return unavailable
+      end
+
+      denied = verdicts.reject(&.allowed?)
+      return Verdict.allow if denied.empty?
+
+      # The longest wait among the limits that refused: telling a client to come back sooner
+      # than the strictest bucket allows is telling it to be refused again.
+      Verdict.deny(retry_after: denied.compact_map(&.retry_after).max? || Time::Span.zero)
+    end
+
+    private def reset(limiter : RateLimiter, keys : Array(String)) : Nil
+      keys.each { |key| limiter.reset(key) }
     end
   end
 end

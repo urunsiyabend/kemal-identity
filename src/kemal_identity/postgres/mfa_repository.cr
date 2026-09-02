@@ -10,7 +10,8 @@ module KemalIdentity::Postgres
 
     FACTOR_COLUMNS = <<-SQL
       id, account_id, kind, label, sealed_secret, digits, period_seconds, algorithm,
-      created_at, confirmed_at, last_used_counter
+      created_at, confirmed_at, last_used_counter, consecutive_failures, last_failure_at,
+      disabled_at
       SQL
 
     def initialize(@db : DB::Database)
@@ -19,11 +20,12 @@ module KemalIdentity::Postgres
     def create_factor(factor : MFA::Factor) : Nil
       @db.exec(<<-SQL,
         INSERT INTO auth_mfa_factors (#{FACTOR_COLUMNS})
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         SQL
         factor.id, factor.account_id, factor.kind.value, factor.label, factor.sealed_secret,
         factor.digits.to_i16, factor.period.total_seconds.to_i32, factor.algorithm.value.to_i16,
-        factor.created_at, factor.confirmed_at, factor.last_used_counter)
+        factor.created_at, factor.confirmed_at, factor.last_used_counter,
+        factor.consecutive_failures, factor.last_failure_at, factor.disabled_at)
     rescue error : PQ::PQError
       raise error unless error.field_message(:code) == UNIQUE_VIOLATION
 
@@ -67,6 +69,35 @@ module KemalIdentity::Postgres
            AND (last_used_counter IS NULL OR last_used_counter < $1)
         SQL
 
+      result.rows_affected == 1
+    end
+
+    # One statement, and the count comes back from the same one: two parallel wrong guesses
+    # must count as two, and a read followed by a write loses one of them — in the direction
+    # that favours whoever is guessing.
+    def record_failure(id : String, at : Time) : Int32?
+      @db.query_one?(<<-SQL, at, id, as: Int32)
+        UPDATE auth_mfa_factors
+           SET consecutive_failures = consecutive_failures + 1, last_failure_at = $1
+         WHERE id = $2
+        RETURNING consecutive_failures
+        SQL
+    end
+
+    def clear_failures(id : String) : Bool
+      result = @db.exec(
+        "UPDATE auth_mfa_factors SET consecutive_failures = 0 WHERE id = $1", id
+      )
+      result.rows_affected == 1
+    end
+
+    # `AND disabled_at IS NULL` reports whether anything changed and keeps the first timestamp,
+    # which is the one an audit trail wants.
+    def disable_factor(id : String, at : Time) : Bool
+      result = @db.exec(
+        "UPDATE auth_mfa_factors SET disabled_at = $1 WHERE id = $2 AND disabled_at IS NULL",
+        at, id
+      )
       result.rows_affected == 1
     end
 
@@ -134,6 +165,9 @@ module KemalIdentity::Postgres
         created_at: row.read(Time),
         confirmed_at: row.read(Time?),
         last_used_counter: row.read(Int64?),
+        consecutive_failures: row.read(Int64).to_i32,
+        last_failure_at: row.read(Time?),
+        disabled_at: row.read(Time?),
       )
     end
   end

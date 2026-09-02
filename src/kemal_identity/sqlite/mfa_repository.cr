@@ -8,7 +8,8 @@ module KemalIdentity::SQLite
   class MfaRepository < MFA::Repository
     FACTOR_COLUMNS = <<-SQL
       id, account_id, kind, label, sealed_secret, digits, period_seconds, algorithm,
-      created_at, confirmed_at, last_used_counter
+      created_at, confirmed_at, last_used_counter, consecutive_failures, last_failure_at,
+      disabled_at
       SQL
 
     def initialize(@db : DB::Database)
@@ -20,12 +21,13 @@ module KemalIdentity::SQLite
       # `rescue` around the insert never sees it. See blueprints/0014-sqlite-adapter.md.
       result = @db.exec(<<-SQL,
         INSERT INTO auth_mfa_factors (#{FACTOR_COLUMNS})
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT DO NOTHING
         SQL
         factor.id, factor.account_id, factor.kind.value, factor.label, factor.sealed_secret,
         factor.digits, factor.period.total_seconds.to_i32, factor.algorithm.value,
-        factor.created_at, factor.confirmed_at, factor.last_used_counter)
+        factor.created_at, factor.confirmed_at, factor.last_used_counter,
+        factor.consecutive_failures, factor.last_failure_at, factor.disabled_at)
 
       raise InfrastructureError.new("mfa factor already exists") if result.rows_affected.zero?
     end
@@ -67,6 +69,36 @@ module KemalIdentity::SQLite
            AND (last_used_counter IS NULL OR last_used_counter < ?)
         SQL
 
+      result.rows_affected == 1
+    end
+
+    # One statement, and the count comes back from the same one: two parallel wrong guesses
+    # must count as two, and a read followed by a write loses one of them — in the direction
+    # that favours whoever is guessing.
+    #
+    # SQLite has had `RETURNING` since 3.35 (2021). `query_one?` rather than `query_one`
+    # answers `nil` for a factor that is not there instead of raising.
+    def record_failure(id : String, at : Time) : Int32?
+      @db.query_one?(<<-SQL, at, id, as: Int64).try(&.to_i32)
+        UPDATE auth_mfa_factors
+           SET consecutive_failures = consecutive_failures + 1, last_failure_at = ?
+         WHERE id = ?
+        RETURNING consecutive_failures
+        SQL
+    end
+
+    def clear_failures(id : String) : Bool
+      result = @db.exec("UPDATE auth_mfa_factors SET consecutive_failures = 0 WHERE id = ?", id)
+      result.rows_affected == 1
+    end
+
+    # `AND disabled_at IS NULL` reports whether anything changed and keeps the first timestamp,
+    # which is the one an audit trail wants.
+    def disable_factor(id : String, at : Time) : Bool
+      result = @db.exec(
+        "UPDATE auth_mfa_factors SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL",
+        at, id
+      )
       result.rows_affected == 1
     end
 
@@ -139,6 +171,9 @@ module KemalIdentity::SQLite
         created_at: row.read(Time),
         confirmed_at: row.read(Time?),
         last_used_counter: row.read(Int64?),
+        consecutive_failures: row.read(Int64).to_i32,
+        last_failure_at: row.read(Time?),
+        disabled_at: row.read(Time?),
       )
     end
   end

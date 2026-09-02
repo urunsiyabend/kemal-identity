@@ -51,6 +51,37 @@ module KemalIdentity::MFA
     # working in.
     getter last_used_counter : Int64?
 
+    # How many times in a row a code has been offered for this factor and been wrong.
+    #
+    # Per factor rather than per account, because that is the thing NIST SP 800-63B bounds:
+    # *"the verifier SHALL limit consecutive failed authentication attempts using a specific
+    # authenticator on a single subscriber account to no more than 100 by disabling that
+    # authenticator."* A rate limiter cannot answer this — it is keyed by account, it is
+    # usually a window that resets, and in this shard's default it lives in one process's
+    # memory. So the count belongs on the row, which is also where django-otp keeps it
+    # (`throttling_failure_count`).
+    #
+    # Reset to zero by a successful verification, not by the passage of time. "Consecutive"
+    # means since the last success.
+    getter consecutive_failures : Int32
+
+    # When the most recent wrong code was offered for this factor, or `nil` if never.
+    #
+    # The other half of django-otp's pair: the count alone cannot tell an operator whether a
+    # factor is failing right now or failed months ago, and a deployment that wants its own
+    # per-factor delay curve computes it from this.
+    getter last_failure_at : Time?
+
+    # When this factor was disabled for having failed too many times in a row, or `nil`.
+    #
+    # A disabled factor never authenticates and never counts towards "this account has MFA",
+    # exactly like an unconfirmed one — but it is a different state and stays visible in a
+    # management listing, because the person needs to be told which device stopped working and
+    # why. Re-enabling is deliberately not an operation on this contract: what a deployment
+    # does about it — support ticket, re-enrolment, an unlock e-mail — is policy, and the two
+    # available answers are already there (`Service#remove` then a fresh enrolment).
+    getter disabled_at : Time?
+
     def initialize(
       @id : String,
       @account_id : String,
@@ -63,15 +94,29 @@ module KemalIdentity::MFA
       @algorithm : TOTP::Algorithm = TOTP::Algorithm::SHA1,
       @confirmed_at : Time? = nil,
       @last_used_counter : Int64? = nil,
+      @consecutive_failures : Int32 = 0,
+      @last_failure_at : Time? = nil,
+      @disabled_at : Time? = nil,
     )
       raise ArgumentError.new("id must not be empty") if @id.empty?
       raise ArgumentError.new("account_id must not be empty") if @account_id.empty?
       raise ArgumentError.new("sealed_secret must not be empty") if @sealed_secret.empty?
     end
 
-    # Whether a code from this factor may authenticate anything.
+    # Whether enrolment finished.
     def confirmed? : Bool
       !@confirmed_at.nil?
+    end
+
+    # Whether this factor was disabled for consecutive failures.
+    def disabled? : Bool
+      !@disabled_at.nil?
+    end
+
+    # Whether a code from this factor may authenticate anything: enrolment finished and it has
+    # not been disabled. This is what the verification path and `Service#enrolled?` ask.
+    def usable? : Bool
+      confirmed? && !disabled?
     end
 
     # Redacted. `sealed_secret` is ciphertext rather than a secret, and printing it in a crash

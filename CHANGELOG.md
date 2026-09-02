@@ -1,5 +1,155 @@
 # Changelog
 
+## v0.11.0 — 2026-09-02
+
+Second-factor rate limiting, which a consumer's question turned into three defects and a NIST
+requirement this shard did not meet. `blueprints/0029-second-factor-rate-limiting.md` has the
+reasoning and what six other implementations do; `blueprints/0025` (MFA-01 and MFA-04, re-run)
+has the measurements.
+
+A minor rather than a patch: one repository contract grows, and the quota keys change shape.
+
+### Fixed: guessing a second factor had no upper bound
+
+NIST SP 800-63B:
+
+> the verifier SHALL limit consecutive failed authentication attempts using a specific
+> authenticator on a single subscriber account to no more than 100 by disabling that
+> authenticator.
+
+A fixed window resets and grants the same budget again, forever. Measured against a real
+consumer's configuration — twelve attempts per five minutes — by counting what the limiter
+actually allowed over a simulated month:
+
+```
+before: 103,680 attempts allowed in 30 days,
+        P(success) ≈ 26.7% against a 6-digit code with drift 1
+after:  100 attempts, P(success) ≈ 0.03%, factor disabled
+```
+
+Six digits with `drift: 1` accept three counters at any instant, so a guess is worth about
+3-in-a-million — and a hundred thousand of them is not a rounding error.
+
+A rate limiter cannot hold this bound: it is keyed by account rather than by authenticator, it is
+a window that resets, and by default it lives in one process's memory. So the count went where
+django-otp keeps it, on the row:
+
+```crystal
+KemalIdentity.configure(
+  # ...
+  rate_limiter: KemalIdentity::ExponentialBackoffRateLimiter.new,   # 1, 2, 4, 8 … seconds
+  mfa_max_consecutive_failures: 100,                                # then the factor is off
+)
+```
+
+⚠ **`mfa_max_consecutive_failures` defaults to `nil`, which does not meet the SHALL.** The
+default is not 100 because a deployment upgrading into this release may hold factors carrying
+years of accumulated typos, and switching the bound on by default would disable those people's
+authenticators at once. **New deployments should set it.** Decide your support path first: a
+disabled factor stays listed so the person can be told which device stopped working, and the way
+back is a recovery code or `remove` plus a fresh enrolment.
+
+### Fixed: a spent TOTP budget closed the way back in
+
+`verify`, `confirm` and `redeem_recovery_code` all keyed `mfa:<account_id>`. Measured: twelve
+wrong TOTP codes left a **valid recovery code** refused as `RateLimited` and a replacement factor
+unconfirmable — so one flow's failures closed the whole MFA surface, and the flow that got closed
+is the one somebody reaches for *because* their second factor just failed them.
+
+The key now carries the flow, and the three are separated by what is actually being guessed:
+
+| Flow | Credential | What the throttle is for |
+|---|---|---|
+| `code` | six digits, three counters accepted | the security control |
+| `confirm` | six digits of a factor the caller just enrolled | the endpoint |
+| `recovery` | 43 characters from a CSPRNG | the endpoint |
+
+`mfa_recovery_rate_limiter:` gives recovery a different limit as well as a different key.
+Separating the buckets raises the attempts an account can absorb, and that is the right trade
+because throttling a 43-character secret protects nothing about the secret.
+
+⚠ **The quota keys changed shape**, so counters in a shared store are orphaned by the deploy.
+Harmless — they expire, and the worst case is one window of forgiven attempts.
+
+### Fixed: the MFA path could not be told where an attempt came from
+
+`Passwords::Authenticator` has consumed an account key **and** an `ip:` key per attempt since
+v0.1. The second-factor path consumed one and had no parameter to pass an address to, so a single
+address could work through accounts one at a time, each with a fresh budget.
+
+```crystal
+KemalIdentity.app.mfa!.verify(subject, code, ip: env.request.remote_address.to_s)
+```
+
+`ip` is nilable throughout, because a CLI or a job has no address and inventing one is worse than
+the missing dimension. Every key is consumed even when one has already denied — otherwise an
+attacker who exhausted the account bucket could hammer from any number of addresses for free —
+and a refusal reports the longest `retry_after` among the buckets that refused.
+
+Auth0's `(address, account)` pair was considered and not taken: it would stop an attacker locking
+the real owner out, and hand a botnet a fresh budget per address. `blueprints/0029` decision 2.
+
+### `ExponentialBackoffRateLimiter`
+
+django-otp's curve, shipped: after the *n*-th consecutive failure the next attempt waits
+`factor × 2^(n-1)`, capped at `max_delay`, one second and one hour by default. NIST names an
+increasing wait as the mitigation for the lockout a flat limit causes, and it is strictly kinder
+to honest users — two mistyped codes cost a second, a machine is at hours within a dozen tries.
+
+It is **not** the lifetime bound: the delay grows without ever refusing outright, so the two are
+meant to be used together. A refused attempt is not counted, so a client in a retry loop cannot
+push its own next window out and the `retry_after` it was handed stays true.
+
+### ⚠ Breaking for an `MFA::Repository`: three methods and three columns
+
+`record_failure`, `clear_failures` and `disable_factor`, plus `consecutive_failures`,
+`last_failure_at` and `disabled_at` on `MFA::Factor`. The shared contract carries eleven new
+examples, so the rules arrive as failing specs rather than as prose. Same call as v0.10.0's
+`ApiTokens::Repository#expire`: taken before the v1.0 freeze rather than after it.
+
+Two migrations, `20260902090000_add_auth_mfa_failure_counters.sql`, additive with defaults.
+
+`Factor#usable?` is new and is what the verification path and `enrolled?` now ask: confirmed and
+not disabled. A disabled factor stays visible to `factors()` — a management screen is where
+somebody learns which device stopped working — and stops authenticating, like an unconfirmed one.
+
+### The shared limiter contract described one strategy, and was split
+
+`it_behaves_like_a_rate_limiter` could not be run against the new limiter: every example in it is
+about a *window*. A shared contract only one strategy can satisfy tells the next adapter author
+to implement the wrong thing — the mirror image of what v0.8's contracts exist to prevent, found
+by writing a second real implementation rather than a fake.
+
+`it_behaves_like_a_rate_limiter_of_any_strategy` now holds what every limiter owes its caller
+whatever curve it uses: it eventually refuses, a refusal carries an honest `retry_after` and an
+allowance carries none, keys are independent, `reset` clears one key and is idempotent, and no
+update is lost under concurrent consumers. Both shipped limiters run it; the window suite runs
+only for the window.
+
+### What a refusal may tell the user
+
+New in `docs/02-security-model.md`, because collapsing every `FailureReason` into one message is
+the wrong side of the trade at the second-factor step:
+
+* at the **login** step, one message for everything — OWASP is explicit that revealing whether an
+  account "exists, is locked, or is disabled" is a discrepancy factor;
+* at the **second-factor** step the caller has already proved a password, so that argument does
+  not carry over. `RateLimited` should say when to come back (`Failed#retry_after` is populated
+  for exactly this), and `RateLimiterUnavailable` needs its own message because the code may have
+  been perfectly good — "not accepted" sends somebody to re-enrol a working authenticator;
+* `InvalidCredential` and `ReplayedToken` stay one message: "that code was already used" would
+  confirm to whoever submitted it that they had the **right digits**.
+
+### Documentation
+
+* `blueprints/0029-second-factor-rate-limiting.md` — the decision, and the four architectures
+  the reading found: counter on the authenticator's row (django-otp, privacyIDEA), on the
+  account's row ending in a lock (Devise, Keycloak), bucketed by `(address, account)` (Auth0),
+  and per endpoint per address (Supabase GoTrue);
+* `docs/02-security-model.md` — *Throttling a second factor* and *What a refusal may tell the
+  user*;
+* `blueprints/0025` — MFA-01 and MFA-04 re-run, with both measurements and the contract finding.
+
 ## v0.10.0 — 2026-09-02
 
 The catalogue's third pass: eight scenarios — AUT-06, AUT-07, HTTP-02, OPS-03, TOK-08, TOK-09,

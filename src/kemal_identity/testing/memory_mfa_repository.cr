@@ -59,6 +59,38 @@ module KemalIdentity::Testing
       end
     end
 
+    def record_failure(id : String, at : Time) : Int32?
+      @mutex.synchronize do
+        existing = @factors[id]?
+        next if existing.nil?
+
+        count = existing.consecutive_failures + 1
+        @factors[id] = replace(existing, consecutive_failures: count, last_failure_at: at)
+        count
+      end
+    end
+
+    def clear_failures(id : String) : Bool
+      @mutex.synchronize do
+        existing = @factors[id]?
+        next false if existing.nil?
+
+        @factors[id] = replace(existing, consecutive_failures: 0)
+        true
+      end
+    end
+
+    def disable_factor(id : String, at : Time) : Bool
+      @mutex.synchronize do
+        existing = @factors[id]?
+        next false if existing.nil?
+        next false if existing.disabled?
+
+        @factors[id] = replace(existing, disabled_at: at)
+        true
+      end
+    end
+
     def delete_factor(id : String) : Bool
       @mutex.synchronize { !@factors.delete(id).nil? }
     end
@@ -111,10 +143,20 @@ module KemalIdentity::Testing
       end
     end
 
+    # Every field is carried across, and `consecutive_failures` is a nilable `Int32?` rather
+    # than an `Int32` defaulting to zero: the default has to mean *unchanged*, and zero is a
+    # value `#clear_failures` needs to write. `0 || x` is `0` in Crystal, where only `nil` and
+    # `false` are falsey, so the `||` below does the right thing for both.
+    #
+    # A field silently dropped here is a double that grants more than production does —
+    # TOK-08 found exactly that with `scopes` on the API token double.
     private def replace(
       factor : KemalIdentity::MFA::Factor,
       confirmed_at : Time? = nil,
       last_used_counter : Int64? = nil,
+      consecutive_failures : Int32? = nil,
+      last_failure_at : Time? = nil,
+      disabled_at : Time? = nil,
     ) : KemalIdentity::MFA::Factor
       KemalIdentity::MFA::Factor.new(
         id: factor.id,
@@ -128,6 +170,9 @@ module KemalIdentity::Testing
         algorithm: factor.algorithm,
         confirmed_at: confirmed_at || factor.confirmed_at,
         last_used_counter: last_used_counter || factor.last_used_counter,
+        consecutive_failures: consecutive_failures || factor.consecutive_failures,
+        last_failure_at: last_failure_at || factor.last_failure_at,
+        disabled_at: disabled_at || factor.disabled_at,
       )
     end
   end

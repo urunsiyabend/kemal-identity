@@ -72,6 +72,8 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | TOK-09 | High | M3 | **M2 → M3** | Fixed after measurement: `api_token_lifetime:`, refused before storage, with the retro-fit spelled out |
 | MFA-01 | High | M3 | **M2 → M3** | Fixed after measurement: `remove(factor_id, account_id)` and a last-factor guard; removing a factor by id alone would remove anybody's |
 | MFA-04 | High | M3 | **M2 → M3** | Fixed after measurement: `AssuranceLevel::Recovery`, and the recovery-code alphabet, of which 46.8% were unredeemable |
+| MFA-01 (re-run) | High | M3 | **M3** | Third look, at the limiter rather than the factors: one bucket for three flows, no address dimension |
+| MFA-04 (re-run) | High | M3 | **M3** | 103,680 guesses a month with nothing ever disabled — NIST's SHALL unmet. Fixed: per-flow keys, `ip:`, and a bound on the factor |
 
 ---
 
@@ -2392,3 +2394,130 @@ defect was a coin flip per code.
 `Recovery` assurance level is new enough that no consumer's route has been written against it
 yet. `tools/validation/mfa_family_spec.cr` holds eighteen examples across both scenarios,
 `spec/security/mfa_spec.cr` sixty, and `spec/integration/kemal_spec.cr` four over HTTP.
+
+---
+
+## MFA-01 and MFA-04, re-run against the rate limiter
+
+**Result: both stay M3**, with three defects fixed. This is the third look at these two
+scenarios and the first at their *throttling*, which the earlier passes measured only as
+"a limit exists".
+
+It started as a consumer's question rather than a scheduled scenario: a real application running
+`FixedWindowRateLimiter.new(limit: 12, window: 5.minutes)` rendered a rate-limited TOTP
+submission as "Code was not accepted", and the question was whether that is what other systems
+do. Answering it properly meant reading six of them, and the reading found three things wrong
+here.
+
+**What the others do**, from primary sources — `blueprints/0029` has the quotations:
+
+| | Bucket | State | Curve | Recovery separate |
+|---|---|---|---|---|
+| django-otp | device | columns on the device row | `factor × 2^(n−1)` | **yes**, a static device is a different row |
+| privacyIDEA | token | token row | failcount + max | **yes** |
+| Devise `:lockable` | account | columns on the user row | threshold → lock | no |
+| Keycloak | account | per-user, persisted | increasing wait + max + lock | no — OTP feeds the password counter |
+| Auth0 | (address, account) | provider store | threshold → block | not documented |
+| Supabase GoTrue | (endpoint, address) | central bucket | token bucket, `429` | **yes**, by endpoint |
+| **this shard, before** | **account** | **one process's memory** | **flat window, forever** | **no** |
+
+### Defect 1 — one bucket for three flows
+
+Measured: twelve wrong TOTP codes left a **valid recovery code** refused as `RateLimited`, and a
+replacement factor unconfirmable. `verify`, `confirm` and `redeem_recovery_code` all keyed
+`mfa:<account_id>`, so one flow's failures closed the whole MFA surface — and the flow that got
+closed is the one somebody reaches for *because* their second factor just failed them.
+
+Fixed: the key carries the flow, and the three are separated by what is actually being guessed —
+six digits where the throttle is the defence, versus a 43-character CSPRNG string where it
+protects the endpoint. `recovery_rate_limiter:` gives recovery a different limit as well.
+django-otp arrives at the same arrangement from the other side: its counter is on the device row,
+so a recovery-code device has its own bucket by construction.
+
+### Defect 2 — no address dimension, in the one place the shard already had one
+
+`Passwords::Authenticator#quota_keys` has consumed two keys per attempt since v0.1:
+
+```crystal
+keys = ["login:#{Digest::SHA256.hexdigest("#{tenant_id}\u0000#{normalized}")}"]
+keys << "ip:#{ip}" if ip && !ip.empty?
+```
+
+The MFA path consumed one and had **no parameter to pass an address to** — asserted as a
+compile-time fact rather than an opinion, by reading `verify`'s arity in a macro. So one address
+could work through accounts one at a time, each with a fresh budget.
+
+Fixed: `verify`, `confirm` and `redeem_recovery_code` take `ip:`, consume both keys, and report
+the longest `retry_after` among those that refused. Every key is consumed even when one has
+already denied, or an attacker who exhausted the account bucket could hammer from any number of
+addresses for free.
+
+Auth0's `(address, account)` pair was considered and **not** taken: it would stop an attacker
+locking the real owner out, and hand a botnet a fresh budget per address. Keeping the account
+dimension keeps the bound that matters for a targeted attack. Recorded as a choice.
+
+### Defect 3 — no lifetime bound, against a NIST SHALL
+
+> the verifier SHALL limit consecutive failed authentication attempts using a specific
+> authenticator on a single subscriber account to no more than 100 by disabling that
+> authenticator.
+
+A fixed window resets and grants the same budget again, forever. Measured by counting what the
+limiter actually allowed over a simulated month at the consumer's own settings:
+
+```
+measured: 103680 attempts allowed in 30 days,
+          P(success) ≈ 26.7% against a 6-digit code with drift 1
+```
+
+Six digits and `drift: 1` accept three counters at any instant, so a guess is worth about
+3-in-a-million; a hundred thousand of them is not a rounding error. And no factor was ever
+disabled, because nothing counted anything per factor.
+
+A limiter cannot hold this bound, for three reasons all true of the shipped one: it is keyed by
+account rather than by authenticator, it is a window that resets, and by default it lives in one
+process's memory. So the count went where django-otp keeps it — on the row:
+`Factor#consecutive_failures`, `#last_failure_at`, `#disabled_at`, cleared by a success, with
+`MFA::Service.new(max_consecutive_failures:)` enforcing it and `Factor#usable?` replacing
+`confirmed?` on the verification path.
+
+Re-measured with the shipped `ExponentialBackoffRateLimiter` and the bound at 100, a guesser
+that waits exactly as long as it is told:
+
+```
+after the fix: 100 attempts in 30 days, P(success) ≈ 0.03%, factor disabled: true
+```
+
+And the way back in survives: a correct code from the disabled factor is refused, while a
+recovery code still works — separate bucket, separate credential, which is defect 1's fix paying
+for itself.
+
+**`max_consecutive_failures` ships as `nil`, which does not meet the SHALL**, and that is
+deliberate rather than an oversight: a deployment upgrading into this release may hold factors
+carrying years of accumulated typos, and defaulting the bound on would disable those
+authenticators at once. Opt-in, documented, and named in the release notes.
+
+### A fourth finding, in the shared contract
+
+`it_behaves_like_a_rate_limiter` could not be run against the new limiter, because every example
+in it is about a *window*: "allows `limit` attempts", "allows again once the window has passed",
+and a concurrency example expecting exactly `limit` of `limit × 2` parallel attempts to pass. A
+shared contract that only one strategy can satisfy tells the next adapter author to implement
+the wrong thing — the mirror image of DEV-02's complaint, found by writing a second real
+implementation rather than a fake.
+
+Split: `it_behaves_like_a_rate_limiter_of_any_strategy` holds what every limiter owes its caller
+whatever curve it uses — it eventually refuses, a refusal carries an honest `retry_after` and an
+allowance carries none, keys are independent, `reset` clears one key and is idempotent, and no
+update is lost under concurrency. Both shipped limiters run it.
+
+### Why still M3
+
+The gap is the same one both scenarios had before: no worked example. Nothing in `examples/`
+covers the MFA family, and "throttle a second factor properly" is now a five-line configuration
+whose *reasoning* is three documents long — which is exactly the shape that wants an example
+rather than more prose.
+
+`tools/validation/mfa_throttle_spec.cr` holds eleven examples and prints both measurements;
+`spec/unit/rate_limiter_spec.cr` has the curve's own, and the MFA repository contract eleven more
+for the three new methods.

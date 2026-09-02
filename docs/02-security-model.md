@@ -339,6 +339,82 @@ bypass of the new factor. `MFA::Service#remove(factor_id, account_id)` refuses t
 factor unless the caller passes `allow_last: true`, so "remove this device" cannot silently mean
 "turn MFA off". Measured in `blueprints/0025`, MFA-01 and MFA-04.
 
+### Throttling a second factor
+
+Three things throttle a code submission, and they answer different questions.
+`blueprints/0029-second-factor-rate-limiting.md` has the reasoning and what six other
+implementations do; this is what to configure.
+
+**The quota key carries the flow**, so `code`, `confirm` and `recovery` have separate buckets.
+They are separated by what is being guessed: six digits with three counters accepted is worth
+about 3-in-a-million per attempt and the throttle is the defence, while a recovery code is 43
+characters from a CSPRNG and its throttle protects the endpoint rather than the secret. Sharing
+one bucket meant twelve wrong TOTP codes left a **valid recovery code** refused — the credential
+for "my phone is gone", unavailable exactly then.
+
+**An attempt may carry its source address.** `verify`, `confirm` and `redeem_recovery_code` take
+`ip:` and consume an account key *and* an address key, as `Passwords::Authenticator` has always
+done. The account key bounds how fast one account can be attacked from anywhere; the address key
+bounds how fast one address can work through many accounts. Pass it.
+
+**A limiter cannot enforce a lifetime bound, and NIST requires one:**
+
+> the verifier SHALL limit consecutive failed authentication attempts using a specific
+> authenticator on a single subscriber account to no more than 100 by disabling that
+> authenticator.
+
+A window resets and grants the same budget again forever — measured at **103,680 attempts in
+thirty days** with a five-minute window of twelve, which is about a 27% chance of guessing a
+six-digit code. The bound therefore lives on the factor (`consecutive_failures`, cleared by a
+success) and not in the limiter:
+
+```crystal
+KemalIdentity.configure(
+  # ...
+  rate_limiter: KemalIdentity::ExponentialBackoffRateLimiter.new,   # 1, 2, 4, 8 … seconds
+  mfa_max_consecutive_failures: 100,                                # then the factor is off
+)
+```
+
+`mfa_max_consecutive_failures` is **`nil` by default and that does not meet the SHALL.** The
+default is not 100 because a deployment upgrading into this behaviour may hold factors carrying
+years of accumulated typos, and switching the bound on would disable those people's
+authenticators at once. Set it, having decided what your support path for a disabled factor is —
+a disabled factor stays listed so the person can be told which device stopped working, and the
+way back is a recovery code (its own bucket, still working) or `remove` plus a fresh enrolment.
+
+`ExponentialBackoffRateLimiter` is django-otp's curve and is the kinder half: two mistyped codes
+cost a second, a machine is at hours within a dozen attempts. It is not a substitute for the
+bound — the delay grows without ever refusing outright.
+
+**Both shipped limiters are per process**, so a replicated deployment multiplies every window by
+the number of processes (measured at 2.2× with six workers, `blueprints/0025` OPS-01). The
+lifetime bound is immune to this because it lives on the row; the window is not. A shared store
+behind `RateLimiter` is the answer, and
+`it_behaves_like_a_rate_limiter_of_any_strategy` is the suite to run against it.
+
+### What a refusal may tell the user
+
+At the **login** step, one message for every reason: OWASP's guidance is explicit that revealing
+whether an account "exists, is locked, or is disabled" is a discrepancy factor an attacker
+exploits, so `Login failed; invalid user ID or password` covers the lot.
+
+At the **second-factor** step that argument does not carry over — the caller has proved a
+password and holds a session, so the server and the client both already know whose account this
+is. Three cases, and only two of them share a message:
+
+| Reason | What to render |
+|---|---|
+| `InvalidCredential`, `ReplayedToken` | One message. "That code was already used" would confirm to whoever submitted it that they had the **right digits**, which is what somebody who shoulder-surfed a code needs to know |
+| `RateLimited` | Say when to come back. `Failed#retry_after` is populated for exactly this, and the fixed window does not slide, so the number is honest and shrinks on its own |
+| `RateLimiterUnavailable` | Its own message. The code may be perfectly good; the server refused because it could not count the attempt. "Not accepted" sends somebody to re-enrol a working authenticator or to support |
+
+Neither NIST nor OWASP requires silence about throttling, and NIST's own suggested mitigation —
+a wait that increases as the account approaches its limit — is meaningless unless the wait is
+communicated. Mainstream implementations follow the same split: Devise's `:lockable` has a
+dedicated locked message (suppressed only under `paranoid`), Keycloak keeps the login form
+generic, and Supabase answers a throttled MFA verify with `429`.
+
 ## Authorization rules an application writes itself
 
 `Authz::Authorizer` is a seam: the shipped `Authz::RBAC` answers *does this account hold the

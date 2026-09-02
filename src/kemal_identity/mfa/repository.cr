@@ -44,6 +44,29 @@ module KemalIdentity::MFA
     # the replay defence, and it must be one statement — see the note above.
     abstract def consume_counter(id : String, counter : Int64, at : Time) : Bool
 
+    # Records that a code offered for this factor was wrong, returning the new consecutive
+    # failure count — or `nil` if the factor does not exist.
+    #
+    # One statement (`UPDATE ... SET consecutive_failures = consecutive_failures + 1 ...
+    # RETURNING consecutive_failures`, or the dialect's equivalent), because the count is what
+    # a lifetime bound is enforced against and two parallel wrong guesses must count as two.
+    # A read followed by a write loses one of them, which is the direction that favours the
+    # guesser.
+    abstract def record_failure(id : String, at : Time) : Int32?
+
+    # Zeroes the consecutive failure count. What a successful verification calls.
+    #
+    # Returns `false` if the factor does not exist. Idempotent: a factor already at zero is
+    # not an error, since every success calls this and most successes follow a success.
+    abstract def clear_failures(id : String) : Bool
+
+    # Marks a factor disabled, returning `false` if it does not exist or was already disabled.
+    #
+    # `at` is stamped rather than defaulted so the caller's clock is the one on the row. A
+    # disabled factor must stop authenticating — see `Factor#usable?` — while remaining
+    # visible to a management listing, so this is a flag and not a delete.
+    abstract def disable_factor(id : String, at : Time) : Bool
+
     # Removes one factor. Returns `false` if it was not there.
     abstract def delete_factor(id : String) : Bool
 

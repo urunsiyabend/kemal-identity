@@ -182,6 +182,103 @@ def it_behaves_like_an_mfa_repository(&build : -> KemalIdentity::MFA::Repository
     end
   end
 
+  # The lifetime bound NIST SP 800-63B requires: "no more than 100 [consecutive failed
+  # attempts] by disabling that authenticator". Per factor, because "a specific authenticator"
+  # is what the requirement names, and where django-otp keeps the same pair.
+  describe "#record_failure, #clear_failures and #disable_factor" do
+    it "starts at zero, with no failure recorded" do
+      repo = build.call
+      repo.create_factor(factor.call("f1", "a1"))
+
+      stored = repo.find_factor("f1").or_fail
+      stored.consecutive_failures.should eq(0)
+      stored.last_failure_at.should be_nil
+      stored.disabled?.should be_false
+      stored.usable?.should be_false # unconfirmed
+    end
+
+    it "counts up and returns the new count from the same call" do
+      repo = build.call
+      repo.create_factor(factor.call("f1", "a1"))
+
+      repo.record_failure("f1", now).should eq(1)
+      repo.record_failure("f1", now + 1.second).should eq(2)
+      repo.record_failure("f1", now + 2.seconds).should eq(3)
+
+      stored = repo.find_factor("f1").or_fail
+      stored.consecutive_failures.should eq(3)
+      stored.last_failure_at.should eq(now + 2.seconds)
+    end
+
+    it "returns nil for a factor that is not there" do
+      build.call.record_failure("nope", now).should be_nil
+    end
+
+    it "counts only the factor it was given" do
+      repo = build.call
+      repo.create_factor(factor.call("f1", "a1"))
+      repo.create_factor(factor.call("f2", "a1"))
+
+      repo.record_failure("f1", now)
+
+      repo.find_factor("f2").or_fail.consecutive_failures.should eq(0)
+    end
+
+    it "clears the count, and leaves the timestamp as the record of what happened" do
+      repo = build.call
+      repo.create_factor(factor.call("f1", "a1"))
+      repo.record_failure("f1", now)
+
+      repo.clear_failures("f1").should be_true
+
+      stored = repo.find_factor("f1").or_fail
+      stored.consecutive_failures.should eq(0)
+      stored.last_failure_at.should eq(now)
+    end
+
+    it "is idempotent to clear, and false for a factor that is not there" do
+      repo = build.call
+      repo.create_factor(factor.call("f1", "a1"))
+
+      repo.clear_failures("f1").should be_true
+      repo.clear_failures("f1").should be_true
+      repo.clear_failures("nope").should be_false
+    end
+
+    it "disables a factor, which stops it being usable without deleting it" do
+      repo = build.call
+      repo.create_factor(factor.call("f1", "a1"))
+      repo.confirm_factor("f1", 100_i64, now)
+
+      repo.find_factor("f1").or_fail.usable?.should be_true
+
+      repo.disable_factor("f1", now + 1.hour).should be_true
+
+      stored = repo.find_factor("f1").or_fail
+      stored.disabled_at.should eq(now + 1.hour)
+      stored.disabled?.should be_true
+      stored.confirmed?.should be_true # still enrolled: the person has to be told which device
+      stored.usable?.should be_false
+
+      # And still listed, because a management screen is where somebody learns about it.
+      repo.factors_for_account("a1").map(&.id).should eq(["f1"])
+    end
+
+    it "does not re-stamp a factor that was already disabled" do
+      repo = build.call
+      repo.create_factor(factor.call("f1", "a1"))
+
+      repo.disable_factor("f1", now).should be_true
+      repo.disable_factor("f1", now + 1.hour).should be_false
+
+      repo.find_factor("f1").or_fail.disabled_at.should eq(now)
+    end
+
+    it "returns false when disabling a factor that is not there" do
+      build.call.disable_factor("nope", now).should be_false
+    end
+  end
+
   describe "#delete_factor and #delete_factors_for_account" do
     it "removes one factor" do
       repo = build.call

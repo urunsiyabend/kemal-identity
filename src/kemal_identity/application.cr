@@ -128,6 +128,8 @@ module KemalIdentity
       mfa_secret_key : Secret? = nil,
       mfa_issuer : String? = nil,
       mfa_drift : Int32 = 1,
+      mfa_recovery_rate_limiter : RateLimiter? = nil,
+      mfa_max_consecutive_failures : Int32? = nil,
       notifier : Accounts::Notifier? = nil,
       password_policy : Passwords::Policy? = nil,
       @remember_cookie : Sessions::CookieConfig = Sessions::CookieConfig.new(
@@ -186,7 +188,10 @@ module KemalIdentity
         )
       end
 
-      @mfa = build_mfa(mfa_secret_key, mfa_issuer, mfa_drift)
+      @mfa = build_mfa(
+        mfa_secret_key, mfa_issuer, mfa_drift,
+        mfa_recovery_rate_limiter, mfa_max_consecutive_failures
+      )
 
       # Built only when everything they need is present. Half a reset flow is worse than none:
       # it would accept a request and quietly drop it.
@@ -231,7 +236,13 @@ module KemalIdentity
 
     # Same rule as the reset flow: built only when everything it needs is present, because half
     # an MFA setup would accept an enrolment and then have nowhere to put it.
-    private def build_mfa(key : Secret?, issuer : String?, drift : Int32) : MFA::Service?
+    private def build_mfa(
+      key : Secret?,
+      issuer : String?,
+      drift : Int32,
+      recovery_rate_limiter : RateLimiter?,
+      max_consecutive_failures : Int32?,
+    ) : MFA::Service?
       factors = @mfa_factors
 
       if factors.nil? || key.nil? || issuer.nil?
@@ -256,6 +267,8 @@ module KemalIdentity
         # `docs/02-security-model.md` requires.
         sessions: @sessions,
         drift: drift,
+        recovery_rate_limiter: recovery_rate_limiter,
+        max_consecutive_failures: max_consecutive_failures,
       )
     end
 
@@ -331,6 +344,14 @@ module KemalIdentity
     mfa_secret_key : Secret? = nil,
     mfa_issuer : String? = nil,
     mfa_drift : Int32 = 1,
+    # A limit of its own for recovery codes, so a spent TOTP budget does not close the way
+    # back in. Defaults to the same limiter with a different key, which is already the fix;
+    # pass one to give recovery a different limit as well.
+    mfa_recovery_rate_limiter : RateLimiter? = nil,
+    # How many consecutive wrong codes disable a factor. `nil` ships, and does not meet
+    # NIST SP 800-63B's SHALL — see `MFA::Service#max_consecutive_failures` for why the
+    # default is not 100 and what to weigh before setting it.
+    mfa_max_consecutive_failures : Int32? = nil,
     notifier : Accounts::Notifier? = nil,
     password_policy : Passwords::Policy? = nil,
     remember_cookie : Sessions::CookieConfig = Sessions::CookieConfig.new(
@@ -360,6 +381,8 @@ module KemalIdentity
       mfa_secret_key: mfa_secret_key,
       mfa_issuer: mfa_issuer,
       mfa_drift: mfa_drift,
+      mfa_recovery_rate_limiter: mfa_recovery_rate_limiter,
+      mfa_max_consecutive_failures: mfa_max_consecutive_failures,
       api_token_prefix: api_token_prefix,
       api_token_lifetime: api_token_lifetime,
       notifier: notifier,
