@@ -14,7 +14,7 @@ require "sqlite3"
 # The interesting part is what the shard supplies and what the application has to write, so
 # everything below that is hand-written is marked.
 
-DBF = ENV["HTTP02_DB"]
+DBF      = ENV["HTTP02_DB"]
 File.delete?(DBF)
 DATABASE = DB.open("sqlite3://#{DBF}")
 
@@ -45,9 +45,9 @@ KemalIdentity.configure(
   ),
 )
 
-ADA = ACCOUNTS.find_by_id("ada").not_nil!
+ADA     = ACCOUNTS.find_by_id("ada").not_nil!
 SESSION = KemalIdentity.app.sessions.start(ADA, KemalIdentity::AssuranceLevel::Password)
-TOKEN = KemalIdentity.app.api!.issue(ADA, "ada-cli")
+TOKEN   = KemalIdentity.app.api!.issue(ADA, "ada-cli")
 
 File.write(ENV["HTTP02_CREDS"], "#{SESSION.token.reveal}\n#{TOKEN.token.reveal}\n")
 

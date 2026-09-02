@@ -8,7 +8,7 @@ require "sqlite3"
 # or recently enough. The in-process spec measures the decision; this measures the challenge,
 # which is the third pass condition and the one only a real response can answer.
 
-DBF = ENV["AUT07_DB"]
+DBF      = ENV["AUT07_DB"]
 File.delete?(DBF)
 DATABASE = DB.open("sqlite3://#{DBF}")
 
@@ -71,7 +71,7 @@ ADA = ACCOUNTS.find_by_id("ada").not_nil!
 # every permission the account holds — the token is the interesting one, because its scopes say
 # yes and its assurance says no.
 PASSWORD_SESSION = KemalIdentity.app.sessions.start(ADA, KemalIdentity::AssuranceLevel::Password)
-MFA_SESSION = KemalIdentity.app.sessions.start(
+MFA_SESSION      = KemalIdentity.app.sessions.start(
   ADA, KemalIdentity::AssuranceLevel::MFA, mfa_verified_at: Time.utc
 )
 TOKEN = KemalIdentity.app.api!.issue(
