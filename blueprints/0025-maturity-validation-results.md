@@ -1280,6 +1280,35 @@ does not substitute for it.
 
 ## What this exercise changed
 
+### The third pass, in one place
+
+Written after the fact, because by then there were three passes and a reader arriving at this
+document needed the shape of them rather than twenty-nine sections in the order they were run.
+
+The first pass found gaps that needed **signatures moved**, which is why v0.8 exists. The second
+found gaps that needed something **added**. The third found four **defects in code that had
+already been validated**, and that is the result worth generalising:
+
+| Found by | Defect | Would have been noticed by |
+|---|---|---|
+| MFA-04 | 46.8% of recovery codes could never be redeemed — base64url contains `-`, and redemption stripped `-` before the length check | Nobody, until a customer's worst day. The suite redeemed one code, and one code passes half the time |
+| MFA-01 | `remove(factor_id)` removed anybody's second factor, weakening an account rather than ending its access | A code review that remembered TOK-07 had just fixed the identical shape in `revoke` |
+| TOK-08 | The in-memory token double lost a token's `scopes` on `touch`, so an attenuated token was unrestricted from its second request | A consumer's test, granting more than production would — the one direction a test double must never be wrong in |
+| AUT-06 | Confining an account to a tenant had no effect on its live sessions, unbounded, and the security model's revoke-all list did not say so | Reading `Sessions::Service#start` and `#resolve` together, which nobody had reason to do |
+
+Three of the four are the same lesson in different places: **a rule that was applied once has to
+be applied everywhere it holds.** Scoping a management call to its owner, carrying every column
+through a rebuild, and listing every event that must revoke a session are not new decisions —
+they are decisions this project had already made and then made in one place.
+
+The fourth is different and is the one to keep: the recovery-code defect existed because two
+individually correct choices — generate from base64url, strip separators from typed input —
+were made in different files by different reasoning, and nothing tested the pair. A spec that
+redeems *one* code cannot see it. The regressions now assert every code in a list of
+twenty-five.
+
+## What this exercise changed, the first time
+
 Five things, which is the argument for running it before a release rather than after.
 
 The `Permission#minimum_assurance` interaction in TOK-01 was found by attempting the scenario,

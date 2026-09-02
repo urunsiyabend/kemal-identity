@@ -288,6 +288,39 @@ because two items change behaviour an application may be observing, though no si
 | An explicit `bearer:` override taking the whole chain | **open** — TOK-05 M3. Four families work and a shape has one owner either way, so nothing needs it yet; the condition it would close is "the chain is consumer-supplied", of which half is composed for you |
 | `AuthenticatorChain#authenticators` should not hand out its mutable array | **open** — it is what made an accidental registration route work before the parameter existed, and it contradicts "configuration is boot-time and immutable". Returning a copy changes a published getter's behaviour, so it waits for a minor release |
 
+## v0.10.0 — the catalogue's third pass
+
+**Unreleased.** Eight scenarios, all measured from a consumer project before anything was
+changed: AUT-06, AUT-07, HTTP-02, OPS-03, TOK-08, TOK-09, MFA-01 and MFA-04. That is every
+remaining high-frequency scenario except MFA-02 (WebAuthn) and OPS-08 (a rolling upgrade).
+`blueprints/0025-maturity-validation-results.md` has a section per scenario with the evidence.
+
+**A minor rather than a patch**, because three things change behaviour a consumer may be
+observing and one adds a method to a contract:
+
+| Change | Who notices |
+|---|---|
+| `ApiTokens::Repository#expire` is a new `abstract def` | A third-party repository adapter stops compiling until it implements one method. Taken deliberately before the v1.0 freeze rather than after it, and the shared contract has seven examples for it |
+| `AssuranceLevel::Recovery = 25` | An exhaustive `case` over the enum stops compiling. Appending was always the plan — the gaps of ten exist for it — and the alternative was leaving recovery indistinguishable from a hardware key |
+| Removing an account's **last** confirmed factor now voids its recovery codes | A management screen that relied on the codes surviving. `#disable` already did this, for the reason that a list surviving into a later re-enrolment is a full bypass of the new factor |
+| Recovery codes no longer contain `-` | Nobody, and about half of every previously issued list becomes redeemable for the first time |
+
+| Deliverable | State |
+|---|---|
+| A recovery code that can actually be redeemed | **done** — MFA-04, and the worst defect the catalogue has found. `RandomSource#token` is base64url, whose alphabet contains `-`, and redemption stripped `-` as a separator before checking the length: **46.8% of issued codes, measured over two thousand, could never be redeemed**. Generation now redraws rather than substituting, and redemption accepts both readings so already-issued lists work |
+| Recovery has an assurance level of its own | **done** — MFA-04 M2 → M3. `AssuranceLevel::Recovery` and `env.auth.recovery_verified!`. The documented flow raised a recovery redemption to `MFA`, so `minimum_assurance: MFA` — "changing payout details needs phishing-resistant MFA" — was satisfied by a printed list |
+| Factor removal scoped to its owner, and a guard on the last one | **done** — MFA-01 M2 → M3. `remove(factor_id, account_id)`, refusing a last factor unless the caller says `allow_last: true`. The id-only form removed anybody's factor, which is TOK-07's token defect in a second place and weakens an account rather than ending its access |
+| A bounded overlap for a token rotation | **done** — TOK-08 M2 → M3. `expire(token_id, account_id, at:)`, never lengthening, so the window closes on the authentication path rather than when a job runs. A deadline could previously only be chosen at issuance, months before the rotation |
+| Token lifetime policy | **done** — TOK-09 M2 → M3, and the third of the four things v0.8 deliberately deferred. `api_token_lifetime:`, refused before the secret is generated, with the retro-fit for existing tokens spelled out beside `expire` |
+| A declared per-route API-only mode, and credential kinds on `PathGuard` | **done** — HTTP-02 M3 → **M4**, closing two more of that same deferred list. `ErrorHandler.new(api_prefixes:)` and `PathGuard.new(credentials:)`, plus `examples/mixed_monolith/app.cr` and `PathPrefix.covers?` so an application writing its own handler gets the subtree rule rather than re-deriving it |
+| `max_age` on a step-up challenge | **done** — AUT-07 stays M3. `blueprints/0028`. Three different refusals sent one challenge, so an API client could not tell "type your password again" from "produce a second factor" |
+| A way to ask whether security events are still arriving | **done** — OPS-03. `KemalIdentity.event_sink_delivering?`. `::Log.setup` replaces every binding, so wiring a sink and *then* configuring logging left no sink, with `EventBridge#failures` at zero — the silence OPS-02 exists to prevent, through a door it did not watch |
+| The tenant a session copies is documented as a stale grant | **done** — AUT-06 stays M3. Confining an account to a tenant had no effect on the sessions it already had, for the whole session lifetime, and the security model's revoke-all list did not mention it. Documented with three examples and both levers |
+| The packaged assertions cover an MFA result | **done** — `Testing.should_fail_with` and `should_verify` for `MFA::VerificationResult`. A packaged assertion that covers three of the four result unions is one somebody stops using |
+| The in-memory token double stopped losing scopes | **done** — found writing TOK-08's contract examples. `touch` runs on the authentication path and rebuilt the row without `scopes`, so an attenuated token became **unrestricted** from its second request onward — in tests only, which is the worst place for it to be invisible. Four contract examples now demand that attenuation survive every write |
+| Freshness declarable per permission | **open** — AUT-07's remaining gap. `Permission` carries `minimum_assurance` and no maximum age, so recency is asked for at each call site while strength is declared once. Needs a decision about where it would be enforced, since `RBAC#decide` deliberately does not raise |
+| Atomic revocation of a token *family* | **open** — TOK-08's remaining gap. `revoke_all` is account-scoped; two `revoke` calls are two statements. An application that needs the pair to fall together implements the repository over its own table, where it owns the transaction |
+
 ## Storage adapters beyond `crystal-db`
 
 Postgres and SQLite ship, both written against `crystal-db` directly. Adapters for the ORMs
