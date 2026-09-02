@@ -14,6 +14,32 @@
 `spec/unit` and `spec/security` must run with no `DATABASE_URL`. Keeping the security
 regressions database-free means they run on every save, which is the point.
 
+### Run PostgreSQL locally, not only in CI
+
+The PostgreSQL specs skip themselves without `DATABASE_URL`, which makes it easy to develop
+against SQLite and the doubles and let CI find the difference. **It has found it twice**: a
+`RETURNING` statement in v0.10.0 that only CI exercised, and in v0.11.0 a reader copied from the
+SQLite adapter with its type — `INTEGER` comes back as `Int32` from PostgreSQL and `Int64` from
+SQLite, so every MFA read raised. That one reached a published release.
+
+No root, no container, and no interference with a system cluster:
+
+```bash
+initdb -D /tmp/ki-pgdata -U kemal_identity --auth=trust
+mkdir -p /tmp/ki-pg   # the socket directory has to be short: the path limit is 107 bytes
+pg_ctl -D /tmp/ki-pgdata -o "-p 55432 -k /tmp/ki-pg -c listen_addresses=127.0.0.1" \
+       -l /tmp/ki-pg/pg.log start
+createdb -h 127.0.0.1 -p 55432 -U kemal_identity kemal_identity_test
+
+export DATABASE_URL="postgres://kemal_identity@127.0.0.1:55432/kemal_identity_test"
+shards build migrate && bin/migrate up
+crystal spec
+```
+
+`crystal spec` then reports **no pending examples**. That is the check: a run that says
+"PostgreSQL repositories (set DATABASE_URL to run them)" is a run in which a whole adapter was
+not tested.
+
 ## Contract specs
 
 Every abstract class gets one shared spec, and every implementation runs it — including the

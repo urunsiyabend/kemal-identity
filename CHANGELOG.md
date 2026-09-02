@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.11.1 — 2026-09-02
+
+**Fixes a break in the PostgreSQL adapter shipped by v0.11.0.** Reading any MFA factor raised
+`DB::ColumnTypeMismatchError`, so every second-factor verification, enrolment and management
+listing failed against PostgreSQL. SQLite and the in-memory double were unaffected. Upgrade if
+you use PostgreSQL and MFA.
+
+`INTEGER` comes back from PostgreSQL as `Int32` and from SQLite as `Int64`, and the new
+`consecutive_failures` reader was copied from the SQLite one with its type. That is the single
+difference between the two readers a copy-paste gets wrong silently: it compiles, and it raises
+only against a live database.
+
+CI caught it — the PostgreSQL job is the one that runs the full suite — but only after the
+release workflow had already published, because that workflow verifies the tagged tree with the
+database-free subset. The v0.11.0 notes stand; nothing else in them changed.
+
 ## v0.11.0 — 2026-09-02
 
 Second-factor rate limiting, which a consumer's question turned into three defects and a NIST

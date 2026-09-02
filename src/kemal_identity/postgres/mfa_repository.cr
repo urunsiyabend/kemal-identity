@@ -165,7 +165,11 @@ module KemalIdentity::Postgres
         created_at: row.read(Time),
         confirmed_at: row.read(Time?),
         last_used_counter: row.read(Int64?),
-        consecutive_failures: row.read(Int64).to_i32,
+        # `INTEGER` comes back as `Int32` here and as `Int64` from SQLite, which is the one
+        # difference between these two readers that a copy-paste gets wrong silently — it
+        # raises `DB::ColumnTypeMismatchError` only against a live database. It did, in CI,
+        # after v0.11.0 was already published.
+        consecutive_failures: row.read(Int32),
         last_failure_at: row.read(Time?),
         disabled_at: row.read(Time?),
       )

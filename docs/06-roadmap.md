@@ -323,7 +323,12 @@ observing and one adds a method to a contract:
 
 ## v0.11.0 — second-factor rate limiting
 
-**Released on 2026-09-02.** Not a scheduled catalogue pass: a consumer asked why a throttled TOTP
+**Released on 2026-09-02**, with `v0.11.1` the same day: the new `consecutive_failures` reader in
+the PostgreSQL adapter was copied from the SQLite one with its type, and `INTEGER` comes back as
+`Int32` from one and `Int64` from the other. Every MFA read raised against PostgreSQL. CI caught
+it; the release workflow had already published, because it verifies the tagged tree with the
+database-free subset. A local PostgreSQL cluster is now part of how this repository is developed
+rather than something only CI has — see `docs/05-testing.md`. Not a scheduled catalogue pass: a consumer asked why a throttled TOTP
 submission renders the same message as a wrong code, and answering it against six other
 implementations found three defects and a NIST requirement this shard did not meet.
 `blueprints/0029-second-factor-rate-limiting.md` is the decision; MFA-01 and MFA-04 in
