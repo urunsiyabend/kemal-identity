@@ -28,6 +28,8 @@ that way rather than in-process.
 | `aut07_spec.cr` | AUT-07 — assurance per permission, strength against freshness, and a token with a recent timestamp |
 | `aut07_app.cr` | AUT-07 — the server the challenge table was measured against. Needs `AUT07_DB`, `AUT07_CREDS`, `AUT07_PORT` and `KEMAL_IDENTITY_ROOT` |
 | `http02_app.cr` | HTTP-02 — pages, an SPA and API clients in one process, wired with `credentials:` and `api_prefixes:`. Needs `HTTP02_DB`, `HTTP02_CREDS`, `HTTP02_PORT` and `KEMAL_IDENTITY_ROOT` |
+| `tok08_spec.cr` | TOK-08 — rotation with an overlap: two auditable halves, a bounded window through `expire`, and family revocation that is one call per member |
+| `tok09_spec.cr` | TOK-09 — a lifetime policy: refused before storage, testable on its own, and what happens to existing tokens when it is tightened |
 | `ops03_metrics.cr` | OPS-03 — the instrumentation itself: decorators over `Accounts::Repository`, `Sessions::Repository`, `Authz::Repository`, `Passwords::Hasher`, `RateLimiter` and the `JWKS` fetcher, plus a metrics registry that **refuses** an unbounded label value |
 | `ops03_spec.cr` | OPS-03 — runs a login, a session read, a bearer authentication, ten decisions and a rate-limit denial through those decorators, then checks the layers, the labels, the trail and whether the sink is bound at all |
 | `http02_app_before.cr` | HTTP-02 as it had to be written before those two parameters existed: a hand-written credential-class guard and a hand-written path-scoped `ErrorHandler`. Kept so the two can be probed against each other |

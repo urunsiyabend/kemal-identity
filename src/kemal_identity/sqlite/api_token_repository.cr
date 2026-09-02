@@ -58,6 +58,17 @@ module KemalIdentity::SQLite
       result.rows_affected == 1
     end
 
+    def expire(id : String, at : Time) : Bool
+      # The "never lengthens" rule is in the statement rather than in a read followed by a
+      # write, so two callers cannot interleave into a later deadline than either asked for.
+      result = @db.exec(<<-SQL, at, id, at)
+        UPDATE auth_api_tokens SET expires_at = ?
+         WHERE id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)
+        SQL
+
+      result.rows_affected == 1
+    end
+
     def revoke_all_for_account(account_id : String, at : Time) : Int32
       result = @db.exec(
         "UPDATE auth_api_tokens SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL",

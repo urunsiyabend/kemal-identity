@@ -240,6 +240,57 @@ legitimate user will present the already-consumed token, and both sessions die.
 A session restored this way sits at `AssuranceLevel::Remembered`, below `Password`. Any
 sensitive operation calls `require_fresh!` and forces a real re-authentication.
 
+### Rotating a personal access token
+
+A deploy key has to be replaced without breaking a fleet in the seconds — or hours — between
+distributing the new secret and retiring the old one. Issue the replacement, then give the old
+credential a deadline:
+
+```crystal
+replacement = KemalIdentity.app.api!.issue(account, "deploy-key (rotated)", scopes: old.scopes)
+KemalIdentity.app.api!.expire(old.id, account.id, at: Time.utc + 15.minutes)
+```
+
+Both work until the deadline; after it the old one fails as `Expired` **on the authentication
+path**, so the window closes whether or not a sweeper has run. `expire` never lengthens a
+token's life — a rotation that could extend the credential it replaces is not a rotation, and a
+management screen that could push a deadline out is a way to keep a compromised credential
+alive.
+
+Each half is separately auditable: two ids in the trail, and `last_used_at` per token, which is
+what answers "has the fleet picked up the new key" without asking the fleet.
+
+There is deliberately no token *family*. `revoke_all` is account-scoped and atomic; retiring an
+arbitrary set of tokens as one operation is not expressible through the shipped adapters, and an
+application that needs it implements `ApiTokens::Repository` over its own table, where it owns
+the transaction. Measured in `blueprints/0025`, TOK-08.
+
+### Token lifetime policy
+
+An enterprise requires every personal token to expire within thirty days and forbids unbounded
+ones. The deployment next door permits a non-expiring deploy key. Both are correct, so the rule
+is injectable and **absent by default**:
+
+```crystal
+KemalIdentity.configure(
+  # ...
+  api_token_lifetime: KemalIdentity::ApiTokens::LifetimePolicy.new(
+    maximum: 30.days, default: 7.days
+  ),
+)
+```
+
+Issuance then raises `ApiTokens::PolicyError` — before the secret is generated and before
+anything is written — for an unbounded token and for one that would outlive the maximum. The
+error carries the violation and the limit, and both are safe to show: somebody creating a
+credential is not somebody proving they hold one, so there is no account to enumerate.
+
+**A policy is a rule about creation, and tightening it does not shorten the tokens that already
+exist.** It is not consulted on the authentication path either — a policy that could refuse
+while authenticating would turn a configuration change into an outage for every client holding
+an older token. An organisation that must apply a new limit retroactively walks its tokens and
+calls `expire` on each, which is the pairing above and cannot lengthen anything by accident.
+
 ## Step-up
 
 ```crystal

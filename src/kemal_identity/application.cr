@@ -120,6 +120,7 @@ module KemalIdentity
       @remember_tokens : Sessions::RememberRepository? = nil,
       @api_tokens : ApiTokens::Repository? = nil,
       api_token_prefix : String = ApiTokens::Service::DEFAULT_PREFIX,
+      api_token_lifetime : ApiTokens::LifetimePolicy? = nil,
       @jwt : JWT::Validator? = nil,
       bearer_authenticators : Array(RequestAuthenticator) = [] of RequestAuthenticator,
       @authorizer : Authz::Authorizer? = nil,
@@ -150,7 +151,8 @@ module KemalIdentity
 
       if api_tokens = @api_tokens
         @api = ApiTokens::Service.new(
-          tokens: api_tokens, clock: @clock, random: @random, prefix: api_token_prefix
+          tokens: api_tokens, clock: @clock, random: @random, prefix: api_token_prefix,
+          lifetime_policy: api_token_lifetime
         )
       end
 
@@ -321,6 +323,7 @@ module KemalIdentity
     remember_tokens : Sessions::RememberRepository? = nil,
     api_tokens : ApiTokens::Repository? = nil,
     api_token_prefix : String = ApiTokens::Service::DEFAULT_PREFIX,
+    api_token_lifetime : ApiTokens::LifetimePolicy? = nil,
     jwt : JWT::Validator? = nil,
     bearer_authenticators : Array(RequestAuthenticator) = [] of RequestAuthenticator,
     authorizer : Authz::Authorizer? = nil,
@@ -358,6 +361,7 @@ module KemalIdentity
       mfa_issuer: mfa_issuer,
       mfa_drift: mfa_drift,
       api_token_prefix: api_token_prefix,
+      api_token_lifetime: api_token_lifetime,
       notifier: notifier,
       password_policy: password_policy,
       remember_cookie: remember_cookie,

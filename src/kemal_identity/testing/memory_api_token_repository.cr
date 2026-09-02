@@ -67,6 +67,22 @@ module KemalIdentity::Testing
       end
     end
 
+    def expire(id : String, at : Time) : Bool
+      @mutex.synchronize do
+        existing = @tokens[id]?
+        return false if existing.nil?
+        return false if existing.revoked?
+
+        # Never lengthens: the contract's rule, and the double has to enforce it or an adapter
+        # author could pass the suite while permitting a renewal.
+        current = existing.expires_at
+        return false if current && current <= at
+
+        @tokens[id] = replace(existing, expires_at: at)
+        true
+      end
+    end
+
     def revoke_all_for_account(account_id : String, at : Time) : Int32
       @mutex.synchronize do
         revoked = 0
@@ -110,10 +126,20 @@ module KemalIdentity::Testing
       @mutex.synchronize { @tokens.size }
     end
 
+    # Every field is carried across, including `scopes`.
+    #
+    # It did not used to be, and the consequence was the worst available shape: `touch` runs on
+    # the **authentication path**, so authenticating an attenuated token rewrote its row without
+    # its scopes, and every later request with that token was *unrestricted*. Production was
+    # never affected — both SQL adapters `UPDATE` one column — so the only thing this could
+    # break was a consumer's test, in the direction of granting more than production would.
+    # Found by TOK-08 in `blueprints/0025`, which is exactly what DEV-02 means by "a fake cannot
+    # pass while violating production invariants".
     private def replace(
       record : KemalIdentity::ApiTokens::Token,
       last_used_at : Time? = nil,
       revoked_at : Time? = nil,
+      expires_at : Time? = nil,
     ) : KemalIdentity::ApiTokens::Token
       KemalIdentity::ApiTokens::Token.new(
         id: record.id,
@@ -121,9 +147,10 @@ module KemalIdentity::Testing
         name: record.name,
         token_digest: record.token_digest,
         created_at: record.created_at,
-        expires_at: record.expires_at,
+        expires_at: expires_at || record.expires_at,
         last_used_at: last_used_at || record.last_used_at,
         revoked_at: revoked_at || record.revoked_at,
+        scopes: record.scopes,
       )
     end
   end

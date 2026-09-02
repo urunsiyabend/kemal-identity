@@ -47,6 +47,7 @@ require "./kemal_identity/sessions/remember_service"
 require "./kemal_identity/passwords/policy"
 require "./kemal_identity/passwords/authenticator"
 require "./kemal_identity/api_tokens/token"
+require "./kemal_identity/api_tokens/lifetime_policy"
 require "./kemal_identity/api_tokens/repository"
 require "./kemal_identity/api_tokens/service"
 

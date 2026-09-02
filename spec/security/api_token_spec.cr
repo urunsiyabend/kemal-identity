@@ -344,3 +344,189 @@ describe "issuing" do
     end
   end
 end
+
+# TOK-08 in `blueprints/0025`: rotating a deploy key without breaking a running fleet needs the
+# old credential to keep working for a bounded window and then stop. A deadline chosen at
+# issuance cannot express "fifteen minutes from whenever somebody rotates", and a scheduled
+# revoke means the window closes when a job runs rather than when it is supposed to.
+private def rotating
+  service, repo, accounts, clock = token_harness
+  old = issue(service, accounts, name: "deploy-key")
+  {service, repo, accounts, clock, old}
+end
+
+private def policed(maximum : Time::Span = 30.days, default : Time::Span? = nil)
+  clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
+  accounts = KemalIdentity::Testing::MemoryAccountRepository.new([KemalIdentity::Testing.account])
+  repo = KemalIdentity::Testing::MemoryApiTokenRepository.new(accounts)
+
+  service = KemalIdentity::ApiTokens::Service.new(
+    tokens: repo, clock: clock,
+    random: KemalIdentity::Testing::DeterministicRandom.new,
+    lifetime_policy: KemalIdentity::ApiTokens::LifetimePolicy.new(
+      maximum: maximum, default: default
+    ),
+  )
+
+  {service, repo, accounts, clock}
+end
+
+describe "shortening a token's life for a rotation" do
+  it "keeps the old credential working until its new deadline, then refuses it" do
+    service, _repo, accounts, clock, old = rotating
+    replacement = issue(service, accounts, name: "deploy-key (rotated)")
+
+    service.expire(old.record.id, "a1", at: clock.now + 15.minutes).should be_true
+
+    clock.advance(15.minutes - 1.second)
+    service.authenticate(old.token.reveal).should be_a(KemalIdentity::Authenticated)
+    service.authenticate(replacement.token.reveal).should be_a(KemalIdentity::Authenticated)
+
+    # The window closes on the authentication path itself — no sweeper has to have run.
+    clock.advance(2.seconds)
+    KemalIdentity::Testing.should_fail_with(
+      service.authenticate(old.token.reveal), KemalIdentity::FailureReason::Expired
+    )
+    service.authenticate(replacement.token.reveal).should be_a(KemalIdentity::Authenticated)
+  end
+
+  it "refuses to push a deadline out, which is the rule the whole method turns on" do
+    service, _repo, accounts, clock = token_harness
+    issued = issue(service, accounts, expires_at: clock.now + 1.hour)
+
+    service.expire(issued.record.id, "a1", at: clock.now + 2.hours).should be_false
+    service.expire(issued.record.id, "a1", at: clock.now + 1.hour).should be_false
+    service.expire(issued.record.id, "a1", at: clock.now + 1.minute).should be_true
+  end
+
+  it "answers the same for somebody else's token and one that does not exist" do
+    service, _repo, _accounts, clock, old = rotating
+
+    service.expire(old.record.id, "someone-else", at: clock.now + 1.minute).should be_false
+    service.expire("no-such-token", "a1", at: clock.now + 1.minute).should be_false
+  end
+
+  it "leaves both halves of the rotation separately auditable" do
+    service, _repo, accounts, clock, old = rotating
+    replacement = issue(service, accounts, name: "deploy-key (rotated)")
+
+    service.expire(old.record.id, "a1", at: clock.now + 15.minutes)
+
+    # Two ids, two names, and `last_used_at` per token — which is what answers "has the fleet
+    # picked the new key up yet" without asking the fleet.
+    service.authenticate(old.token.reveal)
+    listed = service.list("a1")
+    listed.map(&.id).sort!.should eq([old.record.id, replacement.record.id].sort!)
+    listed.find { |token| token.id == old.record.id }.or_fail.last_used_at.should_not be_nil
+    listed.find { |token| token.id == replacement.record.id }.or_fail.last_used_at.should be_nil
+  end
+
+  it "does not lose a token's scopes when it shortens its life" do
+    service, _repo, accounts, clock = token_harness
+    issued = service.issue(
+      accounts.find_by_id("a1").or_fail, "narrow", scopes: ["reports.read"]
+    )
+
+    service.expire(issued.record.id, "a1", at: clock.now + 1.minute).should be_true
+
+    principal = KemalIdentity::Testing.should_authenticate(service.authenticate(issued.token.reveal))
+    principal.credential.or_fail.scopes.should eq(["reports.read"])
+  end
+end
+
+# TOK-09: an enterprise requires every personal token to expire within thirty days and forbids
+# unbounded ones; the deployment next door permits a non-expiring deploy key. Both are correct,
+# so the policy is injectable and absent by default.
+describe "a token lifetime policy" do
+  it "is absent by default, and an unbounded token is still permitted" do
+    service, _repo, accounts, _clock = token_harness
+
+    issue(service, accounts).record.expires_at.should be_nil
+  end
+
+  it "refuses an unbounded token, and writes nothing" do
+    service, repo, accounts, _clock = policed
+
+    expect_raises(KemalIdentity::ApiTokens::PolicyError, /does not permit an unbounded token/) do
+      issue(service, accounts)
+    end
+
+    # Before the secret is generated and before anything is stored: a refused issuance leaves no
+    # row and no credential that briefly existed.
+    repo.list_for_account("a1").should be_empty
+  end
+
+  it "refuses an expiry beyond the maximum and names the limit" do
+    service, repo, accounts, clock = policed(maximum: 30.days)
+
+    expect_raises(KemalIdentity::ApiTokens::PolicyError, /within 30/) do
+      issue(service, accounts, expires_at: clock.now + 31.days)
+    end
+
+    repo.list_for_account("a1").should be_empty
+  end
+
+  it "accepts exactly the maximum" do
+    service, _repo, accounts, clock = policed(maximum: 30.days)
+
+    issue(service, accounts, expires_at: clock.now + 30.days)
+      .record.expires_at.should eq(clock.now + 30.days)
+  end
+
+  it "fills in a default lifetime when the caller names none" do
+    service, _repo, accounts, clock = policed(maximum: 30.days, default: 7.days)
+
+    issue(service, accounts).record.expires_at.should eq(clock.now + 7.days)
+  end
+
+  it "carries the violation on the error, because it is safe to show" do
+    service, _repo, accounts, _clock = policed
+
+    error = expect_raises(KemalIdentity::ApiTokens::PolicyError) { issue(service, accounts) }
+    error.violation.should eq(KemalIdentity::ApiTokens::PolicyViolation::ExpiryRequired)
+    error.maximum.should eq(30.days)
+  end
+
+  it "refuses a policy whose default exceeds its maximum, at construction" do
+    expect_raises(KemalIdentity::ConfigurationError, /exceeds the maximum/) do
+      KemalIdentity::ApiTokens::LifetimePolicy.new(maximum: 7.days, default: 30.days)
+    end
+  end
+
+  it "does not shorten the tokens that already exist when it is tightened" do
+    lenient, repo, accounts, clock = policed(maximum: 90.days)
+    long = issue(lenient, accounts, expires_at: clock.now + 90.days)
+
+    strict = KemalIdentity::ApiTokens::Service.new(
+      tokens: repo, clock: clock,
+      random: KemalIdentity::Testing::DeterministicRandom.new,
+      lifetime_policy: KemalIdentity::ApiTokens::LifetimePolicy.new(maximum: 30.days),
+    )
+
+    clock.advance(31.days)
+
+    # A policy is a rule about creation. The row keeps what it was given, and `#expire` is what
+    # applies a new limit retroactively.
+    strict.authenticate(long.token.reveal).should be_a(KemalIdentity::Authenticated)
+
+    strict.expire(long.record.id, "a1", at: clock.now).should be_true
+    KemalIdentity::Testing.should_fail_with(
+      strict.authenticate(long.token.reveal), KemalIdentity::FailureReason::Expired
+    )
+  end
+
+  it "is not consulted on the authentication path" do
+    # A policy that raised while authenticating would turn a configuration change into an
+    # outage for every client holding an older token. The check lives in `#issue` only.
+    service, _repo, accounts, clock = token_harness
+    issued = issue(service, accounts, expires_at: clock.now + 90.days)
+
+    strict = KemalIdentity::ApiTokens::Service.new(
+      tokens: _repo, clock: clock,
+      random: KemalIdentity::Testing::DeterministicRandom.new,
+      lifetime_policy: KemalIdentity::ApiTokens::LifetimePolicy.new(maximum: 1.day),
+    )
+
+    strict.authenticate(issued.token.reveal).should be_a(KemalIdentity::Authenticated)
+  end
+end

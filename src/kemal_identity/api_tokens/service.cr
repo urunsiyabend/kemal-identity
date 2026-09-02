@@ -32,12 +32,16 @@ module KemalIdentity::ApiTokens
 
     getter prefix : String
 
+    # `lifetime_policy` is the deployment's rule about how long a token may live, and is
+    # **nil by default**: an application that wants non-expiring deploy keys is not wrong, so
+    # nothing is imposed. See `LifetimePolicy`, and note that it is checked at issuance only.
     def initialize(
       @tokens : Repository,
       @clock : Clock,
       @random : RandomSource,
       @prefix : String = DEFAULT_PREFIX,
       @touch_interval : Time::Span = DEFAULT_TOUCH_INTERVAL,
+      @lifetime_policy : LifetimePolicy? = nil,
     )
       raise ConfigurationError.new("prefix must not be empty") if @prefix.empty?
 
@@ -73,6 +77,21 @@ module KemalIdentity::ApiTokens
 
       if expires_at && expires_at <= now
         raise ArgumentError.new("expires_at must be in the future")
+      end
+
+      # The policy runs **before the secret is generated and before anything is written**, so a
+      # refused issuance leaves no row, no digest and no credential that briefly existed.
+      if policy = @lifetime_policy
+        expires_at = policy.resolve(expires_at, now)
+
+        if violation = policy.violation(expires_at, now)
+          Log.info &.emit(
+            "api_token.issue_refused",
+            subject: account.id, reason: violation.to_s
+          )
+
+          raise PolicyError.new(violation, policy.maximum)
+        end
       end
 
       secret = Secret.new("#{@prefix}#{@random.token}")
@@ -197,6 +216,55 @@ module KemalIdentity::ApiTokens
       end
 
       revoke(token_id)
+    end
+
+    # Brings a token's expiry forward, for a rotation that wants a bounded overlap.
+    #
+    # Issue the replacement, then give the old credential a deadline:
+    #
+    # ```
+    # replacement = api.issue(account, "deploy-key (rotated)", scopes: old.scopes)
+    # api.expire(old.id, account.id, at: clock.now + 15.minutes)
+    # ```
+    #
+    # Both credentials work until the deadline and each is separately auditable — two ids, two
+    # `last_used_at` stamps, so "has the fleet picked up the new key" is a question the
+    # management listing answers. After it, the old one fails as `Expired` on the
+    # authentication path itself: the window closes whether or not a sweeper ran.
+    #
+    # **Never lengthens.** Answers `false` for a token that already expires at or before `at`,
+    # for a revoked one, and for one that does not exist. See `Repository#expire`.
+    #
+    # By id alone, so it is an administrative call — the three-argument form below is what a
+    # route may hand a client-supplied id to.
+    def expire(token_id : String, at : Time) : Bool
+      expired = @tokens.expire(token_id, at)
+
+      if expired
+        Log.info &.emit(
+          "api_token.expiry_shortened", credential: token_id, expires_at: at.to_rfc3339
+        )
+      end
+
+      expired
+    end
+
+    # Brings a token's expiry forward **only if it belongs to `account_id`**.
+    #
+    # Answers `false` for somebody else's token and for one that does not exist — the same
+    # answer, for the reason the two-argument `revoke` gives: a token id is not secret material,
+    # so the difference would tell a caller whether an id is real.
+    def expire(token_id : String, account_id : String, at : Time) : Bool
+      owned = @tokens.list_for_account(account_id).any? { |token| token.id == token_id }
+
+      unless owned
+        Log.info &.emit(
+          "api_token.expire_refused", subject: account_id, credential: token_id, reason: "not_owned"
+        )
+        return false
+      end
+
+      expire(token_id, at)
     end
 
     # Ends every token for an account, returning how many. The right response to a compromised

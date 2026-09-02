@@ -185,6 +185,120 @@ def it_behaves_like_an_api_token_repository(&build : Array(KemalIdentity::Accoun
     end
   end
 
+  # A rotation with a bounded overlap: the replacement is issued, the old credential is given a
+  # deadline, and the window closes on the authentication path rather than when a job runs.
+  # `blueprints/0025`, TOK-08.
+  describe "#expire" do
+    it "brings an unbounded token's expiry forward" do
+      repo = build.call(one_account)
+      repo.create(token.call("t1", "a1", "raw-1", nil))
+
+      repo.expire("t1", now + 15.minutes).should be_true
+      repo.find_by_digest(digest.call("raw-1")).or_fail.token.expires_at.should eq(now + 15.minutes)
+    end
+
+    it "brings an existing deadline forward" do
+      repo = build.call(one_account)
+      repo.create(token.call("t1", "a1", "raw-1", 1.hour))
+
+      repo.expire("t1", now + 1.minute).should be_true
+      repo.find_by_digest(digest.call("raw-1")).or_fail.token.expires_at.should eq(now + 1.minute)
+    end
+
+    # The rule the whole method turns on. An adapter that let this through would offer a way to
+    # keep a credential somebody is trying to retire alive.
+    it "never pushes a deadline out" do
+      repo = build.call(one_account)
+      repo.create(token.call("t1", "a1", "raw-1", 1.hour))
+
+      repo.expire("t1", now + 2.hours).should be_false
+      repo.find_by_digest(digest.call("raw-1")).or_fail.token.expires_at.should eq(now + 1.hour)
+    end
+
+    it "refuses an expiry equal to the one already stored" do
+      repo = build.call(one_account)
+      repo.create(token.call("t1", "a1", "raw-1", 1.hour))
+
+      repo.expire("t1", now + 1.hour).should be_false
+    end
+
+    it "refuses a revoked token" do
+      repo = build.call(one_account)
+      repo.create(token.call("t1", "a1", "raw-1", nil))
+      repo.revoke("t1", now)
+
+      repo.expire("t1", now + 15.minutes).should be_false
+    end
+
+    it "returns false for an unknown token" do
+      build.call(one_account).expire("nope", now + 1.minute).should be_false
+    end
+
+    it "affects only the named token" do
+      repo = build.call(one_account)
+      repo.create(token.call("t1", "a1", "raw-1", nil))
+      repo.create(token.call("t2", "a1", "raw-2", nil))
+
+      repo.expire("t1", now + 1.minute)
+
+      repo.find_by_digest(digest.call("raw-2")).or_fail.token.expires_at.should be_nil
+    end
+  end
+
+  # Every write has to carry the whole row, and scopes are the field where losing one grants
+  # rather than denies. The in-memory double lost them on `touch` — which runs on the
+  # authentication path — so an attenuated token became unrestricted from its second request
+  # onward, in tests only, which is the worst place for that to be invisible. TOK-08.
+  describe "attenuation across a write" do
+    scoped = ->(id : String, raw : String) do
+      KemalIdentity::ApiTokens::Token.new(
+        id: id,
+        account_id: "a1",
+        name: "token #{id}",
+        token_digest: digest.call(raw),
+        created_at: now,
+        scopes: ["reports.read"],
+      )
+    end
+
+    it "survives a touch" do
+      repo = build.call(one_account)
+      repo.create(scoped.call("t1", "raw-1"))
+
+      repo.touch("t1", now + 5.minutes)
+
+      repo.find_by_digest(digest.call("raw-1")).or_fail.token.scopes.should eq(["reports.read"])
+      repo.list_for_account("a1").first.scopes.should eq(["reports.read"])
+    end
+
+    it "survives a revoke" do
+      repo = build.call(one_account)
+      repo.create(scoped.call("t1", "raw-1"))
+
+      repo.revoke("t1", now + 1.minute)
+
+      repo.find_by_digest(digest.call("raw-1")).or_fail.token.scopes.should eq(["reports.read"])
+    end
+
+    it "survives an expire" do
+      repo = build.call(one_account)
+      repo.create(scoped.call("t1", "raw-1"))
+
+      repo.expire("t1", now + 1.minute)
+
+      repo.find_by_digest(digest.call("raw-1")).or_fail.token.scopes.should eq(["reports.read"])
+    end
+
+    it "survives a bulk revocation" do
+      repo = build.call(one_account)
+      repo.create(scoped.call("t1", "raw-1"))
+
+      repo.revoke_all_for_account("a1", now + 1.minute)
+
+      repo.find_by_digest(digest.call("raw-1")).or_fail.token.scopes.should eq(["reports.read"])
+    end
+  end
+
   describe "#revoke" do
     it "stamps revoked_at" do
       repo = build.call(one_account)

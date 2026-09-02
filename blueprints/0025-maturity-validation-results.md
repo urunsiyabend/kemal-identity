@@ -30,7 +30,7 @@ Results are recorded here rather than in the catalogue so that the catalogue sta
 it is — a document with no result for any particular library — and so this one can be re-run
 against a later revision without rewriting it.
 
-**All seven very-high scenarios are done, twenty-two high-frequency ones, and two medium.**
+**All seven very-high scenarios are done, twenty-four high-frequency ones, and two medium.**
 Nothing below is an assessment made by reading the source; each row cites what was run.
 
 ## Summary
@@ -68,6 +68,8 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | AUT-07 | High | M3 | **M3 → M3** | Fixed after measurement: `max_age` on the step-up challenge. Freshness is still not declarable per permission |
 | HTTP-02 | High | M3 | **M3 → M4** | Fixed after measurement: `PathGuard.new(credentials:)` and `ErrorHandler.new(api_prefixes:)`, with a worked example |
 | OPS-03 | High | M3 | **M3** | Every seam is a contract, so instrumentation is a decorator; a sink bound before `Log.setup` was silently unbound, and can now be asked |
+| TOK-08 | High | M3 | **M2 → M3** | Fixed after measurement: `expire`, so an overlap window closes on the authentication path rather than when a job runs |
+| TOK-09 | High | M3 | **M2 → M3** | Fixed after measurement: `api_token_lifetime:`, refused before storage, with the retro-fit spelled out |
 
 ---
 
@@ -1262,7 +1264,7 @@ either way.
 
 ## Not yet attempted
 
-The remaining nineteen scenarios — six high, ten medium, one low, two niche-critical —
+The remaining seventeen scenarios — four high, ten medium, one low, two niche-critical —
 are unstarted.
 
 A note on what "unstarted" means for the ones whose feature is absent — WebAuthn, magic links,
@@ -2035,3 +2037,155 @@ decorator — `docs/02-security-model.md` now has the rules and the two seams, w
 documentation rather than something a consumer can run. The decorators in
 `tools/validation/ops03_metrics.cr` are the closest thing and they live outside the repository on
 purpose, which is a reasonable place for them but not what M4 asks.
+
+---
+
+## TOK-08 — Token rotation with an overlap window
+
+**Result: M2 → M3.** Applicable.
+
+A `svc-deploy` account with a deploy key, rotated the way the scenario describes: a replacement
+linked to the existing family, a bounded overlap during which both work, then the old one stops.
+
+**Two pass conditions held on the first attempt.**
+
+*"Both credentials are separately auditable"* — two token ids, two `api_token.issued` events each
+naming its own credential, and both in one management listing. The operationally important half
+is `Token#last_used_at`: it is what answers *"has the fleet picked up the new key yet"* without
+asking the fleet, and it is per token.
+
+*"Rotation never reveals an old raw token again"* — structurally. Only the digest is stored,
+`Issued#token` is the only place a secret ever exists, and the record a management screen renders
+carries `Bytes` that no client could present.
+
+**The family is the application's, and that is the right split.** `ApiTokens::Token` has an id, an
+account, a name and scopes, and nothing that groups two tokens; the attempt wrote a fifteen-line
+family table, the same shape TOK-02's resource selection turned out to be.
+
+**The condition that failed: the overlap had no upper bound that anything enforced.**
+
+`expires_at` could only be chosen **at issuance**, and a rotation happens months later. "One hour
+from whenever somebody rotates" was not expressible, so the only ways to close the window were:
+
+- revoke the old token immediately — no overlap at all, which is the thing the scenario exists
+  to avoid; or
+- schedule a revoke — and then the window closes when a job runs. If the job does not run, the
+  retired credential lives forever. The bound is the scheduler's, not the credential's, which is
+  the wrong direction for a security deadline.
+
+Measured as a compiler error, which is the honest form for a missing method:
+
+```
+Error: undefined method 'expire' for KemalIdentity::ApiTokens::Service
+```
+
+**Fixed: `Repository#expire(id, at)` and `Service#expire(token_id, account_id, at)`.** The
+deadline lands on the row, so the authentication path enforces it — no sweeper, nothing that has
+to have run. Three decisions inside it:
+
+**It never lengthens.** `false` for a token that already expires at or before `at`, and the
+comparison is *in the statement* rather than a read followed by a write, so two callers cannot
+interleave into a later deadline than either asked for:
+
+```sql
+UPDATE auth_api_tokens SET expires_at = $1
+ WHERE id = $2 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > $1)
+```
+
+**It is account-scoped in the form a route may hand a client id to**, exactly as `revoke` became
+in v0.9.0, and answers the same `false` for somebody else's token and for one that does not
+exist.
+
+**A past deadline is allowed** and closes the window immediately; the token then fails as
+`Expired` rather than `Revoked`, which is the honest reason — nobody revoked it.
+
+**This adds an abstract method to a repository contract**, so a third-party adapter must
+implement it to compile. That is a breaking change for adapter authors, taken deliberately and
+now rather than after the v1.0 freeze, and the shared contract gained seven examples so an
+adapter learns the rule from a failing spec rather than from prose.
+
+**A second defect, found while writing the contract examples, and this one is a fail-open in the
+shipped test double.**
+
+`MemoryApiTokenRepository#replace` rebuilt a token without its `scopes`. `touch` runs on the
+**authentication path**, so the first authentication of a newly issued attenuated token rewrote
+its row with no scopes, and every request after that was **unrestricted**:
+
+```
+after issue:     stored=nil          principal=["reports.read"]
+after touch:     stored=nil          principal=nil
+next request:    stored=nil          principal=nil
+```
+
+Production was never affected — both SQL adapters `UPDATE` one column — so the only thing this
+could break is a consumer's *test*, in the direction of granting more than production would. That
+is the exact hazard DEV-02 names: *"a fake cannot pass while violating production invariants."*
+Fixed, and the contract now has four examples demanding that attenuation survive `touch`,
+`revoke`, `expire` and a bulk revocation, so no adapter can lose it quietly either.
+
+**What keeps this at M3.** Revoking a *family* atomically is still not expressible through the
+shipped adapters: `revoke_all` is account-scoped, and two `revoke` calls are two statements, so a
+process that dies between them leaves half the family live. An application that needs the pair to
+fall together implements `ApiTokens::Repository` over its own table, where it owns the
+transaction — which is a real answer and not a first-class one. `tools/validation/tok08_spec.cr`
+holds the seven examples, and `docs/02-security-model.md` has the rotation under *Token
+discipline*.
+
+---
+
+## TOK-09 — Organisation-wide token lifetime policy
+
+**Result: M2 → M3.** Applicable.
+
+Both deployments the scenario describes, in one attempt: an enterprise requiring every personal
+token to expire within thirty days and forbidding unbounded ones, and the deployment next door
+permitting a non-expiring deploy key.
+
+**Before the fix there was no policy at all.** `issue(expires_at:)` refused a *past* expiry and
+accepted everything else, including `nil`. An organisation-wide rule therefore had to live in
+whatever wrapper the application put around issuance — which is a rule that is missing at the
+call site somebody forgot, and this shard already rejects that shape for assurance
+(`Permission#minimum_assurance`) and for passwords (`Passwords::Policy`).
+
+**Fixed with the idiom that was already there:** `ApiTokens::LifetimePolicy`, injectable at boot
+through `api_token_lifetime:`, absent by default. All four pass conditions now hold.
+
+*"Policy is injectable and testable"* — a struct with `maximum` and an optional `default`, and
+`#violation(expires_at, now)` takes the instant rather than reading a clock, so it is testable
+with no service and no repository. A `default` larger than the `maximum` is refused at
+construction.
+
+*"Invalid issuance fails before storage"* — measured, not assumed: after a refusal
+`list_for_account` is **empty**. The check runs before the secret is generated, so a rejected
+issuance leaves no row, no digest and no credential that briefly existed. `PolicyError` carries
+the violation and the limit, and both are safe to show — somebody creating a credential is not
+somebody proving they hold one, so there is no account to enumerate. That is the same reasoning
+`Passwords::PolicyViolation` already records.
+
+*"The semantics of existing tokens after a policy change are explicit"* — they keep what they
+were given, and the policy is **not** consulted on the authentication path. Both halves are
+measured: a ninety-day token issued under the old rule still authenticates thirty-one days after
+the limit drops to thirty. The alternative would be worse than surprising: a policy that could
+refuse while authenticating turns a configuration change into an outage for every client holding
+an older token.
+
+And the retro-fit an organisation actually wants is now possible, because TOK-08 landed first:
+walk the tokens that violate the new limit and `expire` each one. Measured in the same example —
+after the sweep the ninety-day token fails as `Expired`, and nothing could have been lengthened
+by accident because `expire` refuses to.
+
+*"Management APIs can find tokens approaching expiry without exposing secrets"* — `list` carries
+`expires_at` and `name` and a digest in `Bytes`, so "expiring within a week" is a filter over the
+management listing. Deployment-wide rather than per-account is the application's query over its
+own database, which is where it belongs.
+
+**Why M3 and not M4.** No worked example — the policy is three lines in `configure`, and the
+interesting part is the *pairing* with `expire` for a retro-fit, which lives in
+`docs/02-security-model.md` as prose rather than as something a consumer can run.
+`tools/validation/tok09_spec.cr` holds eleven examples and `spec/security/api_token_spec.cr`
+another ten.
+
+**A residual risk, stated rather than hidden.** The PostgreSQL `expire` statement is not verified
+locally — this machine has no role for the test database, so `spec/integration/postgres_spec.cr`
+is pending — and only CI runs it. The SQLite statement, the in-memory double and the shared
+contract all pass; the PostgreSQL one differs by placeholder syntax alone.

@@ -57,6 +57,30 @@ module KemalIdentity::ApiTokens
     # Marks one token revoked, returning false if it does not exist or was already revoked.
     abstract def revoke(id : String, at : Time) : Bool
 
+    # Brings a token's expiry **forward** to `at`, returning false if it does not exist, is
+    # already revoked, or already expires at or before `at`.
+    #
+    # This is what a rotation with an overlap window needs: the replacement is issued, the old
+    # credential is given a deadline instead of being killed outright, and the fleet has until
+    # then to pick the new one up. Because the deadline lands on the row, `expiry` is enforced
+    # by the authentication path on every request — no sweeper, no scheduled revoke, nothing
+    # that has to have run for the window to close (`blueprints/0025`, TOK-08).
+    #
+    # **It must never lengthen a token's life.** "Expire" is not "renew": a rotation that could
+    # extend the credential it replaces is not a rotation, and a management screen that could
+    # push a deadline out is a way to keep a compromised credential alive. The comparison
+    # belongs in the statement rather than in a read followed by a write, so that two callers
+    # cannot interleave into a later deadline than either asked for:
+    #
+    # ```sql
+    # UPDATE auth_api_tokens SET expires_at = $2
+    #  WHERE id = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > $2)
+    # ```
+    #
+    # A time in the past is allowed and closes the window immediately. The token then fails as
+    # `Expired` rather than `Revoked`, which is the honest reason: nobody revoked it.
+    abstract def expire(id : String, at : Time) : Bool
+
     # Revokes every live token for an account, returning how many it revoked. What "revoke all
     # my API tokens" calls, and the right response to a compromised account.
     abstract def revoke_all_for_account(account_id : String, at : Time) : Int32
