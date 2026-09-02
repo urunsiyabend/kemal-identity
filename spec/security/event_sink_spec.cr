@@ -219,3 +219,57 @@ describe "OPS-02: when the sink itself fails" do
     healthy.events.size.should eq(1)
   end
 end
+
+# OPS-03 found the failure mode `#failures` cannot show: a sink that is not *bound* is not a sink
+# that is failing. `::Log.setup` and `::Log.setup_from_env` replace the whole configuration, so an
+# application that wires a sink and then configures its logging has no sink and no complaint.
+#
+# Measured from a consumer project: a sink bound at the top of a spec file received zero events,
+# because Crystal's spec runner configures `Log` after the file loads. The same code in a plain
+# program received everything — which is the worst shape for a bug, since the tests that would
+# have caught it are the ones that cannot see it.
+describe "OPS-03: whether the sink is actually receiving anything" do
+  it "answers false when nothing is bound at all" do
+    KemalIdentity.event_sink_delivering?(yields: 200).should be_false
+  end
+
+  it "answers true for a sink bound now, and the probe reaches it" do
+    sink = RecordingSink.new
+    bridge = KemalIdentity.event_sink = sink
+
+    KemalIdentity.event_sink_delivering?.should be_true
+
+    bridge.probes.should eq(1)
+    sink.events.map(&.name).should contain(KemalIdentity::EventBridge::PROBE)
+
+    # The probe is an ordinary event: named, carried through the same translation, and visible in
+    # the trail. A heartbeat nobody documented would be worse than none.
+    probe = sink.events.find { |event| event.name == KemalIdentity::EventBridge::PROBE }.or_fail
+    probe.severity.should eq(::Log::Severity::Debug)
+    probe.subject.should be_nil
+    probe.data.should be_empty
+  end
+
+  it "answers false again once a later Log setup drops the binding" do
+    KemalIdentity.event_sink = RecordingSink.new
+    KemalIdentity.event_sink_delivering?.should be_true
+
+    # What an application does when it configures logging *after* wiring the sink.
+    ::Log.setup(:info)
+
+    KemalIdentity.event_sink_delivering?(yields: 200).should be_false
+  end
+
+  it "counts a failing sink's probe as delivered, because the bridge saw it" do
+    # `#failures` and this check answer different questions: whether the sink works, and whether
+    # anything reaches it. A sink that raises on every event is bound, and the difference is what
+    # tells an operator which of the two problems they have.
+    broken = BrokenSink.new
+    bridge = KemalIdentity.event_sink = broken
+
+    KemalIdentity.event_sink_delivering?.should be_true
+
+    bridge.failures.should eq(1)
+    broken.attempts.should eq(1)
+  end
+end

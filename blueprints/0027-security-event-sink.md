@@ -126,6 +126,52 @@ A broken sink loses the SIEM feed and nothing else. The security decision was ma
 through `Log` before the bridge ran, so the operator's existing log pipeline is unaffected — the
 audit trail does not go quiet, only its copy does, and the counter says so.
 
+### 6. A sink that was never bound is worse than one that fails, so it can be asked
+
+Added after decision 4 rather than with it, because OPS-03 in
+`blueprints/0025-maturity-validation-results.md` found the failure mode decision 4 does not cover.
+
+`event_sink=` calls `::Log.builder.bind`. `::Log.setup` and `::Log.setup_from_env` **replace the
+whole configuration**, binding included. So:
+
+```crystal
+KemalIdentity.event_sink = SiemSink.new
+Log.setup_from_env                        # the sink is gone
+```
+
+Nothing raises. `#failures` stays at **zero**, because zero events reached the bridge to fail.
+The trail is simply empty, which is exactly the outcome decision 4 exists to prevent, reached
+through a door it does not watch: not a failing sink, an absent one.
+
+It was measured from a consumer project, and the shape is the worst available: a sink bound at
+the top of a **spec file** received nothing, because Crystal's spec runner configures `Log` after
+the file loads, while the same code in a plain program received everything. The tests somebody
+would write to check their SIEM wiring are the tests that cannot see it working.
+
+So delivery is now a question with an answer:
+
+```crystal
+Log.setup_from_env
+KemalIdentity.event_sink = SiemSink.new
+
+abort "security events are not reaching the sink" unless KemalIdentity.event_sink_delivering?
+```
+
+`#event_sink_delivering?` emits one `EventBridge::PROBE` event and waits for the bridge to see
+it. Three details that are decisions:
+
+**The probe is a real, named event.** The sink sees `sink.probe` like anything else. A heartbeat
+in the trail is useful; an undocumented event nobody can account for is not.
+
+**The budget is a number of fiber yields, not a duration.** What is being waited for is a handoff
+to the `:async` dispatcher fiber, this shard reads time only through an injected `Clock`, and a
+yield budget cannot hang. Measured: nothing had arrived after ten yields and everything after
+fifty, so the default is twenty times what it took.
+
+**It answers a different question from `#failures`.** A sink that raises on every event is bound:
+`event_sink_delivering?` is true and `failures` climbs. A sink that was unbound is the reverse.
+An operator needs to tell those apart, and one number cannot.
+
 ## Consequences
 
 **Measured from the consumer project, after:**

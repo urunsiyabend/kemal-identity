@@ -30,7 +30,7 @@ Results are recorded here rather than in the catalogue so that the catalogue sta
 it is — a document with no result for any particular library — and so this one can be re-run
 against a later revision without rewriting it.
 
-**All seven very-high scenarios are done, twenty-one high-frequency ones, and two medium.**
+**All seven very-high scenarios are done, twenty-two high-frequency ones, and two medium.**
 Nothing below is an assessment made by reading the source; each row cites what was run.
 
 ## Summary
@@ -67,6 +67,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | AUT-06 | High | M3 | **M3** | Measured across two processes; the tenant a session copies had an unbounded window and no documented trigger |
 | AUT-07 | High | M3 | **M3 → M3** | Fixed after measurement: `max_age` on the step-up challenge. Freshness is still not declarable per permission |
 | HTTP-02 | High | M3 | **M3 → M4** | Fixed after measurement: `PathGuard.new(credentials:)` and `ErrorHandler.new(api_prefixes:)`, with a worked example |
+| OPS-03 | High | M3 | **M3** | Every seam is a contract, so instrumentation is a decorator; a sink bound before `Log.setup` was silently unbound, and can now be asked |
 
 ---
 
@@ -1261,7 +1262,7 @@ either way.
 
 ## Not yet attempted
 
-The remaining twenty scenarios — seven high, ten medium, one low, two niche-critical —
+The remaining nineteen scenarios — six high, ten medium, one low, two niche-critical —
 are unstarted.
 
 A note on what "unstarted" means for the ones whose feature is absent — WebAuthn, magic links,
@@ -1936,3 +1937,101 @@ HTTP-03 left it rather than bundled in here.
 case, CI compiles it on every matrix entry, `docs/04-kemal-integration.md` has the wiring under
 its own heading, and seven examples in `spec/integration/kemal_spec.cr` pin the behaviour —
 including the lookalike-path rule and the boot refusal.
+
+---
+
+## OPS-03 — Metrics and tracing without secret leakage
+
+**Result: M3.** Applicable.
+
+The scenario's demand is precise: *"add instrumentation around public services and adapters
+**without modifying their source**"*. So `tools/validation/ops03_metrics.cr` is a set of
+decorators over published contracts — `Accounts::Repository`, `Sessions::Repository`,
+`Authz::Repository`, `Passwords::Hasher`, `RateLimiter`, and the injected transports of
+`JWT::JWKS` and `OIDC::Client` — and `ops03_spec.cr` runs a login, a session read, a bearer
+authentication, ten authorization decisions and a rate-limit denial through them.
+
+Nothing was reopened, nothing was subclassed from a concrete service, and no private method was
+touched. **All four pass conditions hold.**
+
+*"Hooks expose durations and low-cardinality outcome categories"* — durations come from the
+decorators; the categories are the shard's own enums, which is what makes them bounded:
+`FailureReason` has 10 members and `Authz::DenialReason` 7, every one a name rather than a value
+read from a request. A metric labelled `reason=InvalidCredential` has a domain of ten
+forever.
+
+*"Subject, token, login and tenant are not metric labels by default"* — the shard publishes no
+metrics at all, so the interesting question is whether a wrapper is *pushed* towards labelling
+by identity, and it is not: every decorator sees the identifier and none of it has to be
+recorded. Measured with a registry that **refuses** an unbounded label value, so a wrapper that
+labelled by account id would fail the suite loudly rather than explode a time series quietly.
+Asserted afterwards: no label value equals the account id, the login, a token id, a session id
+or a raw secret.
+
+*"Tracing never records raw headers or cookies"* — structurally, not by redaction. `SecurityEvent`
+has six typed fields and a `Hash(String, String)`; there is no request object, no header map and
+no cookie jar anywhere in it, so an event cannot carry an `Authorization` header even by
+accident. Measured against a real run: a login, a failed login, a token issue, a token
+authentication, a revoke and a session revoke produced events in which the raw session token,
+the raw API token, the password and the login are all **absent**, while the session id and the
+token id are present — which is the point of them.
+
+*"Instrumentation can distinguish database, hashing and remote-provider latency"* — three layers,
+separately timed, measured in one run: `["database", "hashing", "limiter", "remote"]`. The remote
+one is only possible because both places this shard talks to somebody else's server take an
+injected transport: `JWKS.new(fetcher:)` and `OIDC::Client.new(exchanger:)`. Without those two
+seams this condition would fail outright.
+
+**Cache hits are the one signal with no hook.** The persona's list includes them, and
+`Authz::Cache` exposes `#size` and no counter. Measured: ten decisions over a warm cache produced
+**one** repository read, so the hit rate is `decisions − reads` and both sides are already
+counted by the application. Derivable, not exposed — now written down in
+`docs/02-security-model.md` rather than left to be rediscovered.
+
+**A defect found on the way, and it is the failure mode OPS-02 was built to prevent, reached
+through a different door.**
+
+`KemalIdentity.event_sink=` binds a `Log` backend. `::Log.setup` and `::Log.setup_from_env`
+**replace the whole configuration**, binding included. So an application that wires its sink and
+then configures its logging has no sink:
+
+```crystal
+KemalIdentity.event_sink = SiemSink.new
+Log.setup_from_env                        # the sink is gone
+```
+
+Nothing raises, and `EventBridge#failures` stays at **zero** — because zero events reached the
+bridge to fail. `blueprints/0027` decision 4 exists so that "a sink that is failing is never
+silent"; a sink that was never *bound* is silent, and is invisible to the number built to watch
+for silence.
+
+The shape it was found in is the worst available. This attempt bound its sink at the top of a
+spec file, as anybody would, and collected **nothing** — Crystal's spec runner configures `Log`
+after the file loads. The same code in a plain program collected everything:
+
+```
+plain program:  after yields: 1 event
+spec file:      events=0 failures=0
+```
+
+So the tests somebody writes to check their SIEM wiring are exactly the tests that cannot see it
+working.
+
+**Fixed:** `KemalIdentity.event_sink_delivering?` emits one named `sink.probe` event and answers
+whether the bridge saw it. It is false for a binding a later `Log.setup` dropped, true again once
+the sink is rebound, and — deliberately — **true** for a sink that raises on every event, because
+that sink is bound and `#failures` is the number for it. Two questions, two answers.
+
+The budget is a count of fiber yields rather than a duration: what is being waited for is a
+handoff to the `:async` dispatcher, this shard reads time only through an injected `Clock` (its
+own hygiene spec enforces that, and caught the first attempt at this), and a yield budget cannot
+hang. Measured: nothing after ten yields, everything after fifty; the default is 1000.
+
+Four examples in `spec/security/event_sink_spec.cr`, and one in the consumer suite that performs
+the whole sequence — bind, verify, `Log.setup`, verify again, rebind, verify.
+
+**Why M3 and not M4.** No worked example, and no packaged contract for an instrumentation
+decorator — `docs/02-security-model.md` now has the rules and the two seams, which is
+documentation rather than something a consumer can run. The decorators in
+`tools/validation/ops03_metrics.cr` are the closest thing and they live outside the repository on
+purpose, which is a reasonable place for them but not what M4 asks.

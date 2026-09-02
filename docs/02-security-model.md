@@ -319,6 +319,44 @@ a failed attempt against an unknown login would be recording an address belongin
 with no account at all. See `blueprints/0007-audit-events-omit-the-login.md`. These are the audit
 trail; a spec asserts that a login attempt produces an event containing no secret material.
 
+## Metrics and tracing
+
+Every seam this shard has is a contract, so instrumentation is a **decorator** rather than a
+patch: wrap a repository to time the database, wrap `Passwords::Hasher` to time hashing, wrap
+`RateLimiter` to count denials, and pass a `fetcher:` to `JWT::JWKS` or an `exchanger:` to
+`OIDC::Client` to time the identity provider. Nothing needs reopening and no private method is
+involved. Measured end to end in `blueprints/0025`, OPS-03.
+
+Two rules about what those wrappers may record.
+
+**The label is the outcome, never the identity.** `FailureReason` and `Authz::DenialReason` are
+small enums and make excellent metric labels; `subject`, the login, a token id, a tenant id and a
+rate-limit key are unbounded and must not be. A metric labelled by account id is a time series
+per account, which is both an operational problem and a way to enumerate your users from a
+dashboard. Correlation belongs in the event trail, where it is already, and the identity is what
+joins the two.
+
+**A duration is not a security decision.** Time wrappers with the wall clock — the injected
+`Clock` is for expiry and freshness, and a test clock reports every operation as instantaneous.
+
+Cache hits have no hook: `Authz::Cache` exposes `#size` and nothing else, so a hit rate is
+`decisions − repository reads`, both of which the application already counts. That is deliberate
+rather than missing — a counter on the cache would be a second thing to keep correct — but it
+does mean the subtraction is yours to do.
+
+**Check that the event sink is connected**, after your `Log` setup rather than before it:
+
+```crystal
+Log.setup_from_env
+KemalIdentity.event_sink = SiemSink.new
+
+abort "security events are not reaching the sink" unless KemalIdentity.event_sink_delivering?
+```
+
+`::Log.setup` replaces every binding, so wiring the sink first leaves no sink, with nothing
+raised and `EventBridge#failures` at zero — an empty trail rather than a failing one.
+`blueprints/0027` decision 6.
+
 ## Release blocking checks
 
 | Check | Level |

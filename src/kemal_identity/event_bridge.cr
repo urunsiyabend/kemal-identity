@@ -36,6 +36,15 @@ module KemalIdentity
     # looks like from the inside.
     getter failures = 0
 
+    # The name of the event `KemalIdentity.event_sink_delivering?` emits, which a sink will see
+    # like any other. Named rather than hidden: a heartbeat in the trail is useful, and a
+    # mysterious event nobody documented is not.
+    PROBE = "sink.probe"
+
+    # How many probes have arrived. What makes delivery checkable end to end rather than by
+    # inspecting `Log`'s configuration, which cannot be enumerated from outside.
+    getter probes = 0
+
     # `:async` so a slow sink does not sit on the request fiber. The isolation below is what
     # makes that safe -- an exception on the dispatcher fiber is what killed the trail in the
     # measurement this exists because of.
@@ -44,6 +53,8 @@ module KemalIdentity
     end
 
     def write(entry : ::Log::Entry) : Nil
+      @probes += 1 if entry.message == PROBE
+
       # Translation is this shard's own code, and stays outside the rescue: a bug in it should be
       # loud rather than counted as somebody else's sink failing.
       event = translate(entry)
@@ -113,11 +124,68 @@ module KemalIdentity
   # configuration. An application that has not configured `Log` at all still gets its own default
   # behaviour for everything outside `kemal_identity`.
   #
+  # ### Call this **after** your own `Log` setup, and check it
+  #
+  # `::Log.setup`, `::Log.setup_from_env` and anything that calls them **replace** the whole
+  # configuration, binding included. So an application that wires a sink and then configures its
+  # logging has no sink any more, with nothing raised and nothing logged: the feed OPS-02 exists
+  # to keep alive goes quiet in the one way `#failures` cannot show, because no event ever
+  # reaches the bridge to fail.
+  #
+  # Measured, from a consumer project: a sink bound at the top of a spec file received **zero**
+  # events, because Crystal's spec runner configures `Log` after the file loads. The same code in
+  # a plain program received everything. `blueprints/0025`, OPS-03.
+  #
+  # `event_sink_delivering?` is the check, and a boot that depends on the trail should assert it.
+  #
   # Returns the bridge, so `#failures` is reachable for an alarm.
   def self.event_sink=(sink : SecurityEventSink) : EventBridge
     bridge = EventBridge.new(sink)
     ::Log.builder.bind("kemal_identity.*", :debug, bridge)
     ::Log.builder.bind("kemal_identity", :debug, bridge)
+    @@event_bridge = bridge
     bridge
+  end
+
+  # The bridge the last `event_sink=` installed, if any.
+  class_getter event_bridge : EventBridge?
+
+  # Whether events are actually reaching the sink right now.
+  #
+  # Emits one `EventBridge::PROBE` event and waits for it to arrive, up to `within`. **Answers
+  # false when a later `::Log.setup` dropped the binding**, which is the failure this exists for
+  # and which nothing else can see: an unbound bridge is not a failing bridge, so `#failures`
+  # stays at zero and the trail is simply empty.
+  #
+  # ```
+  # Log.setup_from_env
+  # KemalIdentity.event_sink = SiemSink.new
+  #
+  # unless KemalIdentity.event_sink_delivering?
+  #   abort "the security event sink is not receiving events; check Log setup order"
+  # end
+  # ```
+  #
+  # Delivery is asynchronous — `EventBridge` is an `:async` backend so a slow SIEM cannot sit on
+  # a request fiber — so this hands control to the dispatcher fiber rather than blocking. The
+  # budget is a number of yields rather than a duration on purpose: it needs no clock (this
+  # shard reads time only through an injected `Clock`), it cannot hang, and what is being waited
+  # for is a fiber handoff rather than an interval. Measured: nothing had arrived after ten
+  # yields and everything after fifty, so the default is twenty times what it took.
+  #
+  # The sink sees one extra event per call, by design.
+  def self.event_sink_delivering?(yields : Int32 = 1000) : Bool
+    bridge = @@event_bridge
+    return false if bridge.nil?
+
+    before = bridge.probes
+    Log.debug &.emit(EventBridge::PROBE)
+
+    yields.times do
+      return true if bridge.probes > before
+      Fiber.yield
+    end
+
+    bridge.probes > before
   end
 end
