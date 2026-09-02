@@ -1,5 +1,264 @@
 # Changelog
 
+## v0.10.0 — 2026-09-02
+
+The catalogue's third pass: eight scenarios — AUT-06, AUT-07, HTTP-02, OPS-03, TOK-08, TOK-09,
+MFA-01 and MFA-04 — every one measured from a separate consumer project before anything here was
+written. That is the whole remaining high-frequency set apart from WebAuthn and a rolling
+upgrade.
+
+A minor rather than a patch, for the three ⚠ items below. **Four of the entries are defects in
+code the first two passes had already validated**, which is the result worth taking away from
+this release: the first pass moved signatures, the second added machinery, and the third found
+that rules this project had already decided were applied in one place and not in the next.
+`blueprints/0025-maturity-validation-results.md` has a section per scenario with the evidence.
+
+### Fixed: nearly half of every recovery-code list could not be redeemed
+
+Found by trying to redeem a code the shard had generated seconds earlier and being told it was
+`MalformedCredential`.
+
+`RandomSource#token` is base64url, whose alphabet includes `-`. `redeem_recovery_code` stripped
+`-` before checking the length, because a recovery code is *typed* and applications display them
+in groups. Both decisions are sensible; together they were a defect. A code containing a hyphen
+was shortened by one character, failed the length check, and could never be used.
+
+Measured over two thousand freshly generated codes:
+
+```
+length=43; 935/2000 contain a hyphen (46.8%)
+```
+
+So roughly **half of every recovery list issued by v0.4 through v0.9 is unusable** — on the one
+credential that exists for the day somebody has lost everything else. It survived three
+releases because the suite redeemed *one* code per example, and one code passes half the time.
+
+Fixed in both directions:
+
+* generation redraws rather than substituting, so no issued code contains `-`. Substituting
+  would make one character twice as likely and quietly cost a bit of entropy;
+* redemption tries two readings — whitespace stripped, then whitespace and `-` stripped — so
+  **codes already in people's hands keep working**, and a code typed with the separators an
+  application displayed works too.
+
+Nothing to do on upgrade. Lists issued before this become redeemable for the first time. The
+regressions assert every code in a list of twenty-five rather than the first one.
+
+### ⚠ Behaviour change: recovery is not a second factor
+
+`AssuranceLevel::Recovery = 25` is new, between `Password` and `MFA`, and
+`env.auth.recovery_verified!` is what a recovery route calls:
+
+```crystal
+case KemalIdentity.app.mfa!.redeem_recovery_code(subject, code, except_session_id: current)
+in KemalIdentity::MFA::Verified then env.auth.recovery_verified!   # not mfa_verified!
+in KemalIdentity::Failed        then render_the_same_error_for_every_reason
+end
+```
+
+`RequestContext#mfa_verified!` used to be documented for both a verified factor **and** a
+redeemed recovery code, so spending a printed code produced a principal indistinguishable from
+one that had proved a hardware key. A permission declared `minimum_assurance: MFA` — "changing
+payout details needs phishing-resistant MFA" — was therefore satisfied by a list of codes held
+by whoever found the piece of paper.
+
+A session at `Recovery` reaches everything a password reaches and nothing that asks for `MFA`,
+which is the point: recovery restores access, it does not stand in for a device. Prompt for
+re-enrolment there.
+
+⚠ **An exhaustive `case` over `AssuranceLevel` stops compiling.** Appending was always the plan —
+the enum's gaps of ten exist for it — and no persisted value changed.
+
+⚠ **Update your recovery route.** `mfa_verified!` still works and still grants `MFA`; if you call
+it after a recovery you keep the old, weaker behaviour.
+
+### ⚠ Privilege boundary: factor removal is scoped to its owner
+
+`MFA::Service#remove(factor_id)` took only the factor id, so `DELETE /mfa/factors/:id` written
+the obvious way removed whichever factor the caller named — including somebody else's. A factor
+id is not secret material: it appears in `mfa.verified` and `mfa.factor_removed` audit lines and
+in every management listing. This is the defect v0.9.0 fixed in `ApiTokens::Service#revoke`, in a
+second place, and here the harm is worse: removing a second factor does not end an account's
+access, it **weakens** it, and the next password-only login succeeds where it would have demanded
+a code.
+
+```crystal
+mfa.remove(factor_id, account_id)                     # settings screen; refuses a last factor
+mfa.remove(factor_id, account_id, allow_last: true)   # "turn MFA off", said out loud
+mfa.remove(factor_id)                                 # administrative, unchanged
+```
+
+The scoped form answers `false` for another account's factor and for one that does not exist —
+the same answer, so the difference cannot be used to discover whether an id is real — and
+defaults `allow_last` to **false**, while the administrative form defaults it to true. A settings
+screen should not be able to turn MFA off by accident.
+
+`confirm` takes an optional `account_id` for the same reason, though it is the cheaper guard:
+confirming somebody else's pending enrolment also needs a code from their secret.
+
+⚠ **Behaviour change: removing the account's last confirmed factor now voids its recovery
+codes**, for the reason `#disable` already did — a list that survives into a later re-enrolment is
+a full bypass of the new factor. Removing one of two devices still leaves them alone.
+
+### ⚠ Breaking for adapter authors: `ApiTokens::Repository#expire`
+
+A rotation needs the old credential to keep working for a bounded window and then stop. An
+expiry could only be chosen **at issuance**, and a rotation happens months later, so the only
+ways to close the window were to revoke immediately (no overlap) or to schedule a revoke (the
+window closes when a job runs, and never if it does not).
+
+```crystal
+replacement = api.issue(account, "deploy-key (rotated)", scopes: old.scopes)
+api.expire(old.id, account.id, at: Time.utc + 15.minutes)
+```
+
+Both work until the deadline; after it the old one fails as `Expired` on the authentication path
+itself. `expire` **never lengthens** a token's life, and the comparison is in the statement rather
+than a read followed by a write, so two callers cannot interleave into a later deadline than
+either asked for.
+
+⚠ **A third-party `ApiTokens::Repository` will not compile until it implements one method.** The
+shared contract has seven examples for it, so the rule arrives as a failing spec rather than as
+prose. Taken deliberately before the v1.0 freeze rather than after it.
+
+There is still no token *family*: `revoke_all` is account-scoped and atomic, two `revoke` calls
+are two statements, and an application that needs a set to fall together implements the
+repository over its own table where it owns the transaction.
+
+### A deployment can cap how long a token may live
+
+```crystal
+KemalIdentity.configure(
+  # ...
+  api_token_lifetime: KemalIdentity::ApiTokens::LifetimePolicy.new(maximum: 30.days, default: 7.days),
+)
+```
+
+Absent by default, because a deployment that wants non-expiring deploy keys is not wrong.
+Issuance raises `ApiTokens::PolicyError` — **before the secret is generated and before anything is
+written** — for an unbounded token and for one that would outlive the maximum. The error carries
+the violation and the limit, and both are safe to show: somebody creating a credential is not
+somebody proving they hold one.
+
+A policy is a rule about creation. It is **not** consulted on the authentication path, so
+tightening it does not shorten the tokens that already exist and cannot turn a configuration
+change into an outage for every client holding an older one. Applying a new limit retroactively
+is a walk over `list` calling `expire`, which cannot lengthen anything by accident.
+
+### Pages and an API in one process
+
+```crystal
+use KemalIdentity::Kemal::ErrorHandler.new(login_path: "/login", api_prefixes: ["/api"])
+use KemalIdentity::Kemal::AuthenticationHandler.new
+use KemalIdentity::Kemal::CSRFHandler.new
+use KemalIdentity::Kemal::PathGuard.new(prefix: "/app", credentials: [KemalIdentity::CredentialKind::Session])
+use KemalIdentity::Kemal::PathGuard.new(prefix: "/api", credentials: [KemalIdentity::CredentialKind::ApiToken])
+```
+
+Two of the three things a mixed monolith needs were previously hand-written handlers, and the
+third already worked.
+
+`credentials:` says which kinds a subtree accepts. A credential of another kind is a **403**, not
+a 401 — it is valid, it is the wrong door, and 401 would tell a working client to authenticate
+again in a loop. The check runs after authentication, so an anonymous request is still a 401 and
+nobody learns which classes a subtree takes without holding one. An empty list is refused at boot.
+
+`api_prefixes:` names subtrees that must never be redirected. Without it the decision is a guess
+made from the request — JSON in `Accept`, `X-Requested-With`, an `Authorization` header — and a
+client that sends none of them received `302 Location: /login` for a path that serves no HTML.
+
+CSRF needed no argument: `CSRFHandler` already exempted a request authenticated by a bearer token
+**and nothing else**, and a request carrying a token *and* a cookie stays protected.
+
+`KemalIdentity::Kemal::PathPrefix.covers?` is public, because an application writing its own
+handler needs the same rule and the tempting one-liner is wrong: `/api` covers `/api/items` and
+not `/apiary`.
+
+`examples/mixed_monolith/app.cr` is the whole arrangement with a `curl` line per case.
+
+### A step-up challenge says what would satisfy it
+
+```
+POST /email   Bearer <token>   403   Bearer realm="api", error="insufficient_user_authentication", max_age="300"
+POST /payout  Bearer <token>   403   Bearer realm="api", error="insufficient_user_authentication"
+```
+
+Three different refusals used to send one challenge, so an API client could not tell "type your
+password again" from "produce a second factor". `FreshAuthenticationRequiredError` now carries the
+window `require_fresh!` was given and `ErrorHandler` emits RFC 9470's `max_age`; its **absence** is
+the strength case, deliberately rather than a `max_age="0"` that would tell a client to retry
+something that cannot succeed. No `acr_values`, because those are a deployment's own vocabulary
+and this shard has an ordering — `blueprints/0028-step-up-challenge-parameters.md`.
+
+### You can ask whether security events are still arriving
+
+```crystal
+Log.setup_from_env
+KemalIdentity.event_sink = SiemSink.new
+
+abort "security events are not reaching the sink" unless KemalIdentity.event_sink_delivering?
+```
+
+`::Log.setup` and `setup_from_env` replace the whole configuration, binding included. So wiring a
+sink and *then* configuring logging left no sink, with nothing raised and `EventBridge#failures`
+at **zero** — the silence v0.8's typed sink exists to prevent, reached through a door it did not
+watch, since an unbound bridge is not a failing one.
+
+The check emits one named `sink.probe` event and waits for the bridge to see it. It answers
+**true** for a sink that raises on every event, because that sink is bound and `#failures` is the
+number for it: two questions, two answers.
+
+Worth knowing where it was found: a sink bound at the top of a **spec file** receives nothing,
+because Crystal's spec runner configures `Log` after the file loads. The same code in a plain
+program receives everything — so the tests somebody writes to check their SIEM wiring are the
+ones that cannot see it working.
+
+### The tenant a session copies is a stale grant, and now says so
+
+`Sessions::Service#start` copies `account.tenant_id` onto the session row and `#resolve` rebuilds
+the principal from that row, so it is the one authorization input a session carries. Measured:
+after confining an account to a tenant, a session that already existed was still unconstrained
+**eleven hours later**, and stopped only when the session did.
+
+No code changed — `Sessions::Lookup` deliberately does not carry the account's tenant, and
+widening it would add a column to every authenticated request for a value that changes
+approximately never. What changed is that `docs/02-security-model.md` now lists a tenant change
+beside password change and account disable among the events that must revoke an account's
+sessions, `Accounts::Repository#bump_auth_version` names it, and three examples pin both levers.
+
+`Principal#tenant_id` also stopped claiming to be "unused in v0.1"; `Authz::RBAC#decide` reads it
+on every tenant-scoped decision.
+
+### Fixed: the in-memory token double lost a token's scopes
+
+`MemoryApiTokenRepository#touch` rebuilt the row without `scopes`, and `touch` runs on the
+**authentication path** — so authenticating a newly issued attenuated token made it
+**unrestricted** from its second request onward. Production was never affected, since both SQL
+adapters `UPDATE` one column, which means the only thing this could break was a consumer's test,
+in the direction of granting more than production would.
+
+Four contract examples now demand that attenuation survive `touch`, `revoke`, `expire` and a bulk
+revocation, so no adapter can lose it quietly either. This is what v0.8's shared contracts are
+for.
+
+### The packaged assertions cover a second-factor result
+
+`Testing.should_fail_with` and a new `Testing.should_verify` accept `MFA::VerificationResult`,
+which is `Verified | Failed` rather than an `Outcome` and so fell through to the cast those
+helpers exist to replace. A packaged assertion that covers three of the four result unions is one
+somebody stops using.
+
+### Documentation
+
+* `docs/02-security-model.md` — token rotation, token lifetime policy, metrics and tracing
+  without secret leakage, recovery's own assurance level, and the tenant a session copies;
+* `docs/04-kemal-integration.md` — pages and an API in one process, under its own heading;
+* `blueprints/0028-step-up-challenge-parameters.md` — what a step-up challenge may say;
+* `blueprints/0027-security-event-sink.md` decision 6 — why an unbound sink is worse than a
+  failing one;
+* `blueprints/0025-maturity-validation-results.md` — twenty-nine of the catalogue's fifty
+  scenarios now have a measured result, with the third pass summarised at the top.
+
 ## v0.9.0 — 2026-09-01
 
 The catalogue's second pass, and the reason this is a minor rather than a patch: no signature

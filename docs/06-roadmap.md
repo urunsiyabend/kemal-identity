@@ -290,7 +290,7 @@ because two items change behaviour an application may be observing, though no si
 
 ## v0.10.0 — the catalogue's third pass
 
-**Unreleased.** Eight scenarios, all measured from a consumer project before anything was
+**Released on 2026-09-02.** Eight scenarios, all measured from a consumer project before anything was
 changed: AUT-06, AUT-07, HTTP-02, OPS-03, TOK-08, TOK-09, MFA-01 and MFA-04. That is every
 remaining high-frequency scenario except MFA-02 (WebAuthn) and OPS-08 (a rolling upgrade).
 `blueprints/0025-maturity-validation-results.md` has a section per scenario with the evidence.
