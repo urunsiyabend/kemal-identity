@@ -63,6 +63,11 @@ module KemalIdentity::Accounts
     # stores the `auth_version` it was minted under, and a mismatch fails the session on its
     # next read. Used on password change and MFA recovery, alongside explicit revocation
     # rather than instead of it (`docs/02-security-model.md`).
+    #
+    # Also the answer for a change to the account's **tenant**, which is the one authorization
+    # input a session copies: without a bump or an explicit revocation, sessions that already
+    # exist keep the tenant they were minted with until they expire
+    # (`Sessions::Record#tenant_id`).
     abstract def bump_auth_version(id : String) : Int32?
   end
 end

@@ -30,7 +30,7 @@ Results are recorded here rather than in the catalogue so that the catalogue sta
 it is — a document with no result for any particular library — and so this one can be re-run
 against a later revision without rewriting it.
 
-**All seven very-high scenarios are done, fourteen high-frequency ones, and two medium.**
+**All seven very-high scenarios are done, twenty high-frequency ones, and two medium.**
 Nothing below is an assessment made by reading the source; each row cites what was run.
 
 ## Summary
@@ -64,6 +64,8 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | IDP-01 | High | M3 | **M2 → M3** | Provider-specific parameters ship; `Pending` still does not bind the provider |
 | IDP-02 | High | M3 | **M3** | — |
 | IDP-04 | High | M3 | **M3** | — |
+| AUT-06 | High | M3 | **M3** | Measured across two processes; the tenant a session copies had an unbounded window and no documented trigger |
+| AUT-07 | High | M3 | **M3 → M3** | Fixed after measurement: `max_age` on the step-up challenge. Freshness is still not declarable per permission |
 
 ---
 
@@ -1258,7 +1260,7 @@ either way.
 
 ## Not yet attempted
 
-The remaining twenty-seven scenarios — fourteen high, ten medium, one low, two niche-critical —
+The remaining twenty-one scenarios — eight high, ten medium, one low, two niche-critical —
 are unstarted.
 
 A note on what "unstarted" means for the ones whose feature is absent — WebAuthn, magic links,
@@ -1649,3 +1651,188 @@ interactive path proven closed — including the reset that used to be sent — 
 deprovisioning. What still keeps it from M4 is the human/workload tag, which stays the
 application's with no `service_account?` flag anywhere in the shard: what counts as a workload is
 a product question. `tools/validation/tok07_spec.cr` holds the six examples.
+
+---
+
+## AUT-06 — Immediate grant revocation and cache invalidation
+
+**Result: M3.** Applicable. The first scenario of the third pass.
+
+Revocation was performed **behind** `RBAC`, straight against the repository, everywhere in this
+attempt. That is what "in another process" means to a process holding a cache: the write happened
+somewhere that could not call `#invalidate` on this object. Going through `RBAC#revoke` would have
+measured the local invalidation hook, which is a much weaker claim than the one the scenario
+makes.
+
+**The window was measured with two processes and a wall clock**, not with a test clock — one
+process holding a warm cache over a shared SQLite file and asking the same authorized question
+every 100ms, another removing the membership. `tools/validation/aut06_watcher.cr` prints the
+instant its answer changes:
+
+| Cache | Membership removed at | Answer changed at | Stale window |
+|---|---|---|---|
+| `ttl: 5.seconds` | +0.2s | +5.004s | 4.8s |
+| `ttl: 5.seconds` | +2.0s | +5.004s | 3.0s |
+| `ttl: 60.seconds` | +2.0s | still permitted at +10s | ≥8s, bounded at 60s |
+| **no cache — the default** | +2.0s | +2.004s | one poll interval, ≤104ms |
+
+So the window is the TTL measured from when the entry was *warmed*, not from the revocation, and
+the honest worst case is the whole TTL. **All four pass conditions hold.**
+
+*"The maximum stale-access window is explicit"* — `Cache::DEFAULT_TTL` is five seconds,
+`Cache::MAX_TTL` is one minute, and a longer one is refused at construction: `ttl: 61.seconds`
+raises `ConfigurationError` naming the ceiling. The cache is also **off by default**, which the
+table above shows costs one store read per decision and buys a window of nothing.
+
+*"Multi-process invalidation is possible"* — `RBAC#invalidate(account_id)` is public, and closing
+the window early with it was measured: with a 60-second TTL, a decision after the call denies
+immediately. It drops every tenant's entry for that account and no other account's.
+
+*"Cache keys include tenant and relevant credential restrictions"* — the tenant is in the key,
+length-prefixed so that `("ada:x", nil)` and `("ada", "x")` cannot collide; both were asked and
+answered differently. Credential restrictions are **not** in the key, and that is correct rather
+than a gap: what is cached is the account's `Grants`, and attenuation is applied *after* the
+cache by `RBAC#decide`. Measured — a narrow token warms the entry, a wide token for the same
+account reuses it with **no second store read** and is still permitted more, and a session that
+warmed the entry with a write grant does not lend that answer to a read-only token.
+
+*"Account-wide and tenant-only revocation cannot be confused"* — `remove_member` takes that
+tenant's roles and leaves every other tenant's and every global one; `revoke` with no tenant
+argument removes the global assignment only and answers `false` the second time, so a caller
+learns that the row it meant to remove was not there; `remove_account` removed all three rows.
+
+**A defect found on the way, and it is not in the cache.**
+
+`Sessions::Service#start` copies `account.tenant_id` onto the session row, and `#resolve` rebuilds
+the principal from that row. So the tenant binding is **the one authorization input this shard
+copies into a session** — and `Authz::RBAC#decide` reads it, refusing a principal bound to one
+tenant that asks about another before it consults membership at all.
+
+Measured against SQLite, changing the column the way an application would:
+
+```
+UPDATE auth_accounts SET tenant_id = 'org-a' WHERE id = 'ada'
+```
+
+A session started *after* that is confined to `org-a`. The session that already existed still
+reports `tenant_id: nil` — unconstrained — and was still permitted inside `org-b` eleven hours
+later, kept active an hour at a time. It stops only when the session does, at the twelve-hour
+absolute deadline.
+
+The direction of the risk is the wrong one: confining an account has no effect on the sessions it
+already has. Everything else in the authorization path is either read live or bounded to a minute;
+this one was bounded by the session lifetime, and **nothing said so**. `docs/02-security-model.md`
+lists the events that must revoke an account's sessions — password change, account disable, MFA
+recovery — and a change to the account's tenant was not among them.
+
+**Fixed, as documentation with a test rather than as a paragraph.** The tenant change is on that
+list now, with the reasoning; `Sessions::Record#tenant_id`, `Principal#tenant_id` and
+`Accounts::Repository#bump_auth_version` each say their half of it. Three examples in
+`spec/security/session_revocation_spec.cr` pin the property: the window is the session's lifetime,
+`bump_auth_version` closes it immediately, and `revoke_all` closes it immediately.
+
+**Not fixed in code, deliberately.** `Sessions::Lookup` could carry the account's current tenant
+and `#resolve` could fail a mismatch — but that struct is the shape every repository adapter
+implements, its own documentation warns that widening it is how a hot path becomes a join across
+half the schema, and it would add a column to every authenticated request for a value that
+changes approximately never. The lever already exists and costs one row: `bump_auth_version`.
+
+**Also corrected: `Principal#tenant_id` still said "Unused in v0.1".** It is read by `RBAC#decide`
+on every tenant-scoped authorization. A comment that says an authorization input is unused is
+worse than no comment.
+
+**Why M3 and not M4.** Multi-process invalidation is *possible* and there is no worked example of
+it — no pub/sub subscriber calling `invalidate`, which is the shape a replicated deployment needs
+and the thing an M4 result would ship. `tools/validation/aut06_spec.cr` holds fourteen examples,
+`aut06_tenant_spec.cr` four, and the two-process harness is `aut06_setup.cr`,
+`aut06_watcher.cr` and `aut06_revoke.cr`.
+
+---
+
+## AUT-07 — Per-permission assurance/step-up
+
+**Result: M3.** Applicable.
+
+The scenario's three products, declared the way the shard offers them: `profile.read` at
+`Remembered`, `data.export` at `Password`, `payout.update` at `MFA`, with `reports.read` at
+`ApiToken` for the automated client. Then called through every credential the shard can produce —
+a remembered session, a password session, an MFA session, and a personal access token **scoped to
+all four permissions** — first in process and then over HTTP against a running server.
+
+**Two of the three pass conditions hold outright.**
+
+*"Strength and freshness are separate"* — they are two axes, measured independently.
+`AssuranceLevel` is strength and `authenticated_at` is recency, and each fails while the other
+holds: a second factor proved three hours ago is `at_least?(MFA)` and not `fresh?(5.minutes)`; a
+password typed one second ago is fresh and not `at_least?(MFA)`. `RBAC#decide` reads strength
+only, so a route that also wants recency asks separately.
+
+*"An automated token cannot satisfy an interactive step-up by having a recent timestamp"* — holds,
+and this is the condition the design earns its keep on. `AssuranceLevel::ApiToken` is 15,
+below `Password` at 20, and `Principal#fresh?` returns false below `Password` **whatever the
+timestamp says**: a token authenticated at this instant answers false for a window of one second
+and for a window of a year. Over HTTP, the token scoped to all four permissions received 403 on
+`/export`, `/payout` and `/email` — and its scopes were not what refused it. The assurance floor
+is checked before the scope is consulted, so a token scoped to exactly `payout.update` is denied
+`InsufficientAssurance` rather than `OutOfScope`.
+
+Worth naming: the assurance gate runs **after** the grant check, so somebody with no role is told
+"no" rather than "authenticate more strongly and try again". A step-up prompt is itself
+information — it confirms the permission exists and that the caller would hold it.
+
+**The third condition failed, and was fixed.** *"The denial can produce a suitable API challenge
+without revealing unrelated policy."* Measured against the running server, three different
+refusals produced one challenge:
+
+| Request, bearer token | Why it refused | Challenge |
+|---|---|---|
+| `GET /export` | credential not strong enough | `Bearer realm="api", error="insufficient_user_authentication"` |
+| `POST /payout` | credential not strong enough | the same |
+| `POST /email` | authentication not recent enough | the same |
+
+The shard holds that distinction internally — `minimum_assurance` is strength,
+`require_fresh!(within:)` is recency — and discarded it at the response boundary, leaving the one
+party that has to act on it unable to see it. "Type your password again" and "produce a second
+factor" are different prompts.
+
+**Fixed:** `FreshAuthenticationRequiredError` carries the window when recency is what failed, and
+`ErrorHandler` emits RFC 9470 §3's `max_age` — "the allowable elapsed time in seconds since the
+last active authentication event", which is precisely what `require_fresh!(within:)` means. Its
+*absence* is the signal for the strength case, deliberately rather than `max_age="0"`, which would
+tell a client to retry something that cannot succeed. Re-measured:
+
+```
+POST /email    Bearer <token>   403   Bearer realm="api", error="insufficient_user_authentication", max_age="300"
+POST /payout   Bearer <token>   403   Bearer realm="api", error="insufficient_user_authentication"
+POST /email    Cookie <session> 403   Bearer realm="api"
+```
+
+There is no `acr_values` beside it, and that is a decision rather than an omission: ACR values are
+a deployment's own vocabulary, and this shard has an assurance *ordering* rather than a set of
+strings it can honestly publish. `blueprints/0028-step-up-challenge-parameters.md` records the
+whole argument, including the shape a future consumer with a real ACR vocabulary would get.
+
+**Why M3 and not M4: freshness cannot be declared per permission.** The scenario asks to *"declare
+minimum assurance and maximum authentication age per permission"*. Only the first is declarable.
+`Permission` carries `minimum_assurance` and nothing about recency, so every route that needs a
+recent credential says so itself — which is the exact hazard `Permission`'s own documentation
+argues against for assurance:
+
+> Assurance is part of the permission, not the call site … a rule written at each call site is a
+> rule that is missing at the call site somebody forgot.
+
+That argument does not stop being true for recency. A `payout.update` reachable from three routes
+is three chances to omit `require_fresh!`, and the omission fails open. `PathGuard.new(prefix:,
+within:)` covers a subtree, which is the mitigation and is not the same thing as declaring it once
+with the action.
+
+**Not closed in this pass**, because the shape is a real design question rather than a missing
+argument: a `maximum_age` on `Permission` would have to be enforced somewhere that has both the
+permission and the clock, and `RBAC#decide` deliberately does not raise. Two candidates —
+`Decision` gaining a freshness denial, or `authorize!` checking it after the decision — and
+choosing between them is worth a blueprint of its own rather than a line in this one.
+
+`tools/validation/aut07_spec.cr` holds the seven in-process examples;
+`tools/validation/aut07_app.cr` is the server the table above was measured against. The fix's own
+regressions live in `spec/integration/kemal_spec.cr` under "step-up", including one that pins the
+absence of `max_age` on a strength denial.

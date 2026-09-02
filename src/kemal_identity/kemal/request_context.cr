@@ -83,7 +83,9 @@ module KemalIdentity::Kemal
       principal = require!
       return principal if principal.fresh?(within: within, now: @app.clock.now)
 
-      raise FreshAuthenticationRequiredError.new("fresh authentication required")
+      # The window travels with the refusal, so `ErrorHandler` can answer an API client with
+      # RFC 9470's `max_age` rather than an unqualified "insufficient".
+      raise FreshAuthenticationRequiredError.new("fresh authentication required", max_age: within)
     end
 
     # The principal, if it reached at least `level`.

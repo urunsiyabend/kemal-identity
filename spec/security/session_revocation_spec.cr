@@ -147,3 +147,95 @@ describe "log out everywhere" do
     h.service.resolve(keep.token.reveal).should be_a(KemalIdentity::Authenticated)
   end
 end
+
+# A repository that can move an account between tenants. `MemoryAccountRepository` cannot, and
+# should not: changing an account's tenant is an application action against its own table, so
+# only a spec that is measuring the consequence needs it.
+class MovableAccountRepository < KemalIdentity::Testing::MemoryAccountRepository
+  def move_to_tenant(id : String, tenant_id : String?) : Nil
+    existing = find_by_id(id).or_fail("no such account to move")
+
+    @accounts[id] = KemalIdentity::Accounts::Account.new(
+      id: existing.id,
+      normalized_login: existing.normalized_login,
+      tenant_id: tenant_id,
+      auth_version: existing.auth_version,
+      password_digest: existing.password_digest,
+      password_scheme: existing.password_scheme,
+      email_verified_at: existing.email_verified_at,
+      disabled_at: existing.disabled_at,
+      created_at: existing.created_at,
+      updated_at: existing.updated_at,
+    )
+  end
+end
+
+# `docs/02-security-model.md` lists a change to the account's tenant among the events that must
+# revoke an account's sessions, and this is why: the tenant is the one authorization input a
+# session copies, so nothing else notices the change. Found by AUT-06 in `blueprints/0025`.
+private def moved_harness
+  accounts = MovableAccountRepository.new([KemalIdentity::Testing.account])
+  sessions = KemalIdentity::Testing::MemorySessionRepository.new(accounts)
+  clock = KemalIdentity::Testing::TestClock.new
+  service = KemalIdentity::Sessions::Service.new(
+    sessions: sessions, clock: clock,
+    random: KemalIdentity::Testing::DeterministicRandom.new
+  )
+
+  {accounts, clock, service}
+end
+
+describe "a change to the account's tenant" do
+  it "is not felt by a session that already exists, however long it waits" do
+    accounts, clock, service = moved_harness
+    issued = service.start(accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
+
+    issued.principal.tenant_id.should be_nil
+
+    accounts.move_to_tenant("a1", "org-a")
+    accounts.find_by_id("a1").or_fail.tenant_id.should eq("org-a")
+
+    # A session started now is confined. There is no cache to expire here — the principal is
+    # rebuilt from the session row on every read, and the row still says what it said at login.
+    service.start(accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
+      .principal.tenant_id.should eq("org-a")
+
+    # Kept active — an hour of idle at a time, well inside the two-hour idle timeout — so the
+    # window measured is the session's absolute lifetime rather than how long a tab sat unused.
+    11.times do
+      clock.advance(1.hour)
+      resolved = service.resolve(issued.token.reveal).as(KemalIdentity::Authenticated).principal
+      resolved.tenant_id.should be_nil
+    end
+
+    # And it ends when the session does, not before: twelve hours, the absolute deadline.
+    clock.advance(1.hour)
+    KemalIdentity::Testing.should_fail_with(
+      service.resolve(issued.token.reveal), KemalIdentity::FailureReason::Expired
+    )
+  end
+
+  it "is felt immediately once auth_version is bumped, which is what the docs require" do
+    accounts, _clock, service = moved_harness
+    issued = service.start(accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
+
+    accounts.move_to_tenant("a1", "org-a")
+    accounts.bump_auth_version("a1")
+
+    KemalIdentity::Testing.should_fail_with(
+      service.resolve(issued.token.reveal), KemalIdentity::FailureReason::StaleAuthVersion
+    )
+  end
+
+  it "is felt immediately once the account's sessions are revoked, which is the other way" do
+    accounts, _clock, service = moved_harness
+    issued = service.start(accounts.find_by_id("a1").or_fail, KemalIdentity::AssuranceLevel::Password)
+
+    accounts.move_to_tenant("a1", "org-a")
+    service.revoke_all("a1").should eq(1)
+
+    KemalIdentity::Testing.should_fail_with(
+      service.resolve(issued.token.reveal), KemalIdentity::FailureReason::Revoked
+    )
+  end
+end

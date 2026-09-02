@@ -77,8 +77,22 @@ Rotate the session — new secret, new row, old row revoked — on:
 - password change
 
 Revoke *all* of an account's sessions on: password change (except optionally the current
-one), account disable, and MFA recovery. `bump_auth_version` provides the same effect
-without enumerating rows and is the belt to revocation's braces.
+one), account disable, MFA recovery, and **a change to the account's tenant**.
+`bump_auth_version` provides the same effect without enumerating rows and is the belt to
+revocation's braces.
+
+The tenant belongs on that list because it is the one authorization input a session copies.
+Roles and memberships are read on every decision, and an `Authz::Cache` bounds its own
+staleness to at most a minute; the tenant is stamped onto the session row at login and
+`Sessions::Service#resolve` rebuilds the principal from that row. So confining an account to a
+tenant — or moving it to another one — has no effect on a session that already exists, for as
+long as that session lives, and `Authz::RBAC` will keep answering the *old* binding's
+questions. Measured: `blueprints/0025`, AUT-06.
+
+That is a deliberate trade — `Sessions::Lookup` does not carry the account's tenant, so the
+hot path does not read a second column for a value that changes approximately never — and it
+is only safe if the application knows to revoke. Whichever code path writes the new tenant
+calls `bump_auth_version` or `revoke_all` beside it.
 
 ## Cookie policy
 

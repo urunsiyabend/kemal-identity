@@ -31,7 +31,27 @@ module KemalIdentity
   # Raised by `require_fresh!` when the principal is authenticated but not recently
   # enough, or at too low an assurance level. Mapped to 403 — the caller is known, they
   # simply have to prove it again.
-  class FreshAuthenticationRequiredError < Error; end
+  class FreshAuthenticationRequiredError < Error
+    # The freshness window the caller asked for, when *recency* is what failed.
+    #
+    # `nil` when the requirement was **strength** rather than recency — `require_assurance!`,
+    # or an authorization denial that `step_up?` says a better credential would fix. The two
+    # are different instructions to a client: "type your password again" and "produce a second
+    # factor" are not the same prompt, and a 403 that says only "insufficient" leaves an API
+    # client guessing which.
+    #
+    # `ErrorHandler` turns this into RFC 9470's `max_age` challenge parameter, which is defined
+    # as "the allowable elapsed time in seconds since the last active authentication event" —
+    # exactly what `require_fresh!(within:)` means. There is deliberately no counterpart for
+    # the strength case: RFC 9470's other parameter is `acr_values`, whose values are a
+    # deployment's own authentication context class references, and this shard has no
+    # vocabulary of those to publish. See `blueprints/0028-step-up-challenge-parameters.md`.
+    getter max_age : Time::Span?
+
+    def initialize(message : String? = nil, @max_age : Time::Span? = nil)
+      super(message)
+    end
+  end
 
   # Raised by `authorize!` when the caller is authenticated and simply not allowed. Mapped to
   # 403.

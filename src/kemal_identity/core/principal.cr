@@ -47,8 +47,15 @@ module KemalIdentity
     # When a second factor was last verified, if ever.
     getter mfa_verified_at : Time?
 
-    # Unused in v0.1. Present on the principal and in the schema so that adding tenancy is
-    # not a breaking migration.
+    # The tenant this principal is confined to, or nil for one that is not confined.
+    #
+    # Read by `Authz::RBAC#decide`, which refuses a principal bound to one tenant asking about
+    # another before it consults membership at all — so this is an authorization input, not a
+    # label. Nil is *unconstrained*, which is the single-tenant deployment and also the person
+    # who belongs to several organisations.
+    #
+    # For a session principal this is a copy of the account's tenant taken when the session was
+    # minted; `Sessions::Record#tenant_id` says what that means for a change made afterwards.
     getter tenant_id : String?
 
     def initialize(

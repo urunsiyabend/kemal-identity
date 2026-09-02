@@ -22,6 +22,11 @@ that way rather than in-process.
 
 | File | Scenario |
 |---|---|
+| `aut06_spec.cr` | AUT-06 — the grants cache: the ttl as the stale-access window, invalidation, what the key separates, tenant-only vs account-wide revocation |
+| `aut06_tenant_spec.cr` | AUT-06 — the tenant a session copies, against real SQLite, and the two levers that close it |
+| `aut06_setup.cr`, `aut06_watcher.cr`, `aut06_revoke.cr` | AUT-06 — the two-process wall-clock measurement. Not specs: build all three, `aut06_setup <db> <migration.sql>`, then run the watcher and the revoker against the same file |
+| `aut07_spec.cr` | AUT-07 — assurance per permission, strength against freshness, and a token with a recent timestamp |
+| `aut07_app.cr` | AUT-07 — the server the challenge table was measured against. Needs `AUT07_DB`, `AUT07_CREDS`, `AUT07_PORT` and `KEMAL_IDENTITY_ROOT` |
 | `tok01_spec.cr` | TOK-01, AUT-03 — two differently scoped tokens for one account |
 | `tok01_lookups_spec.cr` | TOK-01 hot path — counts `find_by_digest` calls per authentication |
 | `dev02_after_spec.cr` | DEV-02 after the fix — `require "kemal_identity/testing"`, nothing reaching into `spec/` |

@@ -40,7 +40,7 @@ module KemalIdentity::Kemal
         env, status: 401, message: "authentication required", redirect: true,
         challenge_error: bearer_presented?(env) ? "invalid_token" : nil,
       )
-    rescue FreshAuthenticationRequiredError
+    rescue error : FreshAuthenticationRequiredError
       # No redirect: sending somebody to a login page when they are already logged in is
       # confusing, and the application usually wants its own re-authentication prompt.
       #
@@ -53,9 +53,14 @@ module KemalIdentity::Kemal
       # a bearer credential: RFC 9470 defines it as the authentication event behind *the access
       # token* being too weak or too old, and a browser session has no access token to say that
       # about.
+      #
+      # `max_age` says *which* of "too weak" and "too old" it was, and is present only for the
+      # recency case, where the caller named a window. `blueprints/0028` is why there is no
+      # `acr_values` beside it.
       respond(
         env, status: 403, message: "fresh authentication required", redirect: false,
         challenge_error: bearer_presented?(env) ? "insufficient_user_authentication" : nil,
+        max_age: error.max_age,
       )
     rescue error : ForbiddenError
       # 403, no redirect, and one body for every denial reason: whether the caller is not a
@@ -83,6 +88,7 @@ module KemalIdentity::Kemal
       message : String,
       redirect : Bool,
       challenge_error : String? = nil,
+      max_age : Time::Span? = nil,
     ) : Nil
       login_path = @login_path
 
@@ -98,7 +104,7 @@ module KemalIdentity::Kemal
         return
       end
 
-      challenge(env, challenge_error)
+      challenge(env, challenge_error, max_age)
 
       # A generic message. It says what the client must do, and nothing about who exists.
       env.status(status).json({error: message})
@@ -111,11 +117,27 @@ module KemalIdentity::Kemal
     # It is skipped when the application configured no bearer credential at all. Announcing a
     # scheme the deployment does not accept would be advertising a door that is not there, and a
     # browser-only application has no use for it.
-    private def challenge(env : HTTP::Server::Context, error : String?) : Nil
+    private def challenge(
+      env : HTTP::Server::Context,
+      error : String?,
+      max_age : Time::Span? = nil,
+    ) : Nil
       return unless bearer_configured?
 
       value = %(Bearer realm="#{@realm}")
       value += %(, error="#{error}") if error
+
+      # RFC 9470 §3: "the allowable elapsed time in seconds since the last active
+      # authentication event". Whole seconds, rounded **down**, because a client that
+      # re-authenticates within the value it was handed must land inside the window rather
+      # than one rounding error outside it.
+      #
+      # Sent only alongside `insufficient_user_authentication`. The parameter is defined for
+      # that challenge, and attaching it to a 401 for a missing credential would be answering
+      # a different question.
+      if max_age && error == "insufficient_user_authentication"
+        value += %(, max_age="#{max_age.total_seconds.to_i}")
+      end
 
       # The `scope` attribute is OPTIONAL in RFC 6750 and deliberately omitted: naming the
       # permission a caller lacks is the one part of a denial this shard keeps to the audit log.

@@ -1396,6 +1396,63 @@ describe "the RFC 6750 challenge" do
 
       TEST_CLOCK.travel_to(KemalIdentity::Testing::FIXED_NOW)
     end
+
+    # RFC 9470 §3's `max_age`: "the allowable elapsed time in seconds since the last active
+    # authentication event". `require_fresh!(within: 5.minutes)` is exactly that, so the window
+    # the caller asked for is what the client is told. Without it a 403 says only
+    # "insufficient", and an API client cannot tell "type your password again" from "produce a
+    # second factor" — two different prompts. AUT-07 in `blueprints/0025`.
+    it "names the freshness window a recency denial wants" do
+      token = issue_api_token.token.reveal
+
+      get "/step-up/email", headers: bearer(token)
+
+      response.status_code.should eq(403)
+      challenge_header.should eq(
+        %(Bearer realm="api", error="insufficient_user_authentication", max_age="300")
+      )
+    end
+
+    # The other half, and the reason `max_age` has to be absent rather than zero: this denial is
+    # about the *strength* of the credential, and no amount of re-authenticating an API token
+    # makes it a second factor. A `max_age` here would tell a client to retry something that
+    # cannot succeed.
+    it "sends no max_age when a stronger credential is what is missing" do
+      AUTHORIZER.grant("a1", "finance")
+      token = issue_api_token.token.reveal
+
+      get "/invoices/refund", headers: bearer(token)
+
+      response.status_code.should eq(403)
+      challenge_header.should eq(
+        %(Bearer realm="api", error="insufficient_user_authentication")
+      )
+    end
+
+    # A browser session gets neither the error code nor the parameter: both are defined as
+    # statements about an access token, and there is none. `blueprints/0026` decided the first
+    # half of that; the parameter follows it rather than being gated separately.
+    it "sends no max_age to a session, which has no access token to say it about" do
+      token = log_in
+      TEST_CLOCK.advance(10.minutes)
+
+      get "/step-up/email", headers: cookies("kemal_identity=#{token}")
+
+      response.status_code.should eq(403)
+      challenge_header.should eq(%(Bearer realm="api"))
+
+      TEST_CLOCK.travel_to(KemalIdentity::Testing::FIXED_NOW)
+    end
+
+    # Rounded down, not up: a client that re-authenticates within the number it was handed must
+    # land inside the window, and 299 seconds is inside a 299.5-second one while 300 is not.
+    it "rounds a fractional window down to whole seconds" do
+      error = KemalIdentity::FreshAuthenticationRequiredError.new(max_age: 299.5.seconds)
+      window = error.max_age.or_fail("the window must travel with the refusal")
+
+      window.should eq(299.5.seconds)
+      window.total_seconds.to_i.should eq(299)
+    end
   end
 
   # The scope attribute is OPTIONAL in RFC 6750, and naming the permission a caller lacks is the

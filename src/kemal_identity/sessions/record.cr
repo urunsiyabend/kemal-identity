@@ -7,6 +7,22 @@ module KemalIdentity::Sessions
   struct Record
     getter id : String
     getter account_id : String
+
+    # The account's tenant **as it was when this session was minted**, and the only
+    # authorization input this shard copies into a session.
+    #
+    # `Service#resolve` rebuilds the principal from this row, not from the account, so a change
+    # to the account's tenant is not felt by a session that already exists — for the rest of
+    # that session's life, which is a longer window than anything else in the authorization
+    # path has. Membership and roles are read on every decision; a grants `Cache` bounds itself
+    # to a minute; this is bounded only by the session's absolute deadline.
+    #
+    # It is a copy on purpose: `Lookup` deliberately does not carry the account's tenant, and
+    # widening it would put another column of a join on every authenticated request for a value
+    # that changes once in an account's lifetime, if ever. The consequence is that **an
+    # application that changes an account's tenant must revoke that account's sessions or bump
+    # its `auth_version`** — `docs/02-security-model.md` lists it with the other events that
+    # require this, and `Accounts::Repository#bump_auth_version` is the one-row way to do it.
     getter tenant_id : String?
 
     # SHA-256 of the raw token, as raw bytes.
