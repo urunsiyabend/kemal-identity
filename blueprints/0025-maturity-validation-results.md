@@ -30,7 +30,7 @@ Results are recorded here rather than in the catalogue so that the catalogue sta
 it is — a document with no result for any particular library — and so this one can be re-run
 against a later revision without rewriting it.
 
-**All seven very-high scenarios are done, twenty-four high-frequency ones, and two medium.**
+**All seven very-high scenarios are done, twenty-six high-frequency ones, and two medium.**
 Nothing below is an assessment made by reading the source; each row cites what was run.
 
 ## Summary
@@ -70,6 +70,8 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | OPS-03 | High | M3 | **M3** | Every seam is a contract, so instrumentation is a decorator; a sink bound before `Log.setup` was silently unbound, and can now be asked |
 | TOK-08 | High | M3 | **M2 → M3** | Fixed after measurement: `expire`, so an overlap window closes on the authentication path rather than when a job runs |
 | TOK-09 | High | M3 | **M2 → M3** | Fixed after measurement: `api_token_lifetime:`, refused before storage, with the retro-fit spelled out |
+| MFA-01 | High | M3 | **M2 → M3** | Fixed after measurement: `remove(factor_id, account_id)` and a last-factor guard; removing a factor by id alone would remove anybody's |
+| MFA-04 | High | M3 | **M2 → M3** | Fixed after measurement: `AssuranceLevel::Recovery`, and the recovery-code alphabet, of which 46.8% were unredeemable |
 
 ---
 
@@ -1264,7 +1266,7 @@ either way.
 
 ## Not yet attempted
 
-The remaining seventeen scenarios — four high, ten medium, one low, two niche-critical —
+The remaining fifteen scenarios — two high, ten medium, one low, two niche-critical —
 are unstarted.
 
 A note on what "unstarted" means for the ones whose feature is absent — WebAuthn, magic links,
@@ -2189,3 +2191,175 @@ another ten.
 locally — this machine has no role for the test database, so `spec/integration/postgres_spec.cr`
 is pending — and only CI runs it. The SQLite statement, the in-memory double and the shared
 contract all pass; the PostgreSQL one differs by placeholder syntax alone.
+
+---
+
+## MFA-01 — Multiple factors per account
+
+**Result: M2 → M3.** Applicable.
+
+Three factors on one account — two authenticator apps and a "hardware credential" standing in as
+a third TOTP factor, since WebAuthn is MFA-02's scenario and absent here — then one device lost.
+
+**Two pass conditions held on the first attempt.**
+
+*"Factor IDs are first-class"* — `Factor#id` is what `confirm`, `remove` and `MFA::Verified#factor`
+all speak in, so "which device answered" is a fact the application receives rather than infers.
+Measured: verifying with the tablet's code returns the tablet's id, and with the phone's returns
+the phone's.
+
+*"Audit identifies the factor without revealing its secret"* — `mfa.verified`,
+`mfa.enrolment_started` and `mfa.factor_removed` all carry `factor:`, and `Factor#to_s` and
+`#inspect` are overridden so the sealed secret cannot reach a log line through an accidental
+interpolation. The provisioning URI — the only place the secret exists in the clear — is on
+`PendingEnrolment` and never on the stored record.
+
+**Replay across factors is not reachable, and the reason is worth stating.** A counter is
+consumed per factor id, so spending the phone's code leaves the tablet's untouched — measured
+both ways. And two factors cannot share a secret by an application's mistake, because `enrol`
+takes no secret: the shard generates one. So the cross-factor replay this condition asks about
+is closed by construction rather than by a check that could be forgotten.
+
+**The condition that failed, and it is a privilege boundary.**
+
+`MFA::Service#remove(factor_id)` took **only the factor id**. A route written the obvious way —
+`DELETE /mfa/factors/:id` — removes whichever factor the caller names, including somebody
+else's. This is precisely the defect TOK-07 found in `ApiTokens::Service#revoke` in v0.9.0, in a
+second place, and a factor id is not secret material for the same reasons: it is in
+`mfa.verified` and `mfa.factor_removed` audit lines and in every management listing.
+
+The direction of the harm is worse than for a token. Removing somebody's second factor does not
+end their access; it **weakens** their account, quietly, and the next password-only login
+succeeds where it would have demanded a code.
+
+**A second gap in the same call.** *"Replacing or removing the last strong factor requires fresh
+policy"* — nothing distinguished removing one of two devices from removing the only one, which
+is "turn MFA off" wearing the name of "unregister a device".
+
+**Fixed:**
+
+```crystal
+mfa.remove(factor_id, account_id)                     # settings screen: refuses a last factor
+mfa.remove(factor_id, account_id, allow_last: true)   # "turn MFA off", said out loud
+mfa.remove(factor_id)                                 # administrative, unchanged
+```
+
+The account-scoped form answers `false` for somebody else's factor and for one that does not
+exist — the same answer, so the difference cannot be used to discover whether an id is real —
+and defaults `allow_last` to **false**, while the administrative form defaults it to true. The
+asymmetry is the point: a settings screen should not be able to turn MFA off by accident, and an
+administrator calling the id-only form has already said what they mean.
+
+`confirm` gained the same optional scoping, though it is the cheaper guard: confirming somebody
+else's pending enrolment also requires a code from their secret.
+
+**A behaviour change came with it.** Removing the last confirmed factor now **voids the account's
+recovery codes**, for the reason `#disable` already did: a list written down years ago that
+survives into a later re-enrolment is a full bypass of the new factor. One existing example
+asserted the old behaviour under the comment *"removing one of two devices is not MFA is off"* —
+while removing the only device. It is now two examples, one for each case, which is what the
+comment described all along.
+
+**Why M3 and not M4.** No worked example: `examples/` has nothing for the MFA family, and "enrol
+three factors, lose one, remove it safely" is the shape a consumer would copy.
+`tools/validation/mfa_family_spec.cr` holds the attempt, and the new behaviour has eight examples
+in `spec/security/mfa_spec.cr`.
+
+---
+
+## MFA-04 — Recovery and factor replacement policy
+
+**Result: M2 → M3.** Applicable. And this is the scenario that found the worst defect of the
+pass.
+
+**Three of the four pass conditions held.**
+
+*"Other sessions/tokens can be revoked according to policy"* — `redeem_recovery_code` calls
+`Sessions::Service#revoke_all(account_id, except_id:)` itself. Measured: a session elsewhere
+fails on its next read, and the session doing the recovery survives because `except_session_id`
+spared it. The reasoning is already in the code and is right: "lost" and "taken" look identical
+from the server.
+
+*"Replacement requires a fresh trusted proof"* — the shard's half holds.
+`AssuranceLevel::ApiToken` is below `Password` and `Principal#fresh?` answers false for it and
+for `Remembered` whatever the timestamp says, so a route guarding recovery or enrolment with
+`require_fresh!` refuses an automated credential outright. The chaining MFA-04 asks about — an
+API token into recovery — cannot be built out of these pieces.
+
+*"Every recovery event is auditable and rate-limited"* — `mfa.recovery_code_used` at **warning**
+with the number of codes left, on the same per-account quota key as a second-factor check, and a
+refusal when the limiter is unavailable rather than an unmetered guessing window on the last way
+in. Measured, including the throttle.
+
+**The condition that failed: recovery was not named separately, and the documentation said to
+make it so.**
+
+`redeem_recovery_code` returns `Verified(by_recovery_code: true)`, so the *result* distinguishes.
+But `RequestContext#mfa_verified!` — whose own documentation said *"call it after
+`MFA::Service#verify` **or** `#redeem_recovery_code` returns `Verified`"* — raises the session to
+`AssuranceLevel::MFA`. A recovery code therefore produced a principal indistinguishable from one
+that had proved a hardware key.
+
+Which means the sharpest gate in the system was reachable through its weakest path. AUT-07's own
+persona is *"changing payout details needs phishing-resistant MFA"*, expressed as
+`minimum_assurance: MFA` — and a printed list of codes, held by whoever finds the piece of paper,
+satisfied it.
+
+**Fixed: `AssuranceLevel::Recovery = 25`**, between `Password` and `MFA`, plus
+`env.auth.recovery_verified!` and a corrected comment on `mfa_verified!`. The enum's own
+documentation asked for this — *"the gaps of ten exist so an intermediate level can be added
+later"* — and appending is the one change it permits.
+
+Measured over HTTP, in the integration application: after redeeming a code the session reaches
+`/settings/factors` (guarded at `Recovery`, which is where a new factor gets enrolled) and is
+**refused** at `/vault` (guarded at `MFA`). The session identifier rotates, as it does for every
+assurance increase.
+
+**And the defect that was found by accident, which is the most serious thing in this pass.**
+
+Writing the "a spent code and an invented one answer alike" example produced a 401 where a 200
+was expected — for a code the shard had generated seconds earlier. The reason:
+
+```
+FailureReason::MalformedCredential
+```
+
+`RandomSource#token` is base64url, whose alphabet includes `-`. `redeem_recovery_code` stripped
+`-` before checking the length, because a recovery code is *typed* and applications display them
+in groups. Those two decisions are individually sensible and together they were a defect: a code
+containing a hyphen was shortened by one character, failed the length check, and could **never
+be redeemed**.
+
+Measured over two thousand freshly generated codes:
+
+```
+length=43; 935/2000 contain a hyphen (46.8%)
+token_length(32)=43
+raw=43  after stripping '-'=42
+```
+
+**Nearly half of every recovery list issued by v0.4 through v0.9 is dead on arrival** — on the
+credential that exists for the day somebody has lost everything else. It survived because the
+suite's recovery examples redeem *one* code, and one code passes half the time.
+
+**Fixed in both directions:**
+
+- **Generation no longer produces `-`.** A code is redrawn if it contains one, rather than
+  substituted — replacing `-` with a fixed character would make that character twice as likely
+  and quietly cost a bit of entropy. At one in sixty-four per character it takes about two
+  draws, and the loop is bounded at thirty-two with an `InfrastructureError` rather than spinning
+  on a random source that is not behaving like one.
+- **Redemption accepts both readings.** Whitespace-stripped first, then whitespace-and-hyphen
+  stripped: the first keeps every already-issued hyphenated code redeemable — which matters,
+  because half the lists in existence hold one — and the second is the code an application
+  displayed in groups and somebody typed with the separators. At most two digest comparisons,
+  both length- and pattern-checked before anything is hashed, on a path that is rate limited and
+  rarely reached.
+
+The regression specs assert **every** code in a list of twenty-five, not the first one, since the
+defect was a coin flip per code.
+
+**Why M3 and not M4.** Same gap as MFA-01: no worked example of the recovery flow, and the
+`Recovery` assurance level is new enough that no consumer's route has been written against it
+yet. `tools/validation/mfa_family_spec.cr` holds eighteen examples across both scenarios,
+`spec/security/mfa_spec.cr` sixty, and `spec/integration/kemal_spec.cr` four over HTTP.

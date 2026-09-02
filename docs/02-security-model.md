@@ -301,6 +301,44 @@ The window is the caller's choice (decision D5). Operations that must call it: c
 email, changing password, disabling MFA, generating or revoking API credentials, and any
 destructive account action.
 
+Strength and recency are separate axes and both are asked for separately: `require_fresh!` is
+recency, `require_assurance!` and `Permission#minimum_assurance` are strength. An API token is
+**never** fresh however recent its authentication is — it sits below `Password`, and an
+automated client cannot re-authenticate interactively, so a destructive account action should
+not be reachable with one in the first place.
+
+A bearer-credentialled request that is refused for either reason gets RFC 9470's
+`insufficient_user_authentication`, plus `max_age` when it was recency that failed — so a client
+can tell "type your password again" from "produce a second factor". `blueprints/0028`.
+
+### Recovery is not a second factor
+
+A recovery code is a printed or stored list. Spending one proves possession of a piece of paper,
+not of a device, so it lands at `AssuranceLevel::Recovery` — above `Password`, below `MFA`:
+
+```crystal
+case KemalIdentity.app.mfa!.redeem_recovery_code(subject, code, except_session_id: current)
+in KemalIdentity::MFA::Verified then env.auth.recovery_verified!   # not mfa_verified!
+in KemalIdentity::Failed        then render_the_same_error_for_every_reason
+end
+```
+
+A permission declared `minimum_assurance: MFA` therefore stays shut after a recovery, which is
+the point: recovery restores access, it does not unlock the sharpest action in the application.
+Prompt for re-enrolment immediately — a session sitting at `Recovery` is a half-finished
+recovery rather than a normal signed-in state.
+
+Redeeming a code also revokes the account's other sessions (`except_session_id` spares the one
+doing the recovery), because "lost" and "taken" look identical from the server. Recovery is
+rate-limited on the same per-account key as a second-factor check, and audited at **warning**
+level with the number of codes left.
+
+Removing the account's **last** confirmed factor voids its recovery codes, for the reason
+`MFA::Service#disable` already did: a list that survives into a later re-enrolment is a full
+bypass of the new factor. `MFA::Service#remove(factor_id, account_id)` refuses to remove a last
+factor unless the caller passes `allow_last: true`, so "remove this device" cannot silently mean
+"turn MFA off". Measured in `blueprints/0025`, MFA-01 and MFA-04.
+
 ## Authorization rules an application writes itself
 
 `Authz::Authorizer` is a seam: the shipped `Authz::RBAC` answers *does this account hold the

@@ -303,10 +303,32 @@ post "/mfa/verify" do |env|
   end
 end
 
+# The recovery step, which is the same shape and a different call: `recovery_verified!` stops at
+# `AssuranceLevel::Recovery` because a printed code is not a device.
+post "/mfa/recover" do |env|
+  principal = env.auth.require!
+
+  case KemalIdentity.app.mfa!.redeem_recovery_code(
+    principal.subject, env.params.body["code"], except_session_id: principal.session_id
+  )
+  in KemalIdentity::MFA::Verified
+    env.auth.recovery_verified!
+    "recovery ok"
+  in KemalIdentity::Failed
+    env.status(401).text("Invalid code")
+  end
+end
+
 # Reachable only once a second factor has been proved.
 get "/vault" do |env|
   env.auth.require_assurance!(KemalIdentity::AssuranceLevel::MFA)
   "vault ok"
+end
+
+# Reachable after a recovery too: getting back in is what recovery is for.
+get "/settings/factors" do |env|
+  env.auth.require_assurance!(KemalIdentity::AssuranceLevel::Recovery)
+  "factor settings"
 end
 
 post "/logout" do |env|
@@ -1272,6 +1294,17 @@ private def enrol_mfa : Bytes
   secret
 end
 
+# The same enrolment, plus a known set of recovery codes.
+#
+# `confirm` returns codes only when it is what turned MFA on for the account, and these examples
+# share one application with everything above — so this asks for a fresh list explicitly rather
+# than depending on being the first enrolment in the file.
+private def enrol_mfa_with_codes : Array(KemalIdentity::Secret)
+  enrol_mfa
+
+  KemalIdentity.app.mfa!.regenerate_recovery_codes("a1")
+end
+
 private def totp_code(secret : Bytes, offset : Int32 = 0) : String
   KemalIdentity::MFA::TOTP.code(
     secret, KemalIdentity::MFA::TOTP.counter(TEST_CLOCK.now) + offset
@@ -1342,6 +1375,67 @@ describe "the second factor over HTTP" do
     session = log_in
 
     request("GET", "/vault", cookies("kemal_identity=#{session}")).status_code.should eq(403)
+  end
+end
+
+# MFA-04 in `blueprints/0025`: a recovery code is a printed list, and before this the documented
+# flow raised the session to `MFA` with it — so the strongest gate in the application was
+# reachable through its weakest path, with nothing in the principal saying which had been used.
+private def submit_recovery(session : String, code : String) : HTTP::Client::Response
+  csrf = fetch_csrf(session)
+
+  post "/mfa/recover", body: "code=#{code}&_csrf=#{csrf.token}", headers: form(csrf, session)
+
+  response
+end
+
+describe "recovery over HTTP" do
+  it "gets the person back in without unlocking what a second factor unlocks" do
+    codes = enrol_mfa_with_codes
+    session = log_in
+
+    recovered = submit_recovery(session, codes.first.reveal)
+    recovered.status_code.should eq(200)
+
+    raised = session_cookie(recovered).or_fail
+
+    # Back in, and able to reach the screen where a new factor is enrolled.
+    request("GET", "/settings/factors", cookies("kemal_identity=#{raised}"))
+      .status_code.should eq(200)
+
+    # And *not* able to reach what `minimum_assurance: MFA` guards. Recovery restores access;
+    # it does not stand in for a device.
+    request("GET", "/vault", cookies("kemal_identity=#{raised}")).status_code.should eq(403)
+  end
+
+  it "rotates the session identifier like any other assurance increase" do
+    codes = enrol_mfa_with_codes
+    session = log_in
+
+    raised = session_cookie(submit_recovery(session, codes.first.reveal)).or_fail
+
+    raised.should_not eq(session)
+    request("GET", "/settings/factors", cookies("kemal_identity=#{session}"))
+      .status_code.should eq(302)
+  end
+
+  it "spends the code, so the same one cannot be presented twice" do
+    codes = enrol_mfa_with_codes
+
+    submit_recovery(log_in, codes.first.reveal).status_code.should eq(200)
+    submit_recovery(log_in, codes.first.reveal).status_code.should eq(401)
+  end
+
+  it "answers the same way for a spent code as for one that never existed" do
+    codes = enrol_mfa_with_codes
+
+    submit_recovery(log_in, codes.first.reveal).status_code.should eq(200)
+
+    spent = submit_recovery(log_in, codes.first.reveal)
+    invented = submit_recovery(log_in, "aaaaaaaaaa")
+
+    spent.status_code.should eq(invented.status_code)
+    spent.body.should eq(invented.body)
   end
 end
 

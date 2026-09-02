@@ -73,6 +73,12 @@ private def code_for(pending, clock, offset : Int32 = 0) : String
   TOTP.code(secret_of(pending), TOTP.counter(clock.now) + offset)
 end
 
+# Enrols, confirms, and hands back the recovery codes that came with turning MFA on.
+private def enrolled_with_codes(service, accounts, clock, label : String = "phone")
+  pending = service.enrol(account(accounts), label)
+  service.confirm(pending.factor.id, code_for(pending, clock)).or_fail.recovery_codes
+end
+
 # Enrols and confirms in one go, for the specs that are about what happens afterwards.
 private def enrolled(service, accounts, clock, label : String = "phone")
   pending = service.enrol(account(accounts), label)
@@ -610,19 +616,90 @@ describe "removing a factor" do
 
   # Removing one of two devices is not "MFA is off", and voiding the codes would surprise
   # somebody in the direction of locking them out.
-  it "leaves the recovery codes alone" do
+  it "leaves the recovery codes alone while another factor remains" do
     service, _, accounts, clock = mfa_harness
     first = enrolled(service, accounts, clock, "laptop")
+    clock.advance(30.seconds)
+    enrolled(service, accounts, clock, "phone")
 
     service.remove(first.factor.id)
 
+    service.enrolled?("a1").should be_true
     service.unused_recovery_codes("a1").should eq(10)
+  end
+
+  # Removing the *last* one is "MFA is off", and then the codes have to go with it — for the
+  # reason `#disable` already voids them. A list written down years ago that survives into a
+  # later re-enrolment is a full bypass of the new factor. MFA-01 in `blueprints/0025`.
+  it "voids the recovery codes when the last factor goes" do
+    service, _, accounts, clock = mfa_harness
+    only = enrolled(service, accounts, clock, "laptop")
+
+    service.remove(only.factor.id).should be_true
+
+    service.enrolled?("a1").should be_false
+    service.unused_recovery_codes("a1").should eq(0)
   end
 
   it "returns false for a factor that was not there" do
     service, _, _, _ = mfa_harness
 
     service.remove("nope").should be_false
+  end
+
+  # A factor id is not secret material — it is in the audit trail and in every management
+  # listing — so the form a route hands a client-supplied id to must be scoped to the caller.
+  # The same defect `ApiTokens::Service#revoke` had before v0.9.0. MFA-01.
+  describe "scoped to an owner" do
+    it "refuses another account's factor" do
+      service, _, accounts, clock = mfa_harness
+      victim = enrolled(service, accounts, clock, "laptop")
+
+      service.remove(victim.factor.id, "somebody-else").should be_false
+      service.factors("a1").size.should eq(1)
+    end
+
+    it "answers the same for a factor that does not exist" do
+      service, _, _, _ = mfa_harness
+
+      service.remove("nope", "a1").should be_false
+    end
+
+    it "refuses the account's last factor unless the caller asks for it" do
+      service, _, accounts, clock = mfa_harness
+      only = enrolled(service, accounts, clock, "laptop")
+
+      # The default is the safe one for a settings screen: "remove this device" must not
+      # silently mean "turn MFA off".
+      service.remove(only.factor.id, "a1").should be_false
+      service.enrolled?("a1").should be_true
+      service.unused_recovery_codes("a1").should eq(10)
+
+      service.remove(only.factor.id, "a1", allow_last: true).should be_true
+      service.enrolled?("a1").should be_false
+      service.unused_recovery_codes("a1").should eq(0)
+    end
+
+    it "removes one of several without the caller having to ask" do
+      service, _, accounts, clock = mfa_harness
+      first = enrolled(service, accounts, clock, "laptop")
+      clock.advance(30.seconds)
+      second = enrolled(service, accounts, clock, "phone")
+
+      service.remove(first.factor.id, "a1").should be_true
+
+      service.factors("a1").map(&.id).should eq([second.factor.id])
+    end
+
+    it "does not count an unconfirmed factor as the one keeping MFA on" do
+      service, _, accounts, clock = mfa_harness
+      confirmed = enrolled(service, accounts, clock, "laptop")
+      service.enrol(account(accounts), "half-finished")
+
+      # Two rows, one confirmed. Removing the confirmed one still leaves the account with no
+      # second factor anybody can produce, so it is still the last one.
+      service.remove(confirmed.factor.id, "a1").should be_false
+    end
   end
 end
 
@@ -690,5 +767,80 @@ describe "configuring the service" do
     expect_raises(KemalIdentity::ConfigurationError, /recovery_code_count/) do
       mfa_harness(recovery_code_count: 0)
     end
+  end
+end
+
+# MFA-04 in `blueprints/0025` found this by redeeming a code the shard had just issued and being
+# told it was malformed. `RandomSource#token` is base64url, whose alphabet contains `-`, and
+# `redeem_recovery_code` stripped `-` as a separator before checking the length — so a code
+# containing one was shortened by a character and rejected. Measured: 46.8% of codes, on the one
+# credential that is the last way in.
+describe "the recovery code alphabet" do
+  it "issues codes that contain no separator at all" do
+    service, _, accounts, clock = mfa_harness(recovery_code_count: 50)
+    codes = enrolled_with_codes(service, accounts, clock)
+
+    codes.size.should eq(50)
+    codes.each do |code|
+      code.reveal.includes?('-').should be_false
+      code.reveal.size.should eq(KemalIdentity::RandomSource.token_length(32))
+    end
+  end
+
+  it "redeems every code it issues" do
+    service, _, accounts, clock = mfa_harness(recovery_code_count: 25)
+    codes = enrolled_with_codes(service, accounts, clock)
+
+    # Not "the first one works": all of them, because the defect was a coin flip per code and a
+    # spec that checked one had an even chance of passing.
+    codes.each do |code|
+      service.redeem_recovery_code("a1", code.reveal).should be_a(KemalIdentity::MFA::Verified)
+    end
+
+    service.unused_recovery_codes("a1").should eq(0)
+  end
+
+  it "still accepts a code that already contains a hyphen, which earlier versions issued" do
+    service, repo, accounts, clock = mfa_harness
+    enrolled(service, accounts, clock, "laptop")
+
+    # A list from before the fix: written straight into the store, hyphen and all.
+    legacy = KemalIdentity::Secret.new("abc-def#{"g" * (KemalIdentity::RandomSource.token_length(32) - 7)}")
+    legacy.reveal.size.should eq(KemalIdentity::RandomSource.token_length(32))
+
+    repo.replace_recovery_codes("a1", [
+      KemalIdentity::MFA::RecoveryCode.new(
+        id: "r1", account_id: "a1", code_digest: legacy.digest, created_at: clock.now
+      ),
+    ])
+
+    service.redeem_recovery_code("a1", legacy.reveal).should be_a(KemalIdentity::MFA::Verified)
+  end
+
+  it "accepts a code typed with the separators an application displayed" do
+    service, repo, accounts, clock = mfa_harness
+    enrolled(service, accounts, clock, "laptop")
+
+    stored = KemalIdentity::Secret.new("h" * KemalIdentity::RandomSource.token_length(32))
+    repo.replace_recovery_codes("a1", [
+      KemalIdentity::MFA::RecoveryCode.new(
+        id: "r1", account_id: "a1", code_digest: stored.digest, created_at: clock.now
+      ),
+    ])
+
+    grouped = stored.reveal.chars.each_slice(4).map(&.join).join('-')
+    grouped.should contain('-')
+
+    service.redeem_recovery_code("a1", " #{grouped} ").should be_a(KemalIdentity::MFA::Verified)
+  end
+
+  it "still refuses something of the wrong length under either reading" do
+    service, _, accounts, clock = mfa_harness
+    enrolled(service, accounts, clock, "laptop")
+
+    KemalIdentity::Testing.should_fail_with(
+      service.redeem_recovery_code("a1", "too-short"),
+      KemalIdentity::FailureReason::MalformedCredential
+    )
   end
 end

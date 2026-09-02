@@ -131,9 +131,14 @@ module KemalIdentity::MFA
     # Returns `nil` when the code does not verify, and `Confirmed` when it does — carrying
     # recovery codes if this is what turned MFA on for the account. Rate limited like any other
     # code submission: an unconfirmed factor is still a guessable secret.
-    def confirm(factor_id : String, code : String) : Confirmed?
+    # `account_id`, when given, is checked against the factor's own: a route that takes the
+    # factor id from a client should pass it, for the reason `#remove` gives. Confirming
+    # somebody else's pending enrolment also needs a code from their secret, so this is the
+    # cheaper of the two guards rather than the load-bearing one.
+    def confirm(factor_id : String, code : String, account_id : String? = nil) : Confirmed?
       factor = @factors.find_factor(factor_id)
       return if factor.nil?
+      return if account_id && factor.account_id != account_id
       return if factor.confirmed?
 
       verdict = @rate_limiter.consume(quota_key(factor.account_id))
@@ -258,10 +263,14 @@ module KemalIdentity::MFA
       end
 
       # Shape before hashing and before any I/O, as with every other bearer secret here.
-      normalised = normalise_recovery_code(code)
-      return failure(account_id, FailureReason::MalformedCredential) if normalised.nil?
+      candidates = recovery_candidates(code)
+      return failure(account_id, FailureReason::MalformedCredential) if candidates.empty?
 
-      unless @factors.consume_recovery_code(account_id, normalised.digest, @clock.now)
+      consumed = candidates.any? do |candidate|
+        @factors.consume_recovery_code(account_id, candidate.digest, @clock.now)
+      end
+
+      unless consumed
         return failure(account_id, FailureReason::InvalidCredential)
       end
 
@@ -294,18 +303,78 @@ module KemalIdentity::MFA
       @factors.unused_recovery_codes(account_id)
     end
 
-    # Removes one factor. Requires fresh authentication at the route.
+    # Removes one factor **by id alone, so it is an administrative call**.
+    #
+    # A route that lets a client name the factor to remove — `DELETE /mfa/factors/:id` — must
+    # use the account-scoped form below, or it will happily remove somebody else's second
+    # factor. A factor id is not secret material: it appears in `mfa.verified` and
+    # `mfa.factor_removed` audit lines and in any management listing, which is the same
+    # reasoning `ApiTokens::Service#revoke` carries.
     #
     # Recovery codes are left alone: removing one of two devices is not "MFA is off", and
     # voiding the codes would be a surprise in the direction of locking somebody out.
-    def remove(factor_id : String) : Bool
+    #
+    # Requires fresh authentication at the route.
+    def remove(factor_id : String, allow_last : Bool = true) : Bool
       factor = @factors.find_factor(factor_id)
       return false if factor.nil?
+
+      if !allow_last && last_confirmed?(factor)
+        Log.info &.emit(
+          "mfa.factor_removal_refused",
+          subject: factor.account_id, factor: factor_id, reason: "last_factor"
+        )
+        return false
+      end
+
       return false unless @factors.delete_factor(factor_id)
+
+      # Only when that was the last one: codes that outlive every factor they were issued
+      # alongside are a bypass of a control that is no longer there. Removing one of two
+      # devices leaves them alone, which is the case above.
+      unless enrolled?(factor.account_id)
+        @factors.replace_recovery_codes(factor.account_id, [] of RecoveryCode)
+      end
 
       Log.info &.emit("mfa.factor_removed", subject: factor.account_id, factor: factor_id)
 
       true
+    end
+
+    # Removes one factor **only if it belongs to `account_id`**, which is what a "remove this
+    # device" button in a user's own settings needs.
+    #
+    # Answers `false` for a factor that belongs to somebody else and for one that does not
+    # exist — the same answer, so a caller cannot use the difference to discover whether an id
+    # is real.
+    #
+    # `allow_last` defaults to **false** here and to true in the administrative form, and the
+    # asymmetry is the point: removing a person's only remaining second factor turns MFA off
+    # for their account, which is a different intent from unregistering a device they still
+    # have two of. A settings screen that means the first says so, and then gets the recovery
+    # codes voided with it.
+    def remove(factor_id : String, account_id : String, allow_last : Bool = false) : Bool
+      factor = @factors.find_factor(factor_id)
+
+      if factor.nil? || factor.account_id != account_id
+        Log.info &.emit(
+          "mfa.factor_removal_refused",
+          subject: account_id, factor: factor_id, reason: "not_owned"
+        )
+        return false
+      end
+
+      remove(factor_id, allow_last: allow_last)
+    end
+
+    # Whether this factor is the only confirmed one its account has.
+    #
+    # An unconfirmed factor does not count: a half-finished enrolment cannot be the thing
+    # standing between an account and having no second factor.
+    private def last_confirmed?(factor : Factor) : Bool
+      return false unless factor.confirmed?
+
+      @factors.factors_for_account(factor.account_id).count(&.confirmed?) <= 1
     end
 
     # Turns MFA off for an account: every factor, and every recovery code with them.
@@ -335,7 +404,7 @@ module KemalIdentity::MFA
 
     private def issue_recovery_codes(account_id : String) : Array(Secret)
       now = @clock.now
-      secrets = Array.new(@recovery_code_count) { Secret.new(@random.token(RECOVERY_CODE_BYTES)) }
+      secrets = Array.new(@recovery_code_count) { generate_recovery_code }
 
       records = secrets.map do |secret|
         RecoveryCode.new(
@@ -351,6 +420,34 @@ module KemalIdentity::MFA
       Log.info &.emit("mfa.recovery_codes_issued", subject: account_id, count: records.size)
 
       secrets
+    end
+
+    # One recovery code, with no `-` in it.
+    #
+    # `RandomSource#token` is base64url, whose alphabet includes `-`, and a code is *typed* —
+    # so `#normalise_recovery_code` strips separators before comparing. Those two facts
+    # together were a defect: measured, **46.8% of freshly issued codes contained a hyphen**,
+    # the strip shortened them by one character, and the length check then rejected them as
+    # `MalformedCredential`. Nearly half of every recovery list could never be redeemed, on the
+    # one credential that is the last way in (`blueprints/0025`, MFA-04).
+    #
+    # Redrawing rather than substituting: replacing `-` with a fixed character would make that
+    # character twice as likely and quietly cost a bit of entropy. A redraw is uniform over the
+    # hyphen-free strings, and with a 1-in-64 chance per character it takes about two draws.
+    #
+    # `_` is left alone: nothing strips it, so it is not ambiguous.
+    private def generate_recovery_code : Secret
+      # Bounded rather than `loop`: a `RandomSource` that returned the same hyphenated string
+      # forever is broken, and spinning on it is worse than saying so.
+      32.times do
+        candidate = @random.token(RECOVERY_CODE_BYTES)
+        return Secret.new(candidate) unless candidate.includes?('-')
+      end
+
+      raise InfrastructureError.new(
+        "could not generate a recovery code without a separator in 32 attempts; " \
+        "the random source is not behaving like one"
+      )
     end
 
     # The counter `code` matches for this factor, or `nil`.
@@ -383,14 +480,40 @@ module KemalIdentity::MFA
     # Recovery codes are shown grouped and in one case; a person typing one back will not
     # reproduce the spacing, so it is stripped before hashing rather than being a reason to
     # reject them.
-    private def normalise_recovery_code(code : String) : Secret?
-      cleaned = code.delete { |char| char.ascii_whitespace? || char == '-' }
+    # What the person may have typed, in the order it is worth trying.
+    #
+    # Two readings of the same input, because `-` is both a separator somebody types and a
+    # character a code can contain:
+    #
+    # 1. **whitespace removed only** — a code that genuinely contains `-`, pasted verbatim.
+    #    Every code issued before this shard stopped generating them holds one about half the
+    #    time, so dropping this reading would strand lists people have already written down;
+    # 2. **whitespace and `-` removed** — a code an application displayed in groups, typed with
+    #    the separators.
+    #
+    # At most two, both length-checked and pattern-checked before anything is hashed, and
+    # identical readings collapse to one. The cost is at most one extra digest comparison on a
+    # path that is rate limited and reached rarely.
+    private def recovery_candidates(code : String) : Array(Secret)
+      expected = RandomSource.token_length(RECOVERY_CODE_BYTES)
+      readings = [
+        code.delete(&.ascii_whitespace?),
+        code.delete { |char| char.ascii_whitespace? || char == '-' },
+      ]
 
-      return if cleaned.empty?
-      return if cleaned.bytesize != RandomSource.token_length(RECOVERY_CODE_BYTES)
-      return unless cleaned.matches?(OpaqueToken::PATTERN)
+      candidates = [] of Secret
 
-      Secret.new(cleaned)
+      readings.each do |cleaned|
+        next if cleaned.bytesize != expected
+        next unless cleaned.matches?(OpaqueToken::PATTERN)
+
+        secret = Secret.new(cleaned)
+        next if candidates.any? { |existing| existing == secret }
+
+        candidates << secret
+      end
+
+      candidates
     end
 
     private def failure(

@@ -269,7 +269,7 @@ module KemalIdentity::Kemal
 
     # Records that a second factor was proved, and raises this session to `AssuranceLevel::MFA`.
     #
-    # Call it after `MFA::Service#verify` or `#redeem_recovery_code` returns `Verified`:
+    # Call it after `MFA::Service#verify` returns `Verified`:
     #
     # ```
     # case KemalIdentity.app.mfa!.verify(env.auth.require!.subject, env.params.body["code"])
@@ -277,6 +277,10 @@ module KemalIdentity::Kemal
     # in KemalIdentity::Failed        then render_the_same_error_for_every_reason
     # end
     # ```
+    #
+    # **Not for a recovery code.** `#recovery_verified!` is that one, and it stops at
+    # `AssuranceLevel::Recovery` — a printed list is not a hardware key, and this method used to
+    # be documented for both.
     #
     # **This rotates the session**, exactly as login does. `docs/02-security-model.md` lists an
     # assurance increase alongside login among the events that must produce a new identifier:
@@ -287,6 +291,28 @@ module KemalIdentity::Kemal
     # freshness window both measure from when the factor was actually proved.
     def mfa_verified! : Principal
       start!(require!, assurance: AssuranceLevel::MFA, mfa_verified_at: @app.clock.now)
+    end
+
+    # Records that a **recovery code** was spent, and raises this session to
+    # `AssuranceLevel::Recovery` — above `Password`, below `MFA`.
+    #
+    # ```
+    # case KemalIdentity.app.mfa!.redeem_recovery_code(subject, code, except_session_id: env.auth.principal?.try(&.session_id))
+    # in KemalIdentity::MFA::Verified then env.auth.recovery_verified!
+    # in KemalIdentity::Failed        then render_the_same_error_for_every_reason
+    # end
+    # ```
+    #
+    # The level is the whole point: somebody who has lost their device gets back in, and an
+    # action guarded by `minimum_assurance: MFA` stays shut until they enrol a real factor
+    # again. Prompt for that enrolment right here — a session sitting at `Recovery` is a
+    # half-finished recovery, not a normal signed-in state.
+    #
+    # Rotates the session, like every other assurance increase. `mfa_verified_at` **is**
+    # stamped: it records when the last second-factor event happened, and how strong that event
+    # was is `assurance`, which is where an application should read strength from.
+    def recovery_verified! : Principal
+      start!(require!, assurance: AssuranceLevel::Recovery, mfa_verified_at: @app.clock.now)
     end
 
     # Starts remembering this browser, and writes the cookie.

@@ -31,6 +31,23 @@ module KemalIdentity
     # A password (or equivalent single factor) was verified in this session's lifetime.
     Password = 20
 
+    # A single-use **recovery code** was spent in place of a second factor.
+    #
+    # Above `Password` because a second thing was proved, and below `MFA` because of what that
+    # thing is: a printed or stored list, phishing-resistant in no sense, held by whoever found
+    # the piece of paper. A recovery code is how somebody gets back *in* after losing a device;
+    # it is not how the sharpest action in the application should become available.
+    #
+    # So a permission declared `minimum_assurance: MFA` — "changing payout details needs
+    # phishing-resistant MFA" — is **not** satisfied by one, while everything at `Password` and
+    # below is. Before this level existed the documented flow raised a recovery redemption to
+    # `MFA`, and the strongest gate in the system was reachable through its weakest path with
+    # nothing in the principal saying so (`blueprints/0025`, MFA-04).
+    #
+    # 25 rather than 21: the gaps of ten are for exactly this, and the midpoint leaves room on
+    # both sides.
+    Recovery = 25
+
     # A second factor was verified in addition to the first.
     MFA = 30
   end
