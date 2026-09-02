@@ -30,7 +30,7 @@ Results are recorded here rather than in the catalogue so that the catalogue sta
 it is — a document with no result for any particular library — and so this one can be re-run
 against a later revision without rewriting it.
 
-**All seven very-high scenarios are done, twenty high-frequency ones, and two medium.**
+**All seven very-high scenarios are done, twenty-one high-frequency ones, and two medium.**
 Nothing below is an assessment made by reading the source; each row cites what was run.
 
 ## Summary
@@ -66,6 +66,7 @@ Nothing below is an assessment made by reading the source; each row cites what w
 | IDP-04 | High | M3 | **M3** | — |
 | AUT-06 | High | M3 | **M3** | Measured across two processes; the tenant a session copies had an unbounded window and no documented trigger |
 | AUT-07 | High | M3 | **M3 → M3** | Fixed after measurement: `max_age` on the step-up challenge. Freshness is still not declarable per permission |
+| HTTP-02 | High | M3 | **M3 → M4** | Fixed after measurement: `PathGuard.new(credentials:)` and `ErrorHandler.new(api_prefixes:)`, with a worked example |
 
 ---
 
@@ -1260,7 +1261,7 @@ either way.
 
 ## Not yet attempted
 
-The remaining twenty-one scenarios — eight high, ten medium, one low, two niche-critical —
+The remaining twenty scenarios — seven high, ten medium, one low, two niche-critical —
 are unstarted.
 
 A note on what "unstarted" means for the ones whose feature is absent — WebAuthn, magic links,
@@ -1836,3 +1837,102 @@ choosing between them is worth a blueprint of its own rather than a line in this
 `tools/validation/aut07_app.cr` is the server the table above was measured against. The fix's own
 regressions live in `spec/integration/kemal_spec.cr` under "step-up", including one that pins the
 absence of `max_age` on a strength denial.
+
+---
+
+## HTTP-02 — Mixed browser session and bearer API in one monolith
+
+**Result: M3 → M4.** Applicable.
+
+One process, three audiences, three subtrees: `/app` for a browser, `/api` for token clients,
+`/shared` for either. Sixteen requests through it — every subtree crossed with every credential,
+and CSRF probed where a cookie can and cannot authenticate.
+
+**All three pass conditions held on the first attempt**, and two of them held because the
+application wrote the missing piece itself. That is what turned this into a fix rather than a
+result — and one of the two gaps is one earlier scenarios had already pointed at. HTTP-01 and
+HTTP-03 both stop at *"the same parameter HTTP-02 wants on `PathGuard`"*, three times between
+them: HTTP-01 for the app-wide redirect, HTTP-03 for app-wide credential precedence. Two of the
+three are closed here; the third — precedence per subtree — is not, and is noted below.
+
+*"Each subtree can declare accepted credential classes"* — the shard had nothing for it.
+`PathGuard` declared authentication, freshness and strength for a subtree, and not *which kind*
+of credential it accepted. So the attempt wrote `CredentialClassGuard`, twenty-five lines over
+`principal.credential.kind`, which works — the machinery has been public since
+`blueprints/0021`.
+
+*"JSON and redirect behaviour are independent"* — `ErrorHandler.new(login_path:)` is one setting
+for the whole process, so the attempt registered the shard's handler **twice**, wrapped in a
+path-scoping handler that reassigns `Kemal::Handler#next`. Also works, and it is the kind of
+thing a consumer should not have to derive.
+
+*"CSRF applies precisely where browser-attached credentials can authenticate"* — holds with no
+help at all, and it is the sharp version of the rule rather than the convenient one:
+
+| Request | Result |
+|---|---|
+| `POST /app/settings`, session cookie, no token | 403 `invalid CSRF token` |
+| `POST /api/items`, bearer only | 200 |
+| `POST /api/items`, bearer **and** session cookie | 403 `invalid CSRF token` |
+
+The last row is the load-bearing one. A request carrying both is still protected, because the
+cookie alone would authenticate it — so an attacker who can trigger the request cross-site does
+not need the token.
+
+**The measured gap, and it is the one an API client actually hits.** With `login_path:` set for
+the browser half, an unauthenticated request to `/api/items` sending no `Accept` header received:
+
+```
+302 Found
+Location: /login
+```
+
+The redirect decision is a *guess* about who is asking — JSON in `Accept`, an
+`X-Requested-With`, or an `Authorization` header. HTTP-01 fixed the third of those in v0.8; what
+is left is the client that sends none: `curl` with no flags, an HTTP library with no default
+`Accept`, or anything probing for a 401 before it authenticates. It gets an HTML redirect for a
+path that serves no HTML.
+
+**Fixed, both halves, as configuration:**
+
+```crystal
+use KemalIdentity::Kemal::ErrorHandler.new(login_path: "/login", api_prefixes: ["/api"])
+use KemalIdentity::Kemal::PathGuard.new(prefix: "/app", credentials: [CredentialKind::Session])
+use KemalIdentity::Kemal::PathGuard.new(prefix: "/api", credentials: [CredentialKind::ApiToken])
+```
+
+Re-measured: **all sixteen rows identical to the hand-written version**, with both hand-written
+handlers deleted. `tools/validation/http02_app_before.cr` keeps the version that needed them, so
+the two can be probed against each other.
+
+Three details that are decisions rather than defaults:
+
+- A wrong-class credential is **403**, not 401. It is valid; it is the wrong door, and 401 would
+  tell a working client to authenticate again in a loop.
+- The class check runs **after** `require!`, so an anonymous request is still a 401 and nobody
+  learns which credential classes a subtree accepts without first holding one.
+- An empty `credentials:` list is refused **at boot**. A subtree that accepts nothing is almost
+  always a list built from configuration that came back empty, and the alternative is 403-ing
+  every request in production.
+
+`CredentialKind::Custom` covers every credential an application's own `RequestAuthenticator`
+establishes, so two custom families are one kind to this parameter. That is stated in the API
+documentation rather than worked around: `CredentialRef#name` is what tells those apart, and a
+subtree selecting on it writes its own handler — which is now a smaller job, because
+`PathPrefix.covers?` is public. The prefix rule was extracted rather than duplicated: `/api`
+covers `/api/items` and not `/apiary`, and there is one implementation of that rather than two
+that almost agree.
+
+**What stays open, and it is HTTP-03's:** credential *precedence* is still app-wide.
+`AuthenticationHandler.new(precedence:)` decides whether a cookie or a bearer header wins when
+both arrive, once, for every route. A monolith can now say which classes each subtree accepts,
+which is enough for the three subtrees above — the guard refuses the wrong class after
+authentication either way — but a deployment that wants `/api` to resolve the bearer credential
+*first* while `/app` resolves the cookie first cannot say so. That needs the handler to choose by
+path, and choosing an order is a sharper decision than accepting a class, so it is left where
+HTTP-03 left it rather than bundled in here.
+
+**M4, not M3.** `examples/mixed_monolith/app.cr` is the whole arrangement with a `curl` line per
+case, CI compiles it on every matrix entry, `docs/04-kemal-integration.md` has the wiring under
+its own heading, and seven examples in `spec/integration/kemal_spec.cr` pin the behaviour —
+including the lookalike-path rule and the boot refusal.

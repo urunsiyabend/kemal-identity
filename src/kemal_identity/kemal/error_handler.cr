@@ -27,7 +27,31 @@ module KemalIdentity::Kemal
     # about the deployment beyond what the application chose.
     DEFAULT_REALM = "api"
 
-    def initialize(@login_path : String? = "/login", @realm : String = DEFAULT_REALM, @app : Application? = nil)
+    @api_prefixes : Array(String)
+
+    # `api_prefixes` names subtrees that must never be redirected, whatever they sent in
+    # `Accept`:
+    #
+    # ```
+    # use KemalIdentity::Kemal::ErrorHandler.new(login_path: "/login", api_prefixes: ["/api"])
+    # ```
+    #
+    # This is for the monolith HTTP-02 describes — HTML pages, a same-origin SPA and
+    # third-party API clients in one process. Without it the redirect decision is a guess made
+    # from the request: `Accept: application/json` and a bearer credential are read as "an API
+    # client is asking", and a client that sends neither — `curl` with no flags, an HTTP library
+    # with no default `Accept`, anything probing for a 401 before it authenticates — receives
+    # `302 Location: /login` for a path that serves no HTML at all.
+    #
+    # A prefix covers its subtree and only its subtree: `/api` covers `/api/items` and not
+    # `/apiary` (`PathPrefix`).
+    def initialize(
+      @login_path : String? = "/login",
+      @realm : String = DEFAULT_REALM,
+      @app : Application? = nil,
+      api_prefixes : Array(String) = [] of String,
+    )
+      @api_prefixes = api_prefixes.map { |prefix| PathPrefix.normalise(prefix) }
     end
 
     def call(env : HTTP::Server::Context)
@@ -99,7 +123,8 @@ module KemalIdentity::Kemal
       #
       # Measured before this: a `curl` sending a bearer token and no `Accept` received
       # `302 Location: /login` (blueprints/0025, HTTP-01).
-      if redirect && !login_path.nil? && !wants_json?(env) && !bearer_presented?(env)
+      if redirect && !login_path.nil? && !wants_json?(env) &&
+         !bearer_presented?(env) && !api_path?(env)
         env.redirect(login_path, status_code: 302)
         return
       end
@@ -164,6 +189,15 @@ module KemalIdentity::Kemal
 
       scheme, _, credential = header.partition(' ')
       scheme.compare("Bearer", case_insensitive: true).zero? && !credential.strip.empty?
+    end
+
+    # Whether this path is in a subtree the application declared as API-only. Configuration
+    # rather than a guess about the client, which is the difference this exists for.
+    private def api_path?(env : HTTP::Server::Context) : Bool
+      return false if @api_prefixes.empty?
+
+      path = env.request.path
+      @api_prefixes.any? { |prefix| PathPrefix.covers?(prefix, path) }
     end
 
     # Content negotiation, narrowly.

@@ -177,6 +177,57 @@ use KemalIdentity::Kemal::PathGuard.new(prefix: "/admin")
 403 respectively, content-negotiating between a redirect to the login page and a JSON body.
 Applications can register their own `error` handlers for these classes instead.
 
+## Pages and an API in one process
+
+One Kemal process usually ends up serving server-rendered pages, a same-origin SPA and
+third-party API clients. Three things then have to be said separately, and each is one argument.
+
+**Which credentials a subtree accepts.**
+
+```crystal
+use KemalIdentity::Kemal::PathGuard.new(
+  prefix: "/app", credentials: [KemalIdentity::CredentialKind::Session]
+)
+use KemalIdentity::Kemal::PathGuard.new(
+  prefix: "/api", credentials: [
+    KemalIdentity::CredentialKind::ApiToken, KemalIdentity::CredentialKind::Jwt,
+  ]
+)
+```
+
+A credential of another kind is a **403** rather than a 401: it is valid, it is simply the wrong
+door, and answering 401 would tell a working client to authenticate again in a loop. The check
+runs after authentication, so an anonymous request is still a 401 and nobody discovers which
+classes a subtree takes without first holding one. A subtree that accepts either credential
+installs no guard and asks in the route.
+
+`CredentialKind::Custom` covers every credential an application's own `RequestAuthenticator`
+establishes, so two custom families are one kind here; `CredentialRef#name` is what tells those
+apart (`blueprints/0021-credential-reference.md`).
+
+**Whether a refusal is a status or a redirect.**
+
+```crystal
+use KemalIdentity::Kemal::ErrorHandler.new(login_path: "/login", api_prefixes: ["/api"])
+```
+
+Without `api_prefixes`, that decision is a guess made from the request: an `Accept` naming JSON,
+an `X-Requested-With`, or an `Authorization` header are read as "an API client is asking".
+A client that sends none of them — `curl` with no flags, an HTTP library with no default
+`Accept`, anything probing for a 401 before it authenticates — receives `302 Location: /login`
+for a path that serves no HTML. `api_prefixes` makes that configuration instead, per subtree,
+while every other path still sends a browser to the login form.
+
+A prefix covers its own subtree and nothing that merely starts with the same characters: `/api`
+covers `/api/items` and not `/apiary`. `KemalIdentity::Kemal::PathPrefix.covers?` is that rule,
+public because an application writing its own handler needs the same one.
+
+**Where CSRF applies**, which needs no argument at all: `CSRFHandler` exempts a request
+authenticated by a bearer token **and nothing else**. A request carrying a token *and* a session
+cookie stays protected, because the cookie alone would authenticate it.
+
+`examples/mixed_monolith/app.cr` is the whole arrangement, with the `curl` lines for each case.
+
 ## Routes: services first, router optional
 
 The shard exposes services. It also ships a mountable `Kemal::Router` for applications that

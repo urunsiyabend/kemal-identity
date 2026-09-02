@@ -1,6 +1,6 @@
 # Examples
 
-Six runnable applications. CI compiles every one of them on every matrix entry, on every
+Seven runnable applications. CI compiles every one of them on every matrix entry, on every
 supported Crystal and at the Kemal floor — an example that has drifted from the API is worse than
 no example.
 
@@ -15,6 +15,7 @@ documentation, and they say *why* rather than *what*.
 | [`ownership`](ownership/app.cr) | `crystal run examples/ownership/app.cr` | "May this person refund **this** invoice." An `Authz::Authorizer` of your own wrapping the shipped RBAC — including the downcast that fails **open** when written the obvious way, and what the grant cache costs on a list endpoint. |
 | [`custom_bearer`](custom_bearer/app.cr) | `crystal run examples/custom_bearer/app.cr` | A credential this shard does not ship — a gateway-issued token — accepted alongside the ones it does, through `bearer_authenticators:`. Read this before writing an authentication handler of your own. |
 | [`multi_issuer_jwt`](multi_issuer_jwt/app.cr) | `crystal run examples/multi_issuer_jwt/app.cr` | A resource server taking JWTs from several partners: one validator per issuer, routed with `JWT.unverified_issuer`, and why two validators cannot simply be chained. |
+| [`mixed_monolith`](mixed_monolith/app.cr) | `crystal run examples/mixed_monolith/app.cr` | Pages, a same-origin SPA and API clients in one process: which credentials each subtree accepts, a redirect for pages and a status for `/api`, and CSRF exactly where a cookie could authenticate. Start here if you serve both. |
 | [`service_account`](service_account/app.cr) | `crystal run examples/service_account/app.cr` | A workload identity — a CI job, a daemon. Provision without human-only fields, issue a scoped credential, prove every interactive path is closed, deprovision. Prints a trace rather than serving. |
 
 Each server example prints the credentials it seeded, with `curl` lines in its header comment.

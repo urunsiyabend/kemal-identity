@@ -163,7 +163,10 @@ ACCOUNTS.insert(KemalIdentity::Testing.account(id: "a2", login: "grace@example.c
 
 # ErrorHandler outermost, so it catches what a route or a guard raises. CSRFHandler after
 # authentication, because the token binds to the session. Never at position 0.
-use KemalIdentity::Kemal::ErrorHandler.new(login_path: "/login")
+# `api_prefixes:` so that /api answers rather than redirecting, whatever the client sent in
+# `Accept` — the mixed monolith HTTP-02 describes, where the same process serves pages and an
+# API and the redirect decision cannot be one setting for both.
+use KemalIdentity::Kemal::ErrorHandler.new(login_path: "/login", api_prefixes: ["/api"])
 use KemalIdentity::Kemal::AuthenticationHandler.new
 # The migration seam: temporary, registered after authentication so it sees only requests that
 # no live credential resolved, and ahead of CSRF so a token binds to the session it adopted.
@@ -177,6 +180,15 @@ use LEGACY_HANDLER
 use KemalIdentity::Kemal::CSRFHandler.new
 use KemalIdentity::Kemal::PathGuard.new(prefix: "/admin")
 use KemalIdentity::Kemal::PathGuard.new(prefix: "/step-up", within: 5.minutes)
+
+# Credential classes per subtree: /pages is for browsers, /api/strict is for API clients, and
+# neither accepts the other's credential. HTTP-02.
+use KemalIdentity::Kemal::PathGuard.new(
+  prefix: "/pages", credentials: [KemalIdentity::CredentialKind::Session]
+)
+use KemalIdentity::Kemal::PathGuard.new(
+  prefix: "/api/strict", credentials: [KemalIdentity::CredentialKind::ApiToken]
+)
 
 # spec-kemal links Kemal's real handler chain, but only once `Kemal.config.setup` has built it.
 # Called here, after the `use` calls, rather than in a `before_each`: `Kemal.config.clear` wipes
@@ -229,6 +241,14 @@ end
 
 get "/step-up/email" do |env|
   "step-up ok"
+end
+
+get "/pages/dashboard" do |env|
+  "dashboard for #{env.auth.require!.subject}"
+end
+
+get "/api/strict/items" do |env|
+  "items for #{env.auth.require!.subject}"
 end
 
 # Whatever renders a form asks for the token here. Asking is also what mints the anonymous
@@ -1465,6 +1485,77 @@ describe "the RFC 6750 challenge" do
     sent = challenge_header.or_fail("a denial must still carry the challenge")
     sent.should_not contain("scope=")
     sent.should_not contain("invoices")
+  end
+end
+
+# HTTP-02: one process, HTML pages, a same-origin SPA and third-party API clients. The three
+# things that have to be independently expressible are the credential classes a subtree takes,
+# whether a refusal renders as a status or a redirect, and where CSRF applies.
+describe "a mixed browser and API monolith" do
+  it "lets a browser subtree take a session and refuse a token" do
+    session = log_in
+    token = issue_api_token.token.reveal
+
+    request("GET", "/pages/dashboard", cookies("kemal_identity=#{session}"))
+      .body.should eq("dashboard for a1")
+
+    # 403 and not 401: the token is perfectly valid, it is the wrong door. A 401 would tell a
+    # working client to authenticate again, which is a loop.
+    refused = request("GET", "/pages/dashboard", bearer(token))
+    refused.status_code.should eq(403)
+    refused.body.should eq(%({"error":"not permitted"}))
+  end
+
+  it "lets an API subtree take a token and refuse a session" do
+    session = log_in
+    token = issue_api_token.token.reveal
+
+    request("GET", "/api/strict/items", bearer(token)).body.should eq("items for a1")
+    request("GET", "/api/strict/items", cookies("kemal_identity=#{session}"))
+      .status_code.should eq(403)
+  end
+
+  # The wrong credential class must not be a way to find out what a subtree accepts before
+  # holding any credential at all: the guard requires authentication first.
+  it "answers an anonymous request to either subtree as unauthenticated" do
+    request("GET", "/api/strict/items").status_code.should eq(401)
+
+    # /pages is not an API prefix, so a browser there still gets the login page.
+    request("GET", "/pages/dashboard").status_code.should eq(302)
+  end
+
+  # Without `api_prefixes:`, this is the case the redirect guess gets wrong: a client that
+  # sends no `Accept` and no credential — curl with no flags, a probe for a 401 — used to
+  # receive `302 Location: /login` for a path that serves no HTML.
+  it "answers an API path with a status rather than a login page" do
+    response = request("GET", "/api/me")
+
+    response.status_code.should eq(401)
+    response.body.should eq(%({"error":"authentication required"}))
+    response.headers["Location"]?.should be_nil
+  end
+
+  it "still redirects a page path for the same client" do
+    response = request("GET", "/guarded-route")
+
+    response.status_code.should eq(302)
+    response.headers["Location"].should eq("/login")
+  end
+
+  # The subtree, and only the subtree, for both parameters.
+  it "does not treat a lookalike path as an API prefix" do
+    KemalIdentity::Kemal::PathPrefix.covers?("/api", "/api").should be_true
+    KemalIdentity::Kemal::PathPrefix.covers?("/api", "/api/items").should be_true
+    KemalIdentity::Kemal::PathPrefix.covers?("/api", "/apiary").should be_false
+    KemalIdentity::Kemal::PathPrefix.covers?("/", "/anything").should be_true
+  end
+
+  it "refuses a credential list that accepts nothing, at boot" do
+    expect_raises(KemalIdentity::ConfigurationError, /at least one kind/) do
+      KemalIdentity::Kemal::PathGuard.new(
+        prefix: "/api", credentials: [] of KemalIdentity::CredentialKind
+      )
+    end
   end
 end
 

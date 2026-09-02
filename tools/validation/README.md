@@ -27,6 +27,8 @@ that way rather than in-process.
 | `aut06_setup.cr`, `aut06_watcher.cr`, `aut06_revoke.cr` | AUT-06 — the two-process wall-clock measurement. Not specs: build all three, `aut06_setup <db> <migration.sql>`, then run the watcher and the revoker against the same file |
 | `aut07_spec.cr` | AUT-07 — assurance per permission, strength against freshness, and a token with a recent timestamp |
 | `aut07_app.cr` | AUT-07 — the server the challenge table was measured against. Needs `AUT07_DB`, `AUT07_CREDS`, `AUT07_PORT` and `KEMAL_IDENTITY_ROOT` |
+| `http02_app.cr` | HTTP-02 — pages, an SPA and API clients in one process, wired with `credentials:` and `api_prefixes:`. Needs `HTTP02_DB`, `HTTP02_CREDS`, `HTTP02_PORT` and `KEMAL_IDENTITY_ROOT` |
+| `http02_app_before.cr` | HTTP-02 as it had to be written before those two parameters existed: a hand-written credential-class guard and a hand-written path-scoped `ErrorHandler`. Kept so the two can be probed against each other |
 | `tok01_spec.cr` | TOK-01, AUT-03 — two differently scoped tokens for one account |
 | `tok01_lookups_spec.cr` | TOK-01 hot path — counts `find_by_digest` calls per authentication |
 | `dev02_after_spec.cr` | DEV-02 after the fix — `require "kemal_identity/testing"`, nothing reaching into `spec/` |
