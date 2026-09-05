@@ -267,52 +267,100 @@ module KemalIdentity::Kemal
       )
     end
 
-    # Records that a second factor was proved, and raises this session to `AssuranceLevel::MFA`.
-    #
-    # Call it after `MFA::Service#verify` returns `Verified`:
+    # Records a proved second factor, and raises this session to the assurance **that proof**
+    # earns — `AssuranceLevel::MFA` for a factor, `Recovery` for a spent recovery code.
     #
     # ```
-    # case KemalIdentity.app.mfa!.verify(env.auth.require!.subject, env.params.body["code"])
-    # in KemalIdentity::MFA::Verified then env.auth.mfa_verified!
+    # case result = KemalIdentity.app.mfa!.verify(env.auth.require!.subject, env.params.body["code"])
+    # in KemalIdentity::MFA::Verified then env.auth.elevate!(result)
     # in KemalIdentity::Failed        then render_the_same_error_for_every_reason
     # end
     # ```
     #
-    # **Not for a recovery code.** `#recovery_verified!` is that one, and it stops at
-    # `AssuranceLevel::Recovery` — a printed list is not a hardware key, and this method used to
-    # be documented for both.
+    # The same line takes a recovery redemption, and lands on `Recovery` instead, because the
+    # result says which happened. That is the whole point of this method existing next to
+    # `#mfa_verified!` and `#recovery_verified!`: `MFA::Service#verify` and
+    # `#redeem_recovery_code` return the *same* `MFA::Verified`, so an application picking
+    # between those two by hand is one forgotten branch away from letting a printed code
+    # satisfy `minimum_assurance: MFA` — which is `blueprints/0025` MFA-04 arriving through the
+    # front door instead. Every framework surveyed in `blueprints/0030` gets this wrong in
+    # exactly that way; the fix is to stop asking the application.
+    #
+    # `Failed` cannot be passed, so separating success from failure stays the compiler's
+    # business rather than a convention.
+    #
+    # **Monotone.** A session already at `MFA` that spends a recovery code stays at `MFA`: the
+    # factor really was proved earlier in this session and that fact did not expire. Only the
+    # ceiling is monotone — `mfa_verified_at` is restamped either way, so recency still measures
+    # from the most recent second-factor event.
     #
     # **This rotates the session**, exactly as login does. `docs/02-security-model.md` lists an
     # assurance increase alongside login among the events that must produce a new identifier:
     # a session id an attacker learned while it was worth `Password` must not silently become
     # one worth `MFA`.
+    def elevate!(result : MFA::Verified) : Principal
+      earned = result.by_recovery_code? ? AssuranceLevel::Recovery : AssuranceLevel::MFA
+      principal = require!
+
+      start!(
+        principal,
+        assurance: {principal.assurance, earned}.max,
+        mfa_verified_at: @app.clock.now,
+      )
+    end
+
+    # Records that a second factor was proved, and raises this session to `AssuranceLevel::MFA`.
     #
-    # `mfa_verified_at` is stamped from the application's clock, so `require_assurance!` and a
-    # freshness window both measure from when the factor was actually proved.
+    # **Superseded by `#elevate!`**, which reads the level out of the verification result rather
+    # than trusting the caller to have branched. Prefer that: this method cannot tell a factor
+    # from a recovery code, so calling it on the wrong path is how a printed list comes to
+    # satisfy `minimum_assurance: MFA`.
+    #
+    # **Not for a recovery code.** `#recovery_verified!` is that one, and it stops at
+    # `AssuranceLevel::Recovery` — a printed list is not a hardware key, and this method used to
+    # be documented for both.
+    #
+    # Rotates the session, like every other assurance increase. `mfa_verified_at` is stamped
+    # from the application's clock, so `require_assurance!` and a freshness window both measure
+    # from when the factor was actually proved.
+    @[Deprecated("Use `#elevate!(result)`, which takes the level from the verification result.")]
     def mfa_verified! : Principal
-      start!(require!, assurance: AssuranceLevel::MFA, mfa_verified_at: @app.clock.now)
+      principal = require!
+
+      start!(
+        principal,
+        assurance: {principal.assurance, AssuranceLevel::MFA}.max,
+        mfa_verified_at: @app.clock.now,
+      )
     end
 
     # Records that a **recovery code** was spent, and raises this session to
     # `AssuranceLevel::Recovery` — above `Password`, below `MFA`.
     #
-    # ```
-    # case KemalIdentity.app.mfa!.redeem_recovery_code(subject, code, except_session_id: env.auth.principal?.try(&.session_id))
-    # in KemalIdentity::MFA::Verified then env.auth.recovery_verified!
-    # in KemalIdentity::Failed        then render_the_same_error_for_every_reason
-    # end
-    # ```
+    # **Superseded by `#elevate!`**, which arrives at the same level from the verification
+    # result. Prefer that: nothing then depends on the application having chosen this method
+    # over `#mfa_verified!` on the right path.
     #
     # The level is the whole point: somebody who has lost their device gets back in, and an
     # action guarded by `minimum_assurance: MFA` stays shut until they enrol a real factor
     # again. Prompt for that enrolment right here — a session sitting at `Recovery` is a
     # half-finished recovery, not a normal signed-in state.
     #
+    # Monotone, like `#elevate!`: a session that already proved a factor keeps `MFA`, because
+    # spending a recovery code afterwards does not unprove the device.
+    #
     # Rotates the session, like every other assurance increase. `mfa_verified_at` **is**
     # stamped: it records when the last second-factor event happened, and how strong that event
     # was is `assurance`, which is where an application should read strength from.
+    @[Deprecated("Use `#elevate!(result)`, which takes the level from the verification result.")]
     def recovery_verified! : Principal
-      start!(require!, assurance: AssuranceLevel::Recovery, mfa_verified_at: @app.clock.now)
+      principal = require!
+
+      start!(
+        principal,
+        assurance: {principal.assurance, AssuranceLevel::Recovery}.max,
+        mfa_verified_at: @app.clock.now,
+      )
     end
 
     # Starts remembering this browser, and writes the cookie.

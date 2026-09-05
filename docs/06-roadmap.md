@@ -345,6 +345,25 @@ implementations found three defects and a NIST requirement this shard did not me
 | A worked example for the MFA family | **open** — both scenarios stay M3 for this reason. Throttling a second factor properly is now five lines of configuration whose reasoning is three documents long, which is the shape that wants an example |
 | The shipped limiters are still per process | **open** — a replicated deployment multiplies every window by the number of processes (2.2× with six workers, OPS-01). The lifetime bound is immune because it lives on the row; the window is not. A shared store behind `RateLimiter` remains the answer |
 
+## v0.12.0 — what a consumer's integration wrote down
+
+**In progress.** A consumer built a full-suite SaaS application against v0.11.1 and listed what
+the integration cost it. Not a catalogue pass: the list is about places where situations with
+different security meaning share one type or one field, and the two largest items have a v1.0
+deadline because they change contracts on the freeze list.
+`blueprints/0030-elevating-a-session-from-its-proof.md` is the first decision.
+
+| Deliverable | State |
+|---|---|
+| One elevation call that reads its level from the proof | **done** — `env.auth.elevate!(result)`. `#verify` and `#redeem_recovery_code` return the same `MFA::Verified`, so the level was the application's choice between two similar-looking methods, and one forgotten branch raises a printed code to full MFA. Measured against five other implementations first: **ASP.NET Core Identity gives a recovery-code sign-in the same `amr=mfa` claim as its authenticator path**, and Auth0, django-otp and Fortify draw no distinction either |
+| Elevation stops downgrading a session | **done** — a session at `MFA` that spends a recovery code stays there. Keycloak cannot step down within a session; ASP.NET and Spring accumulate claims. The downgrade was an artefact of `assurance` being a single scalar, and it cost the person who proved *more* |
+| `mfa_verified!` / `recovery_verified!` | **deprecated** — `@[Deprecated]`, removed at v1.0, which is the last release that may: `env.auth` is frozen from then on |
+| Separate `MFA::FactorVerified` / `RecoveryVerified` result types | **deferred** — with `#elevate!` documented, the split buys a compiler error over a warning on a call site that has to be written wrong deliberately. It also needs a question settled first: **the freeze list names no MFA type at all**, so whether these results freeze at v1.0 is undecided, and that decides whether the split has a deadline. `blueprints/0030` decision 4 |
+| Per-method authentication evidence | **open** — "did they type their password in the last ten minutes" has no answer today: `authenticated_at` is restamped by every assurance increase, so a TOTP satisfies a `require_fresh!` that meant a password. Changes `Principal` and `Sessions::Record`, so **v1.0 is the deadline**. Keycloak's `{level: timestamp}` session note is the same design from the other direction |
+| A step-up refusal carrying its requirement | **open** — `FreshAuthenticationRequiredError#max_age` and its absence are the only signal, so an application infers `error.max_age ? "fresh" : "mfa"`. That inference was already wrong when `Recovery` was added in v0.10.0. Not on the freeze list, so it can land any time |
+| Application context on an OIDC `Pending` | **open** — account-linking needs the flow's intent bound to the flow, and the shard's own signed pending codec is where it belongs. `OIDC::Pending` and `PendingCodec` are frozen at v1.0, so this moves up the list rather than down |
+| Middleware order validated at boot | **open** — the wrong order compiles and fails at runtime. `use` appends to `Kemal::Config::CUSTOM_HANDLERS`; `Kemal.config.handlers` stays empty until `Kemal.run` calls `setup`, so a boot-time check reads the former. Nothing here is frozen |
+
 ## Storage adapters beyond `crystal-db`
 
 Postgres and SQLite ship, both written against `crystal-db` directly. Adapters for the ORMs

@@ -293,9 +293,9 @@ end
 post "/mfa/verify" do |env|
   principal = env.auth.require!
 
-  case KemalIdentity.app.mfa!.verify(principal.subject, env.params.body["code"])
+  case result = KemalIdentity.app.mfa!.verify(principal.subject, env.params.body["code"])
   in KemalIdentity::MFA::Verified
-    env.auth.mfa_verified!
+    env.auth.elevate!(result)
     "mfa ok"
   in KemalIdentity::Failed
     # One message for every reason, as everywhere else.
@@ -303,16 +303,17 @@ post "/mfa/verify" do |env|
   end
 end
 
-# The recovery step, which is the same shape and a different call: `recovery_verified!` stops at
-# `AssuranceLevel::Recovery` because a printed code is not a device.
+# The recovery step, which is the same shape and the *same* call: `elevate!` reads
+# `by_recovery_code?` off the result and stops at `AssuranceLevel::Recovery`, because a printed
+# code is not a device.
 post "/mfa/recover" do |env|
   principal = env.auth.require!
 
-  case KemalIdentity.app.mfa!.redeem_recovery_code(
+  case result = KemalIdentity.app.mfa!.redeem_recovery_code(
     principal.subject, env.params.body["code"], except_session_id: principal.session_id
   )
   in KemalIdentity::MFA::Verified
-    env.auth.recovery_verified!
+    env.auth.elevate!(result)
     "recovery ok"
   in KemalIdentity::Failed
     env.status(401).text("Invalid code")
@@ -1436,6 +1437,25 @@ describe "recovery over HTTP" do
 
     spent.status_code.should eq(invented.status_code)
     spent.body.should eq(invented.body)
+  end
+
+  # `#elevate!` is monotone. The device really was proved earlier in this session, and spending a
+  # recovery code afterwards does not unprove it — so the person keeps what they had already
+  # unlocked. The previous behaviour took the session from `MFA` down to `Recovery` and shut the
+  # vault door behind them.
+  it "does not lower a session that has already proved a factor" do
+    secret = enrol_mfa
+    codes = KemalIdentity.app.mfa!.regenerate_recovery_codes("a1")
+    session = log_in
+
+    TEST_CLOCK.advance(30.seconds)
+    raised = session_cookie(submit_code(session, totp_code(secret))).or_fail
+
+    request("GET", "/vault", cookies("kemal_identity=#{raised}")).status_code.should eq(200)
+
+    recovered = session_cookie(submit_recovery(raised, codes.first.reveal)).or_fail
+
+    request("GET", "/vault", cookies("kemal_identity=#{recovered}")).status_code.should eq(200)
   end
 end
 

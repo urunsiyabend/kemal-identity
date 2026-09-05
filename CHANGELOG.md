@@ -1,5 +1,69 @@
 # Changelog
 
+## v0.12.0 — 2026-09-03
+
+The first of the items a consumer's full-suite SaaS integration wrote down against v0.11.1.
+`blueprints/0030-elevating-a-session-from-its-proof.md` is the decision, and it measures five
+other implementations first.
+
+A minor rather than a patch: one method is added to `env.auth`, two are deprecated, and one
+behaviour an application may be observing changes.
+
+### Added: `env.auth.elevate!(result)`, one call for both second-factor paths
+
+`MFA::Service#verify` and `#redeem_recovery_code` return the same `MFA::Verified`, so which of
+them happened — and therefore whether the session may reach `AssuranceLevel::MFA` or must stop
+at `Recovery` — was a choice the application made between two similar-looking methods:
+
+```crystal
+in KemalIdentity::MFA::Verified
+  env.auth.mfa_verified!        # or recovery_verified!, and nothing said which
+```
+
+One forgotten branch there raises a printed recovery code to full MFA, which is `blueprints/0025`
+MFA-04 arriving through the front door. The result already knows which credential answered:
+
+```crystal
+case result = KemalIdentity.app.mfa!.verify(principal.subject, code)
+in KemalIdentity::MFA::Verified then env.auth.elevate!(result)
+in KemalIdentity::Failed        then render_the_same_error_for_every_reason
+end
+```
+
+The identical line after `#redeem_recovery_code` lands on `Recovery` instead. `Failed` still
+cannot be passed, so the exhaustive `case` stays the compiler's business.
+
+Worth saying what the reading found, because it is the argument for the shape: **ASP.NET Core
+Identity's recovery-code sign-in adds `new Claim("amr", "mfa")`, the same claim as its
+authenticator path**; Auth0's documented step-up check is satisfied by a recovery code;
+django-otp's `is_verified()` is a boolean; Fortify's one challenge endpoint takes either. Only
+Keycloak can express the distinction, as realm configuration rather than as a property of the
+credential. `AssuranceLevel::Recovery` was already stricter than all of them — which is exactly
+why nothing but this shard's own types can stop the wrong call.
+
+### Changed: elevation is monotone
+
+A session already at `MFA` that spends a recovery code now **stays** at `MFA`. It previously
+dropped to `Recovery`, so somebody who proved a device and *then* used a code lost access to
+everything `minimum_assurance: MFA` guards — having proved more than the person who did not.
+The device was really proved, and spending a code afterwards does not unprove it.
+
+Prior art is unanimous: Keycloak keeps the levels reached in a session note with timestamps and
+has no way to step down within a session; ASP.NET and Spring Security accumulate claims and
+authorities, and a set never loses a member. The question only arose here because `assurance` is
+a single ordered scalar, so the latest event overwrote instead of joining.
+
+Only the ceiling is monotone — `mfa_verified_at` is restamped by every second-factor event, so
+recency still measures from the most recent one, and `#redeem_recovery_code` still revokes the
+account's other sessions. If you relied on the downgrade as a "re-enrol before continuing" gate,
+read `mfa_verified_at` and the `mfa.recovery_code_used` event instead.
+
+### Deprecated: `mfa_verified!` and `recovery_verified!`
+
+Both carry `@[Deprecated]` and both are now monotone. They will be **removed in v1.0**, which is
+the last release that may remove them: `env.auth` is on the freeze list. Replace either with
+`elevate!(result)`.
+
 ## v0.11.1 — 2026-09-02
 
 **Fixes a break in the PostgreSQL adapter shipped by v0.11.0.** Reading any MFA factor raised

@@ -317,11 +317,22 @@ A recovery code is a printed or stored list. Spending one proves possession of a
 not of a device, so it lands at `AssuranceLevel::Recovery` — above `Password`, below `MFA`:
 
 ```crystal
-case KemalIdentity.app.mfa!.redeem_recovery_code(subject, code, except_session_id: current)
-in KemalIdentity::MFA::Verified then env.auth.recovery_verified!   # not mfa_verified!
+case result = KemalIdentity.app.mfa!.redeem_recovery_code(subject, code, except_session_id: current)
+in KemalIdentity::MFA::Verified then env.auth.elevate!(result)
 in KemalIdentity::Failed        then render_the_same_error_for_every_reason
 end
 ```
+
+`elevate!` takes the level from the result rather than from the caller, and the identical line
+after `MFA::Service#verify` lands on `MFA` instead. Both paths return the same
+`MFA::Verified`, so choosing between `mfa_verified!` and `recovery_verified!` by hand was one
+forgotten branch away from raising a printed code to full MFA — `blueprints/0030` measures how
+every comparable framework does exactly that. Those two methods are deprecated.
+
+It is **monotone**: a session that already proved a factor and then spends a recovery code stays
+at `MFA`, because the device was really proved and spending a code afterwards does not unprove
+it. `mfa_verified_at` is restamped either way, so recency measures from the latest second-factor
+event.
 
 A permission declared `minimum_assurance: MFA` therefore stays shut after a recovery, which is
 the point: recovery restores access, it does not unlock the sharpest action in the application.
