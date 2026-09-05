@@ -104,6 +104,46 @@ password typed", so a route adopting the new guard refuses them until the person
 The shared `SessionRepository` contract now asserts the round-trip: an adapter that drops the
 column produces a guard nobody can satisfy, visible only on the sensitive route it protects.
 
+### Added: a step-up refusal says what would satisfy it
+
+`FreshAuthenticationRequiredError` carried one bit — whether `max_age` was present — and
+`blueprints/0028` made that deliberate: a window means recency, its absence means strength. So
+applications inferred `error.max_age ? "fresh" : "mfa"`.
+
+That inference broke twice. v0.10 added `AssuranceLevel::Recovery`, so an absent window now
+covers three levels rather than one. And `require_recent_password!` above refuses *with* a
+window and means a different prompt from `require_fresh!` — making the two guards an application
+most needs to tell apart the two that looked identical.
+
+```crystal
+error.requirement.minimum_assurance   # AssuranceLevel?
+error.requirement.max_age             # Time::Span?
+error.requirement.method              # AuthenticationMethod?
+```
+
+| Guard | Requirement |
+|---|---|
+| `require_fresh!(within:)` | `max_age` |
+| `require_recent_password!(within:)` | `max_age` **and** `method: Password` |
+| `require_assurance!(level)` | `minimum_assurance` |
+| `authorize!` where `step_up?` | `minimum_assurance`, when the denial knows it |
+
+`#max_age` stays as a delegating reader, so nothing that reads it breaks. `Authz::Forbidden`
+gains `#minimum_assurance`, filled by `RBAC` from `Permission#minimum_assurance` — it was known
+at the moment of refusal and discarded, and neither the response layer nor a route can read a
+permission's declaration to recover it.
+
+`AuthenticationMethod` is born with one member, `Password`, because that is the only proof whose
+own recency this shard records. A member with no evidence behind it would compile into a guard
+nobody can satisfy.
+
+**The wire is unchanged**: still `403` with `max_age` and nothing else. Publishing `acr_values`
+reopens `blueprints/0028`, and answering the password case with its own status code — as
+Laravel's `423 Locked` does — reopens `blueprints/0026`. Both are their own decisions;
+`blueprints/0032-what-a-refusal-asks-for.md` records why neither is smuggled in here, and what
+ASP.NET Core (`AuthorizationFailure.FailedRequirements`) and Spring Security 7
+(`FactorAuthorizationDecision`) do instead.
+
 ### Deprecated: `mfa_verified!` and `recovery_verified!`
 
 Both carry `@[Deprecated]` and both are now monotone. They will be **removed in v1.0**, which is

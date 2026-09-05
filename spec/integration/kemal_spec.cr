@@ -345,6 +345,33 @@ post "/settings/identities" do |env|
   "identity linked"
 end
 
+# What an application actually does with a step-up refusal: pick the prompt.
+#
+# Three guards, three different instructions, and before `StepUpRequirement` the only thing a
+# route could read was whether a window was present — which cannot separate the first two.
+private def step_up_prompt(requirement : KemalIdentity::StepUpRequirement) : String
+  if requirement.method == KemalIdentity::AuthenticationMethod::Password
+    return "type your password again"
+  end
+
+  level = requirement.minimum_assurance
+  return "produce a #{level} credential" if level
+
+  "re-authenticate"
+end
+
+get "/step-up-prompt" do |env|
+  case env.params.query["kind"]?
+  when "password"  then env.auth.require_recent_password!(within: 10.minutes)
+  when "assurance" then env.auth.require_assurance!(KemalIdentity::AssuranceLevel::MFA)
+  else                  env.auth.require_fresh!(within: 10.minutes)
+  end
+
+  "satisfied"
+rescue error : KemalIdentity::FreshAuthenticationRequiredError
+  env.status(403).text(step_up_prompt(error.requirement))
+end
+
 # Reachable only once a second factor has been proved.
 get "/vault" do |env|
   env.auth.require_assurance!(KemalIdentity::AssuranceLevel::MFA)
@@ -1558,6 +1585,38 @@ describe "confirming the password specifically" do
     restored = cookie_of(response, "kemal_identity").or_fail
 
     link_identity(restored).status_code.should eq(403)
+  end
+end
+
+private def prompt(session : String, kind : String) : String
+  request("GET", "/step-up-prompt?kind=#{kind}", cookies("kemal_identity=#{session}")).body
+end
+
+describe "what a step-up refusal asks for" do
+  # The two refusals that both carry a window, and mean different prompts. Telling them apart
+  # is the whole reason the requirement is structured.
+  it "separates a password refusal from an ordinary freshness refusal" do
+    session = log_in
+
+    TEST_CLOCK.advance(11.minutes)
+
+    prompt(session, "password").should eq("type your password again")
+    prompt(session, "fresh").should eq("re-authenticate")
+  end
+
+  # `max_age` is absent here, and its absence used to be the only signal — which meant "MFA"
+  # whatever level was actually asked for. `AssuranceLevel::Recovery` made that reading wrong.
+  it "names the level a strength refusal wants" do
+    session = log_in
+
+    prompt(session, "assurance").should eq("produce a MFA credential")
+  end
+
+  it "says nothing to render when the guard is satisfied" do
+    session = log_in
+
+    prompt(session, "fresh").should eq("satisfied")
+    prompt(session, "password").should eq("satisfied")
   end
 end
 

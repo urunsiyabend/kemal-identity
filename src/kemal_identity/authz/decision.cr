@@ -98,12 +98,23 @@ module KemalIdentity::Authz
 
     getter tenant_id : String?
 
+    # The level that would have satisfied the permission, when `InsufficientAssurance` is why
+    # this was refused.
+    #
+    # `RBAC` compares `Permission#minimum_assurance` and had the number in hand at the moment
+    # it refused; dropping it left `env.auth.authorize!` raising a step-up with nothing to say
+    # about what the step is. `nil` for every other reason, including an application
+    # authorizer's own `step_up: true` denial — that authorizer knows its own policy and this
+    # shard does not.
+    getter minimum_assurance : AssuranceLevel?
+
     private def initialize(
       @permission : String,
       @reason : DenialReason,
       @step_up : Bool,
       @code : String? = nil,
       @tenant_id : String? = nil,
+      @minimum_assurance : AssuranceLevel? = nil,
     )
     end
 
@@ -129,8 +140,15 @@ module KemalIdentity::Authz
 
     # A role grants this and the caller holds it, but has not proved who they are strongly
     # enough. The one built-in reason that step-up can fix.
-    def self.insufficient_assurance(permission : String, tenant_id : String? = nil) : self
-      new(permission, DenialReason::InsufficientAssurance, step_up: true, tenant_id: tenant_id)
+    def self.insufficient_assurance(
+      permission : String,
+      tenant_id : String? = nil,
+      minimum_assurance : AssuranceLevel? = nil,
+    ) : self
+      new(
+        permission, DenialReason::InsufficientAssurance,
+        step_up: true, tenant_id: tenant_id, minimum_assurance: minimum_assurance
+      )
     end
 
     # The account holds the permission; the credential presenting the request does not.

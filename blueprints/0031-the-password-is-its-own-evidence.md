@@ -59,14 +59,23 @@ express "authenticated recently *by this method*".
 | **Laravel** (core, since 6.2) | `password.confirm` middleware over `Illuminate\Auth\Middleware\RequirePassword`. Session key `auth.password_confirmed_at`, separate from the login time; window from `auth.password_timeout`, three hours by default. Jetstream gates enabling and disabling 2FA with it |
 | **django-sudo** (Sentry's, the de facto Django answer) | `@sudo_required`. The elevation lives in its **own cookie with its own TTL**, deliberately shorter than the session, so a long session carries a short elevation. Logging in elevates automatically |
 | **Phoenix 1.8** (core generator) | `require_sudo_mode` plug and `sudo_mode?/2` over an `authenticated_at` field, with the window in minutes. Method-**agnostic**: recency only |
+| **Spring Security 7** (October 2025) | The general model, on the application side. `FactorGrantedAuthority` is issued per completed authentication "with a name and a timestamp" — `FACTOR_PASSWORD`, `FACTOR_OTT`, `FACTOR_X509` — and a route declares per-factor recency: `requireFactor(f -> f.passwordAuthority().validDuration(Duration.ofMinutes(5)))` |
 
-So the two mainstream app-side implementations do not build a general method→timestamp map at
-all. They add **one** timestamp — the password's — keep it separate from the login time, and
-give it its own window. Only Phoenix generalises, and it generalises in the other direction, to
-plain recency.
+So of the four, two keep **one** extra timestamp — the password's — separate from the login time
+and with its own window; one generalises in the other direction, to plain recency; and one, the
+newest, builds the full per-factor map with a validity window per factor.
 
-That is the design this decision takes, and it is a quarter of the size of the general evidence
-model the consumer's notes proposed.
+This decision takes the Laravel/django-sudo shape rather than Spring's, and the reason is not
+that Spring is wrong. Spring's factor set is *wide* — password, one-time token, X.509, and
+whatever an application registers — and Spring pays for it with an authority set on the
+authentication object, where adding a factor costs nothing. This shard's set is narrow:
+password, federated, second factor, recovery, of which the last two are already answered by
+`mfa_verified_at` and `assurance`. And the cost here is not nothing: a general map means a JSON
+column parsed on the session-resolve path, which is the one query on every authenticated
+request, and a `Sessions::Record` that freezes at v1.0 for third-party adapters to implement.
+
+One timestamp answers every question the consumer's integration actually asked, at a quarter of
+the size.
 
 ## Decisions
 
@@ -139,6 +148,15 @@ item on the consumer's list, and it is deliberately not smuggled in here.
   `#require_fresh!` already does. "Recent enough" for linking an identity is not "recent
   enough" for deleting an account.
 - Deliberately **not** done: a general evidence map, `authentication_methods` in the shape of
-  `amr`, or per-method windows for anything but the password. Nothing in the survey supports
-  building them on the application side, and the IANA registry cannot even name half of what
-  this shard would have to put in them.
+  `amr`, or per-method windows for anything but the password. Spring Security 7 shows the full
+  version is buildable on the application side; the reasons not to build it here are the two
+  above — a narrow factor set, and a hot-path row that freezes at v1.0 — rather than an absence
+  of prior art. The `amr` shape specifically stays out regardless: the IANA registry cannot name
+  half of what this shard would have to put in it (`blueprints/0030`).
+
+  **The one slot with a plausible future caller is `federated_verified_at`**, for "you signed in
+  with the provider three days ago; go back to it before deleting the account". It is left out
+  because no guard would read it today, and a stored fact nothing asks about is a column two
+  adapters can silently disagree about for nothing. This is a decision rather than an omission,
+  and it has a deadline: `Sessions::Record` freezes at v1.0, and after that a third-party
+  adapter cannot be asked to start persisting a new field. Revisit it at that gate.

@@ -84,8 +84,12 @@ module KemalIdentity::Kemal
       return principal if principal.fresh?(within: within, now: @app.clock.now)
 
       # The window travels with the refusal, so `ErrorHandler` can answer an API client with
-      # RFC 9470's `max_age` rather than an unqualified "insufficient".
-      raise FreshAuthenticationRequiredError.new("fresh authentication required", max_age: within)
+      # RFC 9470's `max_age` rather than an unqualified "insufficient". No method is named:
+      # any proof recent enough satisfies this one.
+      raise FreshAuthenticationRequiredError.new(
+        "fresh authentication required",
+        StepUpRequirement.new(max_age: within)
+      )
     end
 
     # The principal, if the **password** behind it was typed within `within`.
@@ -118,11 +122,14 @@ module KemalIdentity::Kemal
       principal = require!
       return principal if principal.password_verified?(within: within, now: @app.clock.now)
 
-      # Same error, and therefore the same 403 and the same RFC 9470 `max_age`, as any other
-      # recency refusal. What a client cannot yet read off it is *which* credential would
-      # satisfy it — that is a structured step-up requirement, and it is its own decision.
+      # Same error and therefore the same 403 and the same RFC 9470 `max_age` as any other
+      # recency refusal — and the requirement names the method, which is the only thing that
+      # separates this refusal from `#require_fresh!`'s. An application reads
+      # `error.requirement.method` to know it must prompt for the password specifically rather
+      # than for any re-authentication.
       raise FreshAuthenticationRequiredError.new(
-        "recent password confirmation required", max_age: within
+        "recent password confirmation required",
+        StepUpRequirement.new(max_age: within, method: AuthenticationMethod::Password)
       )
     end
 
@@ -131,7 +138,10 @@ module KemalIdentity::Kemal
       principal = require!
       return principal if principal.at_least?(level)
 
-      raise FreshAuthenticationRequiredError.new("stronger authentication required")
+      raise FreshAuthenticationRequiredError.new(
+        "stronger authentication required",
+        StepUpRequirement.new(minimum_assurance: level)
+      )
     end
 
     # The principal, if they may perform `permission`.
@@ -192,7 +202,13 @@ module KemalIdentity::Kemal
         # stronger credential would fix asks for one, whatever named it — including an
         # application authorizer's own. See `blueprints/0022`.
         if decision.step_up?
-          raise FreshAuthenticationRequiredError.new("stronger authentication required")
+          # `minimum_assurance` is filled for the built-in `InsufficientAssurance` denial and
+          # nil for an application authorizer's own — that authorizer knows its policy and this
+          # shard does not, so an empty requirement is the honest answer rather than a guess.
+          raise FreshAuthenticationRequiredError.new(
+            "stronger authentication required",
+            StepUpRequirement.new(minimum_assurance: decision.minimum_assurance)
+          )
         end
 
         # The projection, and the only place it is made. `Authz::DenialReason` stays here with

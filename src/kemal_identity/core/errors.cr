@@ -32,24 +32,40 @@ module KemalIdentity
   # enough, or at too low an assurance level. Mapped to 403 — the caller is known, they
   # simply have to prove it again.
   class FreshAuthenticationRequiredError < Error
+    # What would satisfy this refusal: a level, a window, a named method, or nothing.
+    #
+    # The guard that refused knows all of it, and reconstructing it in the response layer from
+    # one nullable field is how "type your password again", "produce a second factor" and "a
+    # token cannot get there at all" became the same prompt.
+    # `blueprints/0032-what-a-refusal-asks-for.md`.
+    getter requirement : StepUpRequirement
+
+    def initialize(message : String? = nil, @requirement : StepUpRequirement = StepUpRequirement.new)
+      super(message)
+    end
+
+    # Convenience for the common recency refusal. `max_age` is named-only and required, so it
+    # cannot collide with the requirement-carrying form above.
+    def initialize(message : String? = nil, *, max_age : Time::Span?)
+      initialize(message, StepUpRequirement.new(max_age: max_age))
+    end
+
     # The freshness window the caller asked for, when *recency* is what failed.
     #
     # `nil` when the requirement was **strength** rather than recency — `require_assurance!`,
-    # or an authorization denial that `step_up?` says a better credential would fix. The two
-    # are different instructions to a client: "type your password again" and "produce a second
-    # factor" are not the same prompt, and a 403 that says only "insufficient" leaves an API
-    # client guessing which.
+    # or an authorization denial that `step_up?` says a better credential would fix.
     #
     # `ErrorHandler` turns this into RFC 9470's `max_age` challenge parameter, which is defined
     # as "the allowable elapsed time in seconds since the last active authentication event" —
     # exactly what `require_fresh!(within:)` means. There is deliberately no counterpart for
-    # the strength case: RFC 9470's other parameter is `acr_values`, whose values are a
-    # deployment's own authentication context class references, and this shard has no
+    # the strength case on the wire: RFC 9470's other parameter is `acr_values`, whose values
+    # are a deployment's own authentication context class references, and this shard has no
     # vocabulary of those to publish. See `blueprints/0028-step-up-challenge-parameters.md`.
-    getter max_age : Time::Span?
-
-    def initialize(message : String? = nil, @max_age : Time::Span? = nil)
-      super(message)
+    #
+    # `#requirement` is where an application reads the rest, including which of the two
+    # window-carrying guards refused.
+    def max_age : Time::Span?
+      @requirement.max_age
     end
   end
 

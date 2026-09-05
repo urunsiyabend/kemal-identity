@@ -61,7 +61,12 @@ module KemalIdentity::Authz
       end
 
       unless principal.at_least?(declared.minimum_assurance)
-        return Forbidden.insufficient_assurance(permission, tenant_id)
+        # The level travels with the denial. It is known here and nowhere else: the response
+        # layer sees a `Forbidden` and the route sees an exception, and neither can read a
+        # permission's declaration.
+        return Forbidden.insufficient_assurance(
+          permission, tenant_id, minimum_assurance: declared.minimum_assurance
+        )
       end
 
       # Last, and the order is the security property.

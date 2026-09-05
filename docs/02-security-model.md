@@ -308,8 +308,28 @@ automated client cannot re-authenticate interactively, so a destructive account 
 not be reachable with one in the first place.
 
 A bearer-credentialled request that is refused for either reason gets RFC 9470's
-`insufficient_user_authentication`, plus `max_age` when it was recency that failed — so a client
-can tell "type your password again" from "produce a second factor". `blueprints/0028`.
+`insufficient_user_authentication`, plus `max_age` when it was recency that failed.
+`blueprints/0028`.
+
+The **application** reads more than the wire carries. `FreshAuthenticationRequiredError#requirement`
+names what would satisfy the refusal — a level, a window, a method, or nothing — so a prompt is
+chosen rather than guessed:
+
+```crystal
+rescue error : KemalIdentity::FreshAuthenticationRequiredError
+  if error.requirement.method == KemalIdentity::AuthenticationMethod::Password
+    # "type your password again"
+  elsif level = error.requirement.minimum_assurance
+    # "produce a #{level} credential"
+  else
+    # "re-authenticate"
+  end
+```
+
+`error.max_age ? "fresh" : "mfa"` was the only reading available before, and it is wrong twice
+over: an absent window covers `Password`, `Recovery` and `MFA`, and `require_recent_password!`
+refuses *with* a window while meaning a different prompt from `require_fresh!`.
+`blueprints/0032`.
 
 ### "Fresh" and "typed their password" are different questions
 

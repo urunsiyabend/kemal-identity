@@ -12,6 +12,25 @@ describe KemalIdentity::Authz::Forbidden do
       denial.reason.should eq(KemalIdentity::Authz::DenialReason::InsufficientAssurance)
     end
 
+    # `blueprints/0032`: the level is known where the refusal is made and nowhere else, so a
+    # denial that drops it leaves the prompt to guesswork.
+    it "names the level that would have satisfied it" do
+      denial = KemalIdentity::Authz::Forbidden.insufficient_assurance(
+        "payouts:edit", minimum_assurance: KemalIdentity::AssuranceLevel::MFA
+      )
+
+      denial.minimum_assurance.should eq(KemalIdentity::AssuranceLevel::MFA)
+    end
+
+    # An application authorizer knows its own policy and this shard does not, so an empty
+    # answer is the honest one rather than a guessed level.
+    it "names no level for a denial that is not about assurance" do
+      KemalIdentity::Authz::Forbidden.not_permitted("invoices:edit").minimum_assurance.should be_nil
+      KemalIdentity::Authz::Forbidden.policy(
+        "invoices:edit", code: "change_window_closed", step_up: true
+      ).minimum_assurance.should be_nil
+    end
+
     # Re-authenticating grants nobody a role, joins nobody to a tenant and declares no
     # permission. Prompting for a second factor in these cases asks for something that cannot
     # help.
