@@ -43,6 +43,15 @@ module KemalIdentity::Sessions
 
     getter mfa_verified_at : Time?
 
+    # When the **password** behind this session was last actually typed, if it ever was.
+    #
+    # Separate from `authenticated_at` because that one is restamped by every assurance
+    # increase, and separate from `assurance` because a level says one factor was proved
+    # without saying which: a federated login sits at `Password` too. `nil` for a session no
+    # password produced — a remembered browser, a federated login, an adopted legacy session —
+    # and a guard reads `nil` as "no", never as "unknown, allow it".
+    getter password_verified_at : Time?
+
     # Moved forward as the user stays active, but **throttled**: only written when
     # `now - last_seen_at` exceeds the configured `touch_interval` (60 s by default).
     # Without that throttle, every authenticated read becomes a write, which is the single
@@ -68,6 +77,7 @@ module KemalIdentity::Sessions
       @absolute_expires_at : Time,
       @tenant_id : String? = nil,
       @mfa_verified_at : Time? = nil,
+      @password_verified_at : Time? = nil,
       @revoked_at : Time? = nil,
     )
       raise ArgumentError.new("id must not be empty") if @id.empty?

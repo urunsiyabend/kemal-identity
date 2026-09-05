@@ -9,8 +9,8 @@ module KemalIdentity::Postgres
 
     SESSION_COLUMNS = <<-SQL
       s.id, s.account_id, s.tenant_id, s.token_digest, s.auth_version, s.assurance,
-      s.created_at, s.authenticated_at, s.mfa_verified_at, s.last_seen_at,
-      s.idle_expires_at, s.absolute_expires_at, s.revoked_at
+      s.created_at, s.authenticated_at, s.mfa_verified_at, s.password_verified_at,
+      s.last_seen_at, s.idle_expires_at, s.absolute_expires_at, s.revoked_at
       SQL
 
     # `accounts_table` exists because `auth_accounts` is a reference implementation. An
@@ -24,13 +24,14 @@ module KemalIdentity::Postgres
       @db.exec(<<-SQL,
         INSERT INTO auth_sessions (
           id, account_id, tenant_id, token_digest, auth_version, assurance,
-          created_at, authenticated_at, mfa_verified_at, last_seen_at,
-          idle_expires_at, absolute_expires_at, revoked_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          created_at, authenticated_at, mfa_verified_at, password_verified_at,
+          last_seen_at, idle_expires_at, absolute_expires_at, revoked_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         SQL
         record.id, record.account_id, record.tenant_id, record.token_digest,
         record.auth_version, record.assurance.value, record.created_at,
-        record.authenticated_at, record.mfa_verified_at, record.last_seen_at,
+        record.authenticated_at, record.mfa_verified_at, record.password_verified_at,
+        record.last_seen_at,
         record.idle_expires_at, record.absolute_expires_at, record.revoked_at)
     rescue error : PQ::PQError
       # The unique index on token_digest exists so that a collision is a loud error rather than
@@ -128,6 +129,7 @@ module KemalIdentity::Postgres
         created_at: row.read(Time),
         authenticated_at: row.read(Time),
         mfa_verified_at: row.read(Time?),
+        password_verified_at: row.read(Time?),
         last_seen_at: row.read(Time),
         idle_expires_at: row.read(Time),
         absolute_expires_at: row.read(Time),

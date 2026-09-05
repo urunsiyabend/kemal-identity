@@ -311,6 +311,37 @@ A bearer-credentialled request that is refused for either reason gets RFC 9470's
 `insufficient_user_authentication`, plus `max_age` when it was recency that failed — so a client
 can tell "type your password again" from "produce a second factor". `blueprints/0028`.
 
+### "Fresh" and "typed their password" are different questions
+
+`require_fresh!` asks when the credential behind `assurance` was last verified, and
+`authenticated_at` is restamped by every assurance increase. So a second factor proved nine
+minutes after login satisfies a ten-minute freshness window that meant *type your password
+again* — and the person proving it need not know the password, since the session was already
+open. `assurance` cannot separate them either: `Password` says one factor was proved, not which
+one, and a federated login sits at that level too.
+
+`auth_sessions.password_verified_at` records when the password itself was last typed:
+
+```crystal
+env.auth.require_recent_password!(within: 10.minutes)
+```
+
+`Passwords::Authenticator` stamps it on the principal it returns, so an ordinary login records
+it and `start!` carries it through every later rotation. A federated login stamps nothing, which
+is the point. `env.auth.password_verified!` records a re-confirmation on a session that already
+exists — use that rather than `start!(result.principal)`, which would drop an `MFA` session back
+to `Password`.
+
+`nil` means **no**, never "unknown, so allow it": a remembered browser, a bearer token, a
+federated login and an account with no password all fail this guard. An OIDC-only deployment
+therefore cannot satisfy it and should be asking `require_fresh!` or re-authenticating through
+the provider instead.
+
+Use it for the operations whose security rests on the password itself — linking a federated
+identity to the account, changing the password, turning off MFA. Laravel's `password.confirm`
+and django-sudo's `@sudo_required` are the same guard; `blueprints/0031` measures both, and
+records why this is one column rather than a general per-method evidence map.
+
 ### Recovery is not a second factor
 
 A recovery code is a printed or stored list. Spending one proves possession of a piece of paper,

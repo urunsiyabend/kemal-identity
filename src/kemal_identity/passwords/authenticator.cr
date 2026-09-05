@@ -106,6 +106,11 @@ module KemalIdentity::Passwords
           # login rotate the session identifier.
           credential: nil,
           tenant_id: account.tenant_id,
+          # The producer stamps its own evidence, exactly as it stamps `assurance`. Nothing
+          # downstream can work out that it was a *password* that answered — `Password` is the
+          # level a federated login reaches too — so if this is not recorded here it cannot be
+          # recovered later. `blueprints/0031`.
+          password_verified_at: @clock.now,
         )
       )
     end

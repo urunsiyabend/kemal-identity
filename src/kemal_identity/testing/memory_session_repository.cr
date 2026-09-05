@@ -144,6 +144,7 @@ module KemalIdentity::Testing
         absolute_expires_at: record.absolute_expires_at,
         tenant_id: record.tenant_id,
         mfa_verified_at: record.mfa_verified_at,
+        password_verified_at: record.password_verified_at,
         revoked_at: revoked_at || record.revoked_at,
       )
     end

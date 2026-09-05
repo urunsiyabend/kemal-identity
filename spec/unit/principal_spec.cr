@@ -90,6 +90,38 @@ describe KemalIdentity::Principal do
       mfa.at_least?(KemalIdentity::AssuranceLevel::Password).should be_true
     end
   end
+
+  describe "#password_verified?" do
+    now = KemalIdentity::Testing::FIXED_NOW
+
+    it "answers false when no password was ever typed for this principal" do
+      # A remembered browser, a bearer token, a federated login, an account with no password.
+      # Fail-closed: the guard refuses rather than reading a missing answer as a yes.
+      principal = KemalIdentity::Testing.principal(password_verified_at: nil)
+
+      principal.password_verified?(within: 10.minutes, now: now).should be_false
+    end
+
+    it "answers within the window and not outside it" do
+      principal = KemalIdentity::Testing.principal(password_verified_at: now - 9.minutes)
+
+      principal.password_verified?(within: 10.minutes, now: now).should be_true
+      principal.password_verified?(within: 5.minutes, now: now).should be_false
+    end
+
+    # The whole reason the field exists: `authenticated_at` moves when a second factor is
+    # proved, and it must not carry the password's recency with it.
+    it "does not follow authenticated_at" do
+      principal = KemalIdentity::Testing.principal(
+        assurance: KemalIdentity::AssuranceLevel::MFA,
+        authenticated_at: now,
+        password_verified_at: now - 30.minutes,
+      )
+
+      principal.fresh?(within: 10.minutes, now: now).should be_true
+      principal.password_verified?(within: 10.minutes, now: now).should be_false
+    end
+  end
 end
 
 describe KemalIdentity::AssuranceLevel do

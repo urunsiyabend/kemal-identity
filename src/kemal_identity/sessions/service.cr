@@ -37,6 +37,7 @@ module KemalIdentity::Sessions
       account : Accounts::Account,
       assurance : AssuranceLevel,
       mfa_verified_at : Time? = nil,
+      password_verified_at : Time? = nil,
     ) : Issued
       raise ArgumentError.new("cannot start a session for a disabled account") if account.disabled?
 
@@ -44,6 +45,7 @@ module KemalIdentity::Sessions
         account: account,
         assurance: assurance,
         mfa_verified_at: mfa_verified_at,
+        password_verified_at: password_verified_at,
       )
 
       # Emitted here rather than in the Kemal layer, so an application driving the service
@@ -109,6 +111,7 @@ module KemalIdentity::Sessions
       account : Accounts::Account,
       assurance : AssuranceLevel? = nil,
       mfa_verified_at : Time? = nil,
+      password_verified_at : Time? = nil,
     ) : Issued
       raise ArgumentError.new("cannot rotate into a disabled account") if account.disabled?
 
@@ -116,6 +119,10 @@ module KemalIdentity::Sessions
         account: account,
         assurance: assurance || record.assurance,
         mfa_verified_at: mfa_verified_at || record.mfa_verified_at,
+        # Carried, not dropped. Rotation replaces an identifier; it does not un-type a password,
+        # and a session that forgot its own evidence every time it rotated would make
+        # `#password_verified?` answer false the instant a second factor was proved.
+        password_verified_at: password_verified_at || record.password_verified_at,
       )
 
       # Revoked after the new row exists. The other order would leave a window in which a
@@ -187,6 +194,7 @@ module KemalIdentity::Sessions
       account : Accounts::Account,
       assurance : AssuranceLevel,
       mfa_verified_at : Time?,
+      password_verified_at : Time? = nil,
     ) : Issued
       now = @clock.now
       token = Token.generate(@random)
@@ -203,6 +211,7 @@ module KemalIdentity::Sessions
         created_at: now,
         authenticated_at: now,
         mfa_verified_at: mfa_verified_at,
+        password_verified_at: password_verified_at,
         last_seen_at: now,
         idle_expires_at: now + @config.idle_timeout,
         absolute_expires_at: now + @config.absolute_timeout,
@@ -247,6 +256,7 @@ module KemalIdentity::Sessions
         absolute_expires_at: record.absolute_expires_at,
         tenant_id: record.tenant_id,
         mfa_verified_at: record.mfa_verified_at,
+        password_verified_at: record.password_verified_at,
         revoked_at: record.revoked_at,
       )
     end
@@ -266,6 +276,7 @@ module KemalIdentity::Sessions
         ),
         mfa_verified_at: record.mfa_verified_at,
         tenant_id: record.tenant_id,
+        password_verified_at: record.password_verified_at,
       )
     end
   end

@@ -135,6 +135,7 @@ module KemalIdentity::Testing
     credential : KemalIdentity::CredentialRef? = nil,
     mfa_verified_at : Time? = nil,
     tenant_id : String? = nil,
+    password_verified_at : Time? = nil,
   ) : KemalIdentity::Principal
     credential ||= if session_id
                      KemalIdentity::CredentialRef.new(
@@ -150,6 +151,7 @@ module KemalIdentity::Testing
       credential: credential,
       mfa_verified_at: mfa_verified_at,
       tenant_id: tenant_id,
+      password_verified_at: password_verified_at,
     )
   end
 end

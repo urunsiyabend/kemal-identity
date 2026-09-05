@@ -88,6 +88,44 @@ module KemalIdentity::Kemal
       raise FreshAuthenticationRequiredError.new("fresh authentication required", max_age: within)
     end
 
+    # The principal, if the **password** behind it was typed within `within`.
+    #
+    # Not the same question as `#require_fresh!`, and the difference is the point. Freshness
+    # asks when the credential behind `assurance` was last verified, and `assurance` is
+    # restamped by every increase — so a second factor proved nine minutes after login
+    # satisfies a ten-minute freshness window that meant "type your password again". And a
+    # federated login sits at `AssuranceLevel::Password` too, so no level distinguishes "they
+    # know the password" from "their identity provider vouched for them".
+    #
+    # This is the guard for an operation whose whole security rests on the password itself:
+    # linking a new federated identity to the account, changing the password, turning off MFA.
+    # Laravel's `password.confirm` middleware and django-sudo's `@sudo_required` are the same
+    # guard; `blueprints/0031` measures both.
+    #
+    # Refuses — never raises — for a principal no password produced: a remembered browser, a
+    # bearer token, a federated login, an account with no password at all. That is the
+    # fail-closed direction. An application whose people sign in only through a provider cannot
+    # satisfy this guard, and should be asking `#require_fresh!` or a provider re-authentication
+    # instead of this.
+    #
+    # ```
+    # post "/settings/identities" do |env|
+    #   env.auth.require_recent_password!(within: 10.minutes)
+    #   # ...
+    # end
+    # ```
+    def require_recent_password!(within : Time::Span) : Principal
+      principal = require!
+      return principal if principal.password_verified?(within: within, now: @app.clock.now)
+
+      # Same error, and therefore the same 403 and the same RFC 9470 `max_age`, as any other
+      # recency refusal. What a client cannot yet read off it is *which* credential would
+      # satisfy it — that is a structured step-up requirement, and it is its own decision.
+      raise FreshAuthenticationRequiredError.new(
+        "recent password confirmation required", max_age: within
+      )
+    end
+
     # The principal, if it reached at least `level`.
     def require_assurance!(level : AssuranceLevel) : Principal
       principal = require!
@@ -217,6 +255,7 @@ module KemalIdentity::Kemal
       principal : Principal,
       assurance : AssuranceLevel? = nil,
       mfa_verified_at : Time? = nil,
+      password_verified_at : Time? = nil,
     ) : Principal
       account = @app.accounts.find_by_id(principal.subject)
 
@@ -231,6 +270,10 @@ module KemalIdentity::Kemal
         account,
         assurance || principal.assurance,
         mfa_verified_at: mfa_verified_at || principal.mfa_verified_at,
+        # Carried from the principal, which is where `Passwords::Authenticator` stamped it. A
+        # login therefore records that a password was typed without the route saying so, and
+        # every later rotation keeps it.
+        password_verified_at: password_verified_at || principal.password_verified_at,
       )
 
       @app.sessions.revoke(previous) if previous
@@ -264,6 +307,39 @@ module KemalIdentity::Kemal
           authenticated_at: @app.clock.now,
           tenant_id: account.tenant_id,
         )
+      )
+    end
+
+    # Records that the password was typed again on this session, and stamps the evidence
+    # `#require_recent_password!` reads.
+    #
+    # Call it after re-verifying the password for somebody who is *already* signed in:
+    #
+    # ```
+    # case KemalIdentity.app.passwords.authenticate(login: login, password: typed)
+    # in KemalIdentity::Authenticated then env.auth.password_verified!
+    # in KemalIdentity::Failed, KemalIdentity::Anonymous
+    #   env.status(401).text("Invalid password")
+    # end
+    # ```
+    #
+    # **Not `start!(result.principal)`.** That would work and it would also throw the session
+    # back down to `AssuranceLevel::Password`, because a fresh password authentication is worth
+    # exactly that — so confirming a password inside an `MFA` session would silently undo the
+    # second factor. This method takes the level from the session that already exists and only
+    # ever raises it, exactly like `#elevate!`.
+    #
+    # A login needs none of this: `Passwords::Authenticator` stamps the evidence onto the
+    # principal it returns, and `#start!` carries it.
+    #
+    # Rotates the session, like every other proof recorded against it.
+    def password_verified! : Principal
+      principal = require!
+
+      start!(
+        principal,
+        assurance: {principal.assurance, AssuranceLevel::Password}.max,
+        password_verified_at: @app.clock.now,
       )
     end
 

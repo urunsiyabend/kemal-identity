@@ -11,8 +11,8 @@ module KemalIdentity::SQLite
   class SessionRepository < Sessions::Repository
     SESSION_COLUMNS = <<-SQL
       s.id, s.account_id, s.tenant_id, s.token_digest, s.auth_version, s.assurance,
-      s.created_at, s.authenticated_at, s.mfa_verified_at, s.last_seen_at,
-      s.idle_expires_at, s.absolute_expires_at, s.revoked_at
+      s.created_at, s.authenticated_at, s.mfa_verified_at, s.password_verified_at,
+      s.last_seen_at, s.idle_expires_at, s.absolute_expires_at, s.revoked_at
       SQL
 
     # `accounts_table` exists because `auth_accounts` is a reference implementation. An
@@ -35,14 +35,15 @@ module KemalIdentity::SQLite
       result = @db.exec(<<-SQL,
         INSERT INTO auth_sessions (
           id, account_id, tenant_id, token_digest, auth_version, assurance,
-          created_at, authenticated_at, mfa_verified_at, last_seen_at,
-          idle_expires_at, absolute_expires_at, revoked_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          created_at, authenticated_at, mfa_verified_at, password_verified_at,
+          last_seen_at, idle_expires_at, absolute_expires_at, revoked_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT DO NOTHING
         SQL
         record.id, record.account_id, record.tenant_id, record.token_digest,
         record.auth_version, record.assurance.value.to_i32, record.created_at,
-        record.authenticated_at, record.mfa_verified_at, record.last_seen_at,
+        record.authenticated_at, record.mfa_verified_at, record.password_verified_at,
+        record.last_seen_at,
         record.idle_expires_at, record.absolute_expires_at, record.revoked_at)
 
       # Names neither the digest nor the id: an error must never carry a token.
@@ -123,6 +124,7 @@ module KemalIdentity::SQLite
         created_at: row.read(Time),
         authenticated_at: row.read(Time),
         mfa_verified_at: row.read(Time?),
+        password_verified_at: row.read(Time?),
         last_seen_at: row.read(Time),
         idle_expires_at: row.read(Time),
         absolute_expires_at: row.read(Time),

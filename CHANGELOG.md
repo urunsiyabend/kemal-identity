@@ -58,6 +58,52 @@ recency still measures from the most recent one, and `#redeem_recovery_code` sti
 account's other sessions. If you relied on the downgrade as a "re-enrol before continuing" gate,
 read `mfa_verified_at` and the `mfa.recovery_code_used` event instead.
 
+### Added: `env.auth.require_recent_password!(within:)`, and the column behind it
+
+*"Did they actually type their password in the last ten minutes?"* had no answer. Two fields
+look as though they should give one, and neither does.
+
+`authenticated_at` is restamped by every assurance increase:
+
+```
+10:00  password typed          authenticated_at = 10:00
+10:09  second factor proved    authenticated_at = 10:09   ← the password did not move
+10:10  require_fresh!(within: 10.minutes)  → passes
+```
+
+The window meant "type your password again" and a TOTP satisfied it — proved by somebody who
+need not know the password, since the session was already open. `assurance` cannot separate them
+either: `Password` means *one* factor was proved, not which one, and a federated login sits at
+that level too. So "confirm your password before linking another identity to this account" was
+unenforceable.
+
+`auth_sessions.password_verified_at` records when the password itself was last typed.
+`Passwords::Authenticator` stamps it onto the principal it returns, so an ordinary login records
+it with no change to the login route, and every rotation carries it. A federated login stamps
+nothing, which is the point. `env.auth.password_verified!` records a re-confirmation on a
+session that already exists — use it rather than `start!(result.principal)`, which would drop an
+`MFA` session back to `Password`.
+
+`nil` means **no**, never "unknown, so allow it". A remembered browser, a bearer token, a
+federated login and an account with no password all fail the guard. An OIDC-only or
+passkey-only deployment cannot satisfy it and should be asking `require_fresh!` instead.
+
+One column and one guard rather than a general method→timestamp map, because that is what the
+two mainstream application-side implementations settled on: **Laravel** keeps
+`auth.password_confirmed_at` in the session for its `password.confirm` middleware, and
+**django-sudo** keeps the elevation in its own cookie with its own TTL. Identity providers
+(Supabase's `mfa_amr_claims`, Keycloak's `loa-map`, Auth0's `event.authentication.methods`) do
+keep the general map — and ship no guard, because the sensitive operation lives in the
+application, not in the IdP. `blueprints/0031-the-password-is-its-own-evidence.md` has the
+survey.
+
+**Migration required**: `20260903090000_add_auth_session_password_verified_at`, in both
+adapters. One nullable column, nothing backfilled. Sessions that already exist read as "no
+password typed", so a route adopting the new guard refuses them until the person confirms.
+
+The shared `SessionRepository` contract now asserts the round-trip: an adapter that drops the
+column produces a guard nobody can satisfy, visible only on the sensitive route it protects.
+
 ### Deprecated: `mfa_verified!` and `recovery_verified!`
 
 Both carry `@[Deprecated]` and both are now monotone. They will be **removed in v1.0**, which is

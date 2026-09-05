@@ -47,6 +47,21 @@ module KemalIdentity
     # When a second factor was last verified, if ever.
     getter mfa_verified_at : Time?
 
+    # When the **password** behind this principal was last actually typed, if it ever was.
+    #
+    # `authenticated_at` cannot stand in for this. It is restamped by every assurance increase,
+    # so proving a second factor nine minutes after logging in satisfies a `require_fresh!`
+    # window that meant "type your password again". Nor can `assurance`: `Password` says *one*
+    # factor was proved, not which one, and a federated login sits at that level too.
+    #
+    # `nil` is the answer for every principal no password produced — a remembered browser, a
+    # bearer token, a federated login, a session adopted from a legacy system — and for an
+    # account that has no password at all. `#password_verified?` therefore answers false for
+    # them rather than raising or guessing, which is the fail-closed direction: an application
+    # that never records a password gets a guard that always refuses, not one that always
+    # passes.
+    getter password_verified_at : Time?
+
     # The tenant this principal is confined to, or nil for one that is not confined.
     #
     # Read by `Authz::RBAC#decide`, which refuses a principal bound to one tenant asking about
@@ -65,6 +80,7 @@ module KemalIdentity
       @credential : CredentialRef? = nil,
       @mfa_verified_at : Time? = nil,
       @tenant_id : String? = nil,
+      @password_verified_at : Time? = nil,
     )
       raise ArgumentError.new("subject must not be empty") if @subject.empty?
     end
@@ -96,6 +112,18 @@ module KemalIdentity
     # Whether this principal reached at least `level`.
     def at_least?(level : AssuranceLevel) : Bool
       @assurance >= level
+    end
+
+    # Whether the password behind this principal was typed within `within` of `now`.
+    #
+    # False when no password was ever typed for it, which is the whole point: "they were
+    # authenticated recently" and "they typed their password recently" are different
+    # questions, and only the second one may gate linking a new credential to the account.
+    def password_verified?(within : Time::Span, now : Time) : Bool
+      verified_at = @password_verified_at
+      return false if verified_at.nil?
+
+      now - verified_at <= within
     end
   end
 end

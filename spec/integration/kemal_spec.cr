@@ -320,6 +320,31 @@ post "/mfa/recover" do |env|
   end
 end
 
+# Re-typing the password on a session that already exists.
+#
+# `password_verified!` and not `start!(result.principal)`: the latter would work and would also
+# drop an `MFA` session back to `Password`, undoing the second factor to confirm a password.
+post "/confirm-password" do |env|
+  env.auth.require!
+
+  case KemalIdentity.app.passwords.authenticate(
+    login: env.params.body["email"], password: env.params.body["password"]
+  )
+  in KemalIdentity::Authenticated
+    env.auth.password_verified!
+    "password confirmed"
+  in KemalIdentity::Failed, KemalIdentity::Anonymous
+    env.status(401).text("Invalid password")
+  end
+end
+
+# Guarded by the password specifically. Linking another identity to this account is the
+# operation a second factor must not stand in for: the password is the thing being extended.
+post "/settings/identities" do |env|
+  env.auth.require_recent_password!(within: 10.minutes)
+  "identity linked"
+end
+
 # Reachable only once a second factor has been proved.
 get "/vault" do |env|
   env.auth.require_assurance!(KemalIdentity::AssuranceLevel::MFA)
@@ -1456,6 +1481,83 @@ describe "recovery over HTTP" do
     recovered = session_cookie(submit_recovery(raised, codes.first.reveal)).or_fail
 
     request("GET", "/vault", cookies("kemal_identity=#{recovered}")).status_code.should eq(200)
+  end
+end
+
+# Posts to a route guarded by `require_recent_password!`.
+private def link_identity(session : String) : HTTP::Client::Response
+  csrf = fetch_csrf(session)
+
+  post "/settings/identities", body: "_csrf=#{csrf.token}", headers: form(csrf, session)
+
+  response
+end
+
+private def confirm_password(session : String) : HTTP::Client::Response
+  csrf = fetch_csrf(session)
+
+  post "/confirm-password",
+    body: "email=ada@example.com&password=#{PASSWORD}&_csrf=#{csrf.token}",
+    headers: form(csrf, session)
+
+  response
+end
+
+describe "confirming the password specifically" do
+  it "is satisfied by the login that typed it" do
+    session = log_in
+
+    link_identity(session).status_code.should eq(200)
+  end
+
+  it "stops being satisfied once the window passes" do
+    session = log_in
+
+    TEST_CLOCK.advance(11.minutes)
+
+    link_identity(session).status_code.should eq(403)
+  end
+
+  # The reason the evidence is stored separately at all. `authenticated_at` is restamped by the
+  # elevation, so the session is *fresh* — and the password behind it is still eleven minutes
+  # old, which is what this route actually cares about.
+  it "is not satisfied by a second factor proved since" do
+    secret = enrol_mfa
+    session = log_in
+
+    TEST_CLOCK.advance(11.minutes)
+    raised = session_cookie(submit_code(session, totp_code(secret))).or_fail
+
+    # Fresh by every other measure: the vault, which asks for strength, opens.
+    request("GET", "/vault", cookies("kemal_identity=#{raised}")).status_code.should eq(200)
+
+    link_identity(raised).status_code.should eq(403)
+  end
+
+  it "is satisfied again by re-typing the password, without undoing the second factor" do
+    secret = enrol_mfa
+    session = log_in
+
+    TEST_CLOCK.advance(11.minutes)
+    raised = session_cookie(submit_code(session, totp_code(secret))).or_fail
+    confirmed = session_cookie(confirm_password(raised)).or_fail
+
+    link_identity(confirmed).status_code.should eq(200)
+
+    # Still MFA. Confirming a password must not cost the session its second factor, which is
+    # what `start!(result.principal)` would have done.
+    request("GET", "/vault", cookies("kemal_identity=#{confirmed}")).status_code.should eq(200)
+  end
+
+  # Nobody typed anything: the browser presented a stored token. Fail-closed, and for the same
+  # reason `#fresh?` refuses a remembered session however recently it was restored.
+  it "is never satisfied by a restored remember-me session" do
+    remember = log_in_remembered
+
+    get "/whoami", headers: cookies("#{REMEMBER_COOKIE}=#{remember}")
+    restored = cookie_of(response, "kemal_identity").or_fail
+
+    link_identity(restored).status_code.should eq(403)
   end
 end
 

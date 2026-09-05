@@ -32,6 +32,7 @@ def it_behaves_like_a_session_repository(&build : Array(KemalIdentity::Accounts:
       last_seen_at: now,
       idle_expires_at: now + 30.minutes,
       absolute_expires_at: now + 12.hours,
+      password_verified_at: now,
     )
   end
 
@@ -60,6 +61,11 @@ def it_behaves_like_a_session_repository(&build : Array(KemalIdentity::Accounts:
       stored.absolute_expires_at.should eq(now + 12.hours)
       stored.revoked_at.should be_nil
       stored.token_digest.should eq(digest.call("token-1"))
+
+      # An adapter that drops this reads as "no password was ever typed for this session",
+      # which turns `require_recent_password!` into a guard nobody can satisfy. Silent, and
+      # only visible on the sensitive route it protects.
+      stored.password_verified_at.should eq(now)
     end
 
     it "returns nil for an unknown digest rather than raising" do
