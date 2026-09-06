@@ -7,6 +7,7 @@ require "./kemal/path_guard"
 require "./kemal/csrf_handler"
 require "./kemal/error_handler"
 require "./kemal/legacy_session_handler"
+require "./kemal/middleware_order"
 
 # The Kemal adapter.
 #

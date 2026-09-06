@@ -190,6 +190,12 @@ use KemalIdentity::Kemal::PathGuard.new(
   prefix: "/api/strict", credentials: [KemalIdentity::CredentialKind::ApiToken]
 )
 
+# The check an application runs before `Kemal.run`, against the real registration list rather
+# than a synthetic one — so this file is also the proof that reading
+# `Kemal::Config::CUSTOM_HANDLERS` finds what `use` put there. If the chain above ever drifts out
+# of the documented order, every example in this file fails at load.
+KemalIdentity::Kemal.validate_middleware_order!
+
 # spec-kemal links Kemal's real handler chain, but only once `Kemal.config.setup` has built it.
 # Called here, after the `use` calls, rather than in a `before_each`: `Kemal.config.clear` wipes
 # the custom handlers along with the built-ins, so resetting per example would unregister

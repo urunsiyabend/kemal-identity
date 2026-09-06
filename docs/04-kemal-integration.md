@@ -79,6 +79,20 @@ use KemalIdentity::Kemal::CSRFHandler.new
 outside `Kemal::RouteHandler` — a route calling `env.auth.require!` raises from inside the
 route handler. Registering it immediately before `AuthenticationHandler` satisfies that.
 
+Check it at boot rather than reading it back:
+
+```crystal
+KemalIdentity::Kemal.validate_middleware_order!
+Kemal.run
+```
+
+It raises `ConfigurationError` naming every problem it finds — a handler in front of the one it
+depends on, `AuthenticationHandler` or `ErrorHandler` missing, one of them registered twice, or
+any of them registered with an explicit position. Django's system checks (`admin.E408` and its
+siblings) are the model; `blueprints/0034` records why this is a validator rather than an
+`install!` that would own the chain, and why it reads `Kemal::Config::CUSTOM_HANDLERS` rather
+than `Kemal.config.handlers`, which is empty until `Kemal.run`.
+
 **Never register an authentication handler at position `0`.** `use handler, 0` places it ahead
 of `Kemal::InitHandler`, and since Kemal 1.13.0 that position takes over temporary-file
 cleanup for uploads the handler parses itself.

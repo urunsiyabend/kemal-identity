@@ -186,6 +186,39 @@ completed, with no error anywhere. `#seal` now raises instead.
 `OAuth2AuthorizationRequest.attributes`, ASP.NET's encrypted `AuthenticationProperties.Items`,
 django-allauth's session-side `process`, and Keycloak's session-bound linking hash.
 
+### Added: `KemalIdentity::Kemal.validate_middleware_order!`
+
+The handler chain's order is a security property, and every wrong arrangement of it compiles.
+What arrives later is a 500 where a 401 belonged, a CSRF token anchored on nothing, or a guard
+refusing on a principal nobody resolved.
+
+```crystal
+use KemalIdentity::Kemal::ErrorHandler.new(login_path: "/login")
+use KemalIdentity::Kemal::AuthenticationHandler.new
+use KemalIdentity::Kemal::CSRFHandler.new
+
+KemalIdentity::Kemal.validate_middleware_order!
+Kemal.run
+```
+
+Raises `ConfigurationError` naming **every** problem it found — a handler in front of the one it
+depends on, `AuthenticationHandler` or `ErrorHandler` missing, one registered twice, or one
+registered with an explicit position (`use handler, 0` puts it ahead of `Kemal::InitHandler`,
+which since Kemal 1.13.0 owns temporary-file cleanup for uploads).
+
+Not an `install!` that registers the chain for you: `blueprints/0008` is why the `use` list
+belongs to the application, and six of the seven shipped examples have different chains. Django's
+system checks are the model — report everything, name the fix, and let the application decide.
+ASP.NET Core catches the same mistake with a compile-time analyzer (`ASP0001`); Crystal offers no
+equivalent hook, so this runs at startup and an application opts in by calling it.
+
+It reads `Kemal::Config::CUSTOM_HANDLERS`, because `Kemal.config.handlers` is empty until
+`Kemal.run` calls `setup` — and calling `setup` early to get at the real chain would silently
+drop any `use` written afterwards. `blueprints/0034-checking-the-chain-at-boot.md`.
+
+Deliberately unchecked: the relative order of `CSRFHandler` and `PathGuard`, which the documented
+chain separates with the application's own middleware.
+
 ### Deprecated: `mfa_verified!` and `recovery_verified!`
 
 Both carry `@[Deprecated]` and both are now monotone. They will be **removed in v1.0**, which is
