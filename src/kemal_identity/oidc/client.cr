@@ -74,7 +74,16 @@ module KemalIdentity::OIDC
     # not `//elsewhere.example.com`, which a browser reads as a protocol-relative *absolute*
     # URL and is the open redirect people miss. Anything else is dropped rather than raising:
     # a hostile `?return_to=` in a link is a thing to ignore, not a 500.
-    def authorize(return_to : String? = nil, prompt : String? = nil) : AuthorizationRequest
+    # `context` is the application's own state, carried in the signed pending flow and handed
+    # back on the callback — what kind of flow this is, which account started it, which session.
+    # `Pending#context` says what may go in it, and what may not: it is signed rather than
+    # encrypted, so it is not a place for secrets, and comparing it on the way back is the
+    # application's job.
+    def authorize(
+      return_to : String? = nil,
+      prompt : String? = nil,
+      context : Hash(String, String)? = nil,
+    ) : AuthorizationRequest
       now = @clock.now
 
       pending = Pending.new(
@@ -84,6 +93,7 @@ module KemalIdentity::OIDC
         code_verifier: Secret.new(@random.token),
         created_at: now,
         return_to: Client.safe_return_to(return_to),
+        context: context,
       )
 
       params = URI::Params.build do |form|

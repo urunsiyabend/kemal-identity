@@ -701,6 +701,96 @@ describe "carrying the pending flow in a cookie" do
     restored.try(&.return_to).should be_nil
   end
 
+  it "round trips an application's own context" do
+    client, _, _ = oidc_harness
+    codec = KemalIdentity::OIDC::PendingCodec.new(CODEC_KEY)
+    pending = client.authorize(
+      return_to: "/settings/security",
+      context: {"flow" => "link", "account_id" => "a1", "session_id" => "s1"},
+    ).pending
+
+    restored = codec.open?(codec.seal(pending)).or_fail.context.or_fail
+
+    restored["flow"].should eq("link")
+    restored["account_id"].should eq("a1")
+    restored["session_id"].should eq("s1")
+  end
+
+  # The signature covers the context like everything else, so an attacker cannot turn their own
+  # login flow into a linking flow against somebody else's account.
+  it "refuses a context that was edited" do
+    codec = KemalIdentity::OIDC::PendingCodec.new(CODEC_KEY)
+    sealed = codec.seal(
+      KemalIdentity::OIDC::Pending.new(
+        state: "a", nonce: "b", code_verifier: KemalIdentity::Secret.new("c"),
+        created_at: Time.unix(1), context: {"account_id" => "a1"}
+      )
+    )
+
+    signature = sealed.partition('.').last
+    tampered = KemalIdentity::Testing::JWTForge.segment(
+      %({"s":"a","n":"b","v":"c","c":1,"x":{"account_id":"a2"}})
+    )
+
+    codec.open?("#{tampered}.#{signature}").should be_nil
+  end
+
+  # Present and unreadable is not the same as absent. An application comparing
+  # `context["session_id"]` would see an empty context and skip the comparison, which turns a
+  # linking-intent check into a no-op — so the flow is refused instead.
+  it "refuses a flow whose context cannot be read rather than dropping it" do
+    codec = KemalIdentity::OIDC::PendingCodec.new(CODEC_KEY)
+
+    [%({"s":"a","n":"b","v":"c","c":1,"x":"not-an-object"}),
+     %({"s":"a","n":"b","v":"c","c":1,"x":{"account_id":42}}),
+     %({"s":"a","n":"b","v":"c","c":1,"x":["a1"]})].each do |payload|
+      segment = KemalIdentity::Testing::JWTForge.segment(payload)
+      # Signed by us, so only the shape is under test.
+      signature = codec.seal(
+        KemalIdentity::OIDC::Pending.new(
+          state: "a", nonce: "b", code_verifier: KemalIdentity::Secret.new("c"),
+          created_at: Time.unix(1)
+        )
+      ).partition('.').last
+
+      codec.open?("#{segment}.#{signature}").should be_nil
+    end
+  end
+
+  # A cookie that seals and does not open is a login that silently never completes, so the cap
+  # is enforced where the developer is, not where the user is.
+  it "refuses to seal a flow too large to be carried" do
+    codec = KemalIdentity::OIDC::PendingCodec.new(CODEC_KEY)
+    pending = KemalIdentity::OIDC::Pending.new(
+      state: "a", nonce: "b", code_verifier: KemalIdentity::Secret.new("c"),
+      created_at: Time.unix(1),
+      context: Hash(String, String).new.tap do |context|
+        KemalIdentity::OIDC::Pending::MAX_CONTEXT_ENTRIES.times do |index|
+          context["k#{index}"] = "v" * KemalIdentity::OIDC::Pending::MAX_CONTEXT_VALUE_BYTES
+        end
+      end
+    )
+
+    expect_raises(ArgumentError, /over the 4096-byte limit/) { codec.seal(pending) }
+  end
+
+  it "refuses a context that could not survive the round trip" do
+    build = ->(context : Hash(String, String)) do
+      KemalIdentity::OIDC::Pending.new(
+        state: "a", nonce: "b", code_verifier: KemalIdentity::Secret.new("c"),
+        created_at: Time.unix(1), context: context
+      )
+    end
+
+    expect_raises(ArgumentError, /at most 8 entries/) do
+      build.call(Hash(String, String).new.tap { |over| 9.times { |i| over["k#{i}"] = "v" } })
+    end
+
+    expect_raises(ArgumentError, /keys must not be empty/) { build.call({"" => "v"}) }
+    expect_raises(ArgumentError, /keys must be at most/) { build.call({"k" * 65 => "v"}) }
+    expect_raises(ArgumentError, /values must be at most/) { build.call({"k" => "v" * 513}) }
+  end
+
   it "refuses a signing key too short to be worth signing with" do
     expect_raises(KemalIdentity::ConfigurationError, /32 bytes/) do
       KemalIdentity::OIDC::PendingCodec.new(KemalIdentity::Secret.new("short"))

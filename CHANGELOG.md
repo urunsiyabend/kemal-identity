@@ -144,6 +144,48 @@ Laravel's `423 Locked` does — reopens `blueprints/0026`. Both are their own de
 ASP.NET Core (`AuthorizationFailure.FailedRequirements`) and Spring Security 7
 (`FactorAuthorizationDecision`) do instead.
 
+### Added: `OIDC::Pending#context`, the application's own state in the signed flow
+
+`Pending` carried everything the protocol needs and nothing the application does, so an
+account-linking callback could not tell whether the flow was a login or a linking, whose account
+started it, or from which session. An application had to build a second place to keep that —
+usually a second cookie, beside the one this shard was already signing with domain separation, a
+size cap and a constant-time comparison.
+
+```crystal
+client.authorize(
+  return_to: "/settings/security",
+  context: {
+    "flow"       => "link",
+    "account_id" => principal.subject,
+    "session_id" => principal.session_id.to_s,
+  },
+)
+```
+
+The shard does not interpret the keys; it carries them through the provider with the integrity
+of everything else in the flow. Three properties are worth knowing:
+
+- **Signed, not sealed.** The browser can read every value, like the PKCE verifier beside it.
+  ASP.NET Core can put an account id in its equivalent because it *encrypts* it; this one only
+  proves nobody changed it. Secrets belong server-side, in a table keyed by `state`.
+- **The comparison is yours.** Carrying `session_id` proves nothing until you check it against
+  the session presenting the callback. Keycloak does that comparison itself; this shard will
+  not, because which account a federated identity attaches to is not its decision to guess.
+- **A context that cannot be read refuses the whole flow**, rather than arriving empty. An
+  application comparing `context["session_id"]` would otherwise skip the check and complete a
+  linking flow with no intent at all.
+
+Bounded at 8 entries, 64-byte keys and 512-byte values, raising when the flow is built.
+
+**Fixed along the way**: `PendingCodec::MAX_BYTES` was enforced only in `#open?`. An oversized
+flow sealed, was written to the browser, and came back as `nil` — a login that silently never
+completed, with no error anywhere. `#seal` now raises instead.
+
+`blueprints/0033-an-oidc-flow-carries-the-applications-intent.md` has the survey: Spring's
+`OAuth2AuthorizationRequest.attributes`, ASP.NET's encrypted `AuthenticationProperties.Items`,
+django-allauth's session-side `process`, and Keycloak's session-bound linking hash.
+
 ### Deprecated: `mfa_verified!` and `recovery_verified!`
 
 Both carry `@[Deprecated]` and both are now monotone. They will be **removed in v1.0**, which is

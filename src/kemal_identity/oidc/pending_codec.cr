@@ -42,10 +42,22 @@ module KemalIdentity::OIDC
     end
 
     # `payload.signature`, both base64url.
+    #
+    # Raises `ArgumentError` for a flow too large to be carried, rather than returning a value
+    # `#open?` will refuse. The cap is checked on both sides on purpose: a cookie that seals and
+    # does not open is a login that silently never completes, and the browser would be holding
+    # the evidence.
     def seal(pending : Pending) : String
       payload = Base64.urlsafe_encode(encode(pending), padding: false)
+      sealed = "#{payload}.#{sign(payload)}"
 
-      "#{payload}.#{sign(payload)}"
+      if sealed.bytesize > MAX_BYTES
+        raise ArgumentError.new(
+          "sealed flow is #{sealed.bytesize} bytes, over the #{MAX_BYTES}-byte limit"
+        )
+      end
+
+      sealed
     end
 
     # The `Pending` inside `value`, or `nil` if it does not authenticate.
@@ -80,6 +92,17 @@ module KemalIdentity::OIDC
           json.field "v", pending.code_verifier.reveal
           json.field "c", pending.created_at.to_unix
           json.field "r", pending.return_to if pending.return_to
+
+          # Nested under its own key, so an application's key can never collide with one of
+          # this codec's — the reason `Provider` refuses reserved authorization parameters is
+          # the same reason, one layer up.
+          if context = pending.context
+            json.field "x" do
+              json.object do
+                context.each { |key, value| json.field key, value }
+              end
+            end
+          end
         end
       end
     end
@@ -91,14 +114,17 @@ module KemalIdentity::OIDC
       fields = ::JSON.parse(String.new(Base64.decode(padded))).as_h?
       return if fields.nil?
 
-      state = fields["s"]?.try(&.as_s?)
-      nonce = fields["n"]?.try(&.as_s?)
-      verifier = fields["v"]?.try(&.as_s?)
-      created_at = fields["c"]?.try(&.as_i64?)
+      required = decode_required(fields)
+      return if required.nil?
 
-      return if state.nil? || nonce.nil? || verifier.nil? || created_at.nil?
-      return if state.empty? || nonce.empty? || verifier.empty?
-      return if created_at < 0 || created_at > MAX_NUMERIC_DATE
+      state, nonce, verifier, created_at = required
+
+      # Present and unreadable is **not** the same as absent. An application comparing
+      # `context["session_id"]` against the session presenting the callback would see an empty
+      # context and skip the comparison, turning a linking-intent check into a no-op — so a
+      # context that cannot be read refuses the whole flow.
+      context = decode_context(fields["x"]?)
+      return if context.nil? && fields.has_key?("x")
 
       Pending.new(
         state: state,
@@ -108,9 +134,48 @@ module KemalIdentity::OIDC
         # Validated when the flow started and re-validated here, because a signature proves who
         # wrote a value and not that the value was ever any good.
         return_to: Client.safe_return_to(fields["r"]?.try(&.as_s?)),
+        context: context,
       )
     rescue Base64::Error | ::JSON::ParseException | ArgumentError
       nil
+    end
+
+    # The four fields a flow cannot be rebuilt without, or `nil` if any is missing, empty or
+    # out of range.
+    private def decode_required(fields : Hash(String, ::JSON::Any)) : {String, String, String, Int64}?
+      state = fields["s"]?.try(&.as_s?)
+      nonce = fields["n"]?.try(&.as_s?)
+      verifier = fields["v"]?.try(&.as_s?)
+      created_at = fields["c"]?.try(&.as_i64?)
+
+      return if state.nil? || nonce.nil? || verifier.nil? || created_at.nil?
+      return if state.empty? || nonce.empty? || verifier.empty?
+      return if created_at < 0 || created_at > MAX_NUMERIC_DATE
+
+      {state, nonce, verifier, created_at}
+    end
+
+    # The application's context, or `nil` for one that is absent **or** unreadable.
+    #
+    # The caller separates those two by asking whether the field was there at all, because they
+    # mean opposite things: absent is an ordinary login flow, and unreadable is a flow that must
+    # not complete.
+    private def decode_context(value : ::JSON::Any?) : Hash(String, String)?
+      return if value.nil?
+
+      entries = value.as_h?
+      return if entries.nil?
+
+      decoded = Hash(String, String).new(initial_capacity: entries.size)
+
+      entries.each do |key, entry|
+        text = entry.as_s?
+        return if text.nil?
+
+        decoded[key.to_s] = text
+      end
+
+      decoded
     end
 
     # 9999-12-31T23:59:59Z, so a hostile timestamp is refused rather than overflowing `Time`.

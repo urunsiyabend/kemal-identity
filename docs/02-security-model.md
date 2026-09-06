@@ -362,6 +362,38 @@ identity to the account, changing the password, turning off MFA. Laravel's `pass
 and django-sudo's `@sudo_required` are the same guard; `blueprints/0031` measures both, and
 records why this is one column rather than a general per-method evidence map.
 
+### Binding a federated flow to what started it
+
+A callback from an identity provider has to be told what the flow was for. `OIDC::Pending`
+carries the protocol's own state — `state`, `nonce`, the PKCE verifier, `return_to` — and
+`#context` carries the application's beside it, in the same signed value:
+
+```crystal
+client.authorize(
+  return_to: "/settings/security",
+  context: {
+    "flow"       => "link",
+    "account_id" => principal.subject,
+    "session_id" => principal.session_id.to_s,
+  },
+)
+```
+
+The shard does not read any of it. Three rules make it safe:
+
+- **It is signed, not encrypted.** The browser can read every value, exactly as it can read the
+  PKCE verifier. No provider tokens, no credentials, nothing that must stay hidden — that
+  belongs in a server-side table keyed by `state`.
+- **Compare it on the callback.** Carrying `session_id` proves nothing until the application
+  checks it against the session presenting the callback. Keycloak binds its own linking flows
+  this way; here the comparison is the application's, because which account a federated identity
+  attaches to is a decision this shard must never make on its behalf.
+- **A context that cannot be read refuses the flow.** Dropping it would leave an application
+  comparing against an empty context and skipping the check entirely.
+
+`blueprints/0033`. Without an explicit intent of this kind, an OIDC callback cannot tell a login
+from a linking, and the safe default is to refuse to link.
+
 ### Recovery is not a second factor
 
 A recovery code is a printed or stored list. Spending one proves possession of a piece of paper,
