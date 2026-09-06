@@ -1,6 +1,6 @@
 # Examples
 
-Seven runnable applications. CI compiles every one of them on every matrix entry, on every
+Eight runnable applications. CI compiles every one of them on every matrix entry, on every
 supported Crystal and at the Kemal floor — an example that has drifted from the API is worse than
 no example.
 
@@ -12,6 +12,7 @@ documentation, and they say *why* rather than *what*.
 |---|---|---|
 | [`browser_session`](browser_session/app.cr) | `crystal run examples/browser_session/app.cr` | A first-party website: log in, be remembered, step up before a sensitive action, reset a forgotten password, confirm an address, log out. Start here if you serve HTML. |
 | [`api_tokens`](api_tokens/app.cr) | `crystal run examples/api_tokens/app.cr` | An API with no cookies: scoped bearer tokens, RFC 6750 challenges that say *why*, a management listing, and revocation scoped to the token's owner. Start here if you serve JSON. |
+| [`second_factor`](second_factor/app.cr) | `crystal run examples/second_factor/app.cr` | TOTP end to end: enrol a device, prove it, spend a recovery code — and see what each proof is worth. `/vault` needs `MFA` and a recovery code does not reach it; `/account/link` needs the **password** and a second factor proved a second ago does not satisfy it. Read this before writing a step-up prompt. |
 | [`ownership`](ownership/app.cr) | `crystal run examples/ownership/app.cr` | "May this person refund **this** invoice." An `Authz::Authorizer` of your own wrapping the shipped RBAC — including the downcast that fails **open** when written the obvious way, and what the grant cache costs on a list endpoint. |
 | [`custom_bearer`](custom_bearer/app.cr) | `crystal run examples/custom_bearer/app.cr` | A credential this shard does not ship — a gateway-issued token — accepted alongside the ones it does, through `bearer_authenticators:`. Read this before writing an authentication handler of your own. |
 | [`multi_issuer_jwt`](multi_issuer_jwt/app.cr) | `crystal run examples/multi_issuer_jwt/app.cr` | A resource server taking JWTs from several partners: one validator per issuer, routed with `JWT.unverified_issuer`, and why two validators cannot simply be chained. |

@@ -104,6 +104,9 @@ get "/dashboard" do |env|
   "Signed in as #{principal.subject}"
 end
 
+# Every wrong arrangement of those three lines compiles. This says so at boot instead.
+KemalIdentity::Kemal.validate_middleware_order!
+
 Kemal.run
 ```
 
@@ -270,9 +273,10 @@ See [testing](docs/05-testing.md) for the full test matrix.
 
 ## Documentation
 
-- [Examples](examples/) — six runnable applications, each a single file: a browser site, a
-  JSON API with scoped tokens, per-object authorization, a credential this shard does not ship,
-  several JWT issuers, and a workload identity
+- [Examples](examples/) — eight runnable applications, each a single file: a browser site, a
+  JSON API with scoped tokens, a second factor with recovery codes, per-object authorization, a
+  credential this shard does not ship, several JWT issuers, a mixed monolith, and a workload
+  identity
 - [Scope](docs/00-scope.md)
 - [Architecture](docs/01-architecture.md)
 - [Security model](docs/02-security-model.md)

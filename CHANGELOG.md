@@ -207,7 +207,7 @@ registered with an explicit position (`use handler, 0` puts it ahead of `Kemal::
 which since Kemal 1.13.0 owns temporary-file cleanup for uploads).
 
 Not an `install!` that registers the chain for you: `blueprints/0008` is why the `use` list
-belongs to the application, and six of the seven shipped examples have different chains. Django's
+belongs to the application, and the shipped examples use three different chains between them. Django's
 system checks are the model — report everything, name the fix, and let the application decide.
 ASP.NET Core catches the same mistake with a compile-time analyzer (`ASP0001`); Crystal offers no
 equivalent hook, so this runs at startup and an application opts in by calling it.
@@ -218,6 +218,23 @@ drop any `use` written afterwards. `blueprints/0034-checking-the-chain-at-boot.m
 
 Deliberately unchecked: the relative order of `CSRFHandler` and `PathGuard`, which the documented
 chain separates with the application's own middleware.
+
+### Added: `examples/second_factor`, and the validator in every example
+
+The MFA-family example `docs/06-roadmap.md` has carried as open since v0.11.0, and the release
+that adds three guards is the wrong one to ship without it. `examples/second_factor/app.cr`
+enrols a TOTP device, proves it with `elevate!`, spends a recovery code through the identical
+line, and then puts the three questions side by side on one session:
+
+- `/vault` asks `require_assurance!(MFA)` — a recovery code does not open it;
+- `require_fresh!` passes the moment a factor is proved;
+- `/account/link` asks `require_recent_password!` and **still refuses**, because a second factor
+  is not a password.
+
+Every server example now calls `KemalIdentity::Kemal.validate_middleware_order!` before
+`Kemal.run`. `examples/browser_session` also stops claiming its step-up guard means "within five
+minutes of typing a password" — that guard means re-authentication, and this release is what
+makes the difference nameable.
 
 ### Deprecated: `mfa_verified!` and `recovery_verified!`
 

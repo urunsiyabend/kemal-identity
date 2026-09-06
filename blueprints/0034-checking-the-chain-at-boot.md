@@ -54,8 +54,9 @@ ordering away from the application.
 Rejected, because `blueprints/0008` is the reason this shard has an explicit `use` list at all:
 the Kemal layer owns the HTTP seam and the application owns its own chain, which is what lets
 application middleware sit between CSRF and the guards, lets one deployment register four
-`PathGuard`s and another none. `install!` would freeze a shape that six of the seven shipped
-examples do not share.
+`PathGuard`s and another none. The shipped examples use three different chains between them and
+one of them registers no handlers at all, so `install!` would freeze a shape most of them do not
+have.
 
 `validate_middleware_order!` leaves the chain to the application and tells it when it is wrong.
 

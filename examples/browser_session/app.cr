@@ -350,16 +350,27 @@ end
 # Under a step-up guard: authenticated *and* recently. A session restored from a remember-me
 # cookie is never fresh, however recently it was restored, so this always forces a real
 # re-authentication for a remembered visitor.
+#
+# "Recently" is not "with a password". This application has one credential, so the two coincide
+# here — add a second factor and they part: proving a TOTP restamps `authenticated_at` and
+# satisfies this guard without anybody typing a password. An action whose security rests on the
+# password itself asks `require_recent_password!(within:)` instead, and
+# `examples/second_factor/app.cr` is where the two are side by side.
 get "/account" do |env|
   principal = env.auth.require_fresh!(within: 5.minutes)
 
   env.html layout("Account", <<-HTML)
     <h1>Account</h1>
     <p>Sensitive settings for <strong>#{principal.subject}</strong>.</p>
-    <p>Reachable only within five minutes of typing a password.</p>
+    <p>Reachable only within five minutes of re-authenticating.</p>
     <p><a href="/">Home</a></p>
     HTML
 end
 
 puts "listening on http://localhost:3000 — emails are printed here"
+# Checked before the first request rather than discovered on it: every wrong arrangement of the
+# handlers above compiles, and the symptom arrives later as a 500 where a 401 belonged or a guard
+# reading a principal nobody resolved.
+KemalIdentity::Kemal.validate_middleware_order!
+
 Kemal.run

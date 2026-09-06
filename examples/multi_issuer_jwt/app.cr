@@ -171,4 +171,9 @@ get "/me" do |env|
 end
 
 Kemal.config.port = 3000
+# Checked before the first request rather than discovered on it: every wrong arrangement of the
+# handlers above compiles, and the symptom arrives later as a 500 where a 401 belonged or a guard
+# reading a principal nobody resolved.
+KemalIdentity::Kemal.validate_middleware_order!
+
 Kemal.run
