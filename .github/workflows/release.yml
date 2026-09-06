@@ -53,13 +53,20 @@ jobs:
             exit 1
           fi
 
+      # Formatting runs on the main line only, exactly as it does in CI: `crystal tool format`
+      # changes its output between releases, so checking it on the floor tests the compiler
+      # rather than the code — which is what the first attempt at this matrix did, reporting
+      # every file in `src/` as unformatted.
+      - name: Format
+        if: matrix.crystal == '1.21.0'
+        run: crystal tool format --check
+
       # The full matrix already ran on this commit when it landed on main. This is the
       # database-free subset, re-run against the tag itself so a release is never cut from a
       # tree that does not build — the tag is what people will actually resolve.
       - name: Verify the tagged tree
         run: |
           set -e
-          crystal tool format --check
           crystal build --no-codegen src/kemal_identity.cr
           # Globbed, like the CI job: a release cut from a tree where one of the examples no
           # longer compiles ships an example nobody can run.

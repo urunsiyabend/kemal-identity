@@ -22,7 +22,9 @@ wrong on a compiler this cannot be tested against.
 **The release gate is what let this out.** CI runs the suite on 1.21.0, 1.14.0 and 1.12.0, and
 the 1.12.0 entry caught this — after the release workflow had already published, because that
 workflow verified the tagged tree on 1.21.0 alone. It now verifies on the floor too, in a matrix,
-with publication split into a job that waits for both. This is the same lesson v0.11.1 recorded
+with publication split into a job that waits for both — and formatting stays on the main line,
+because `crystal tool format` changes its output between releases and checking it on the floor
+tests the compiler rather than the code. This is the same lesson v0.11.1 recorded
 about the database-free subset, in the version dimension rather than the storage one: verifying a
 tagged tree on one configuration verifies it for one configuration.
 
