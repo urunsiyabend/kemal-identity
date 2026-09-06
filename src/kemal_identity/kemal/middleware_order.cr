@@ -60,7 +60,8 @@ module KemalIdentity::Kemal
     )
   end
 
-  # Every handler this shard contributes, in the order they have to run in.
+  # Where each handler this shard contributes sits in the chain, and `UNKNOWN` for one it did
+  # not write.
   #
   # Earlier is outermost. `ErrorHandler` first because it has to sit outside anything that
   # raises, which is every guard. `LegacySessionHandler` **after** authentication, not before:
@@ -68,27 +69,64 @@ module KemalIdentity::Kemal
   # all found nothing, so a live credential is never replaced by an adopted one. Then
   # `CSRFHandler`, so a token binds to whichever session — resolved or adopted — this request
   # ended up with; and `PathGuard` last, because it refuses on what all of that produced.
-  private ORDER = [
-    ErrorHandler,
-    AuthenticationHandler,
-    LegacySessionHandler,
-    CSRFHandler,
-    PathGuard,
-  ]
+  #
+  # ### Written as a `case`, not as an array of classes
+  #
+  # The obvious version keeps `[ErrorHandler, AuthenticationHandler, …]` and asks
+  # `type === handler`. It is wrong on any Crystal before 1.21, which infers that literal as
+  # `Array(Kemal::Handler.class)` rather than a union of metaclasses — so the comparison
+  # compiles to `handler.is_a?(Kemal::Handler)` and **every** type matches **every** handler.
+  # A correct chain then reports each handler as registered once per handler in it, and the
+  # check refuses the configuration it was meant to bless. v0.12.0 shipped exactly that; the
+  # supported floor is 1.12.0, so it was broken for most of the versions this shard supports.
+  #
+  # A `case` over literal classes resolves at compile time on every supported version.
+  # An enum rather than integer constants, and not only for readability: a constant named `CSRF`
+  # inside `KemalIdentity::Kemal` shadows `KemalIdentity::CSRF` for every file in this namespace,
+  # which is a compile error two files away from here and nowhere near the cause.
+  #
+  # `#rank` is the **only** way a handler is identified in this file. Two mechanisms would mean
+  # two things to be wrong on a compiler this cannot be tested against.
+  private enum Position
+    Error
+    Authentication
+    Legacy
+    Csrf
+    Guard
 
-  # Handlers an application may install exactly once. `PathGuard` is absent on purpose: one per
-  # protected prefix is the documented shape, and the examples install two.
-  private SINGULAR = [ErrorHandler, LegacySessionHandler, AuthenticationHandler, CSRFHandler]
-
-  # Matched with `===` rather than `==` so that a subclass counts as the handler it extends.
-  # Django's own middleware check had to be fixed for exactly this (ticket #30237): an
-  # application that subclasses a handler to add a log line has not stopped using it.
-  private def self.ours?(handler : HTTP::Handler) : Bool
-    ORDER.any? { |type| type === handler }
+    # A handler this shard did not write. Sorts last so nothing is said about where it goes.
+    Unknown
   end
 
-  private def self.rank(handler : HTTP::Handler) : Int32
-    ORDER.index { |type| type === handler } || ORDER.size
+  private def self.rank(handler : HTTP::Handler) : Position
+    case handler
+    when ErrorHandler          then Position::Error
+    when AuthenticationHandler then Position::Authentication
+    when LegacySessionHandler  then Position::Legacy
+    when CSRFHandler           then Position::Csrf
+    when PathGuard             then Position::Guard
+    else                            Position::Unknown
+    end
+  end
+
+  # Matched with `case`/`is_a?` rather than by exact class, so a subclass counts as the handler
+  # it extends. Django's own middleware check had to be fixed for exactly this (ticket #30237):
+  # an application that subclasses a handler to add a log line has not stopped using it.
+  private def self.ours?(handler : HTTP::Handler) : Bool
+    rank(handler) != Position::Unknown
+  end
+
+  # The name of the handler at `rank`, when an application may install it exactly once.
+  #
+  # `nil` for `PathGuard`, on purpose: one per protected prefix is the documented shape, and the
+  # examples install two.
+  private def self.singular_name(position : Position) : String?
+    case position
+    when Position::Error          then ErrorHandler.name
+    when Position::Authentication then AuthenticationHandler.name
+    when Position::Legacy         then LegacySessionHandler.name
+    when Position::Csrf           then CSRFHandler.name
+    end
   end
 
   private def self.name_of(handler : HTTP::Handler) : String
@@ -96,11 +134,16 @@ module KemalIdentity::Kemal
   end
 
   private def self.duplicate_problems(ours : Array(HTTP::Handler)) : Array(String)
-    SINGULAR.compact_map do |type|
-      count = ours.count { |handler| type === handler }
+    counts = Hash(Position, Int32).new(0)
+    ours.each { |handler| counts[rank(handler)] += 1 }
+
+    counts.compact_map do |position, count|
       next if count <= 1
 
-      "#{type} is registered #{count} times. The second one never sees a request the first " \
+      name = singular_name(position)
+      next if name.nil?
+
+      "#{name} is registered #{count} times. The second one never sees a request the first " \
       "did not already answer."
     end
   end
@@ -109,15 +152,15 @@ module KemalIdentity::Kemal
     problems = [] of String
     return problems if ours.empty?
 
-    authentication = ours.any? { |handler| AuthenticationHandler === handler }
+    positions = ours.map { |handler| rank(handler) }
 
-    unless authentication
+    unless positions.includes?(Position::Authentication)
       problems << "#{AuthenticationHandler} is not registered. It is what populates " \
                   "`env.auth`, so without it every guard raises and no other handler here " \
                   "has a principal to read."
     end
 
-    unless ours.any? { |handler| ErrorHandler === handler }
+    unless positions.includes?(Position::Error)
       problems << "#{ErrorHandler} is not registered. Guards raise — `require!` answers 401 " \
                   "and `require_fresh!` 403 only because this handler translates them — so " \
                   "without it a signed-out visitor gets a 500."
@@ -147,7 +190,7 @@ module KemalIdentity::Kemal
     when ErrorHandler
       "An error handler inside the thing that raises never sees the exception."
     when AuthenticationHandler
-      if LegacySessionHandler === later
+      if rank(later) == Position::Legacy
         "The legacy adapter adopts an old cookie only when no live credential resolved, " \
         "which is a question authentication has to have answered first — before it, an " \
         "adopted session replaces a real one."

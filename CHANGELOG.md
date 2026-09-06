@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.12.1 — 2026-09-03
+
+**Fixes a boot-time failure that v0.12.0 introduced for every Crystal below 1.21.**
+`KemalIdentity::Kemal.validate_middleware_order!` refused correct configurations, raising
+`ConfigurationError` naming each handler as registered once per handler in the chain. Upgrade if
+you called it; nothing else in v0.12.0 is affected, and an application that did not call it was
+never touched.
+
+The check kept its handler ordering in an array of classes and asked `type === handler`. Crystal
+1.21 infers that literal as a union of metaclasses; **1.12 through 1.20 infer it as
+`Array(Kemal::Handler.class)`**, so the comparison compiles to `handler.is_a?(Kemal::Handler)` —
+true for every handler this shard ships. Every type then matched every handler: ranks collapsed
+to one value, and the duplicate check counted the whole chain as copies of `ErrorHandler`.
+
+The ordering is a `case` over literal classes now, returning a private enum, which resolves at
+compile time on every supported version. Subclasses still count as the handler they extend, and
+identifying a handler happens in exactly one place — two mechanisms would be two things to be
+wrong on a compiler this cannot be tested against.
+
+**The release gate is what let this out.** CI runs the suite on 1.21.0, 1.14.0 and 1.12.0, and
+the 1.12.0 entry caught this — after the release workflow had already published, because that
+workflow verified the tagged tree on 1.21.0 alone. It now verifies on the floor too, in a matrix,
+with publication split into a job that waits for both. This is the same lesson v0.11.1 recorded
+about the database-free subset, in the version dimension rather than the storage one: verifying a
+tagged tree on one configuration verifies it for one configuration.
+
 ## v0.12.0 — 2026-09-03
 
 The first of the items a consumer's full-suite SaaS integration wrote down against v0.11.1.

@@ -11,16 +11,28 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Publish ${{ github.ref_name }}
+  verify:
+    name: Verify ${{ github.ref_name }} on Crystal ${{ matrix.crystal }}
     runs-on: ubuntu-latest
+
+    # The floor is a release gate, not only a CI job.
+    #
+    # v0.12.0 shipped a boot-time check that raised on every correct configuration below Crystal
+    # 1.21: an array of classes is inferred as `Array(Kemal::Handler.class)` there, so a `===`
+    # against it matched every handler. The suite caught it — on the 1.12.0 matrix entry, which
+    # runs after the release workflow has already published. Verifying the tagged tree on one
+    # version verifies it for one version.
+    strategy:
+      fail-fast: true
+      matrix:
+        crystal: ["1.21.0", "1.12.0"]
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: crystal-lang/install-crystal@v1
         with:
-          crystal: "1.21.0"
+          crystal: ${{ matrix.crystal }}
 
       - name: Install dependencies
         run: shards install
@@ -55,6 +67,14 @@ jobs:
             crystal build --no-codegen "$app"
           done
           crystal spec spec/unit spec/security spec/integration/sqlite_spec.cr
+
+  publish:
+    name: Publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    needs: verify
+
+    steps:
+      - uses: actions/checkout@v4
 
       # The section between this version's heading and the next one. Written once, in the
       # changelog, and read from there: release notes that are retyped are release notes that

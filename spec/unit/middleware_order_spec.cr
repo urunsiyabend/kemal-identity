@@ -7,6 +7,11 @@ require "../../src/kemal_identity/kemal"
 # Every example passes its own chain rather than touching `Kemal::Config::CUSTOM_HANDLERS`. The
 # whole suite is one binary and `spec/integration/kemal_spec.cr` has a real application in that
 # global, so a spec that mutated it would be reordering the handlers another file is testing.
+#
+# These examples are also the floor's job. v0.12.0 matched handlers against an array of classes,
+# which Crystal below 1.21 infers as `Array(Kemal::Handler.class)` — every type matched every
+# handler, and the four "accepts" examples below failed on the 1.12.0 matrix entry while passing
+# on 1.21. Nothing here can reproduce that on one compiler; the matrix is the regression.
 private def chain(*handlers : HTTP::Handler) : Array(Tuple(Int32?, HTTP::Handler))
   handlers.to_a.map { |handler| {nil.as(Int32?), handler.as(HTTP::Handler)} }
 end
