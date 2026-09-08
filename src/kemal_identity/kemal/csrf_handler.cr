@@ -56,14 +56,19 @@ module KemalIdentity::Kemal
     # attacker who can trigger the request cross-site does not need the token at all. Content
     # type is not a defence either, and neither is calling the endpoint an API.
     private def bearer_only?(env : HTTP::Server::Context, config : CSRFConfig) : Bool
-      return false unless @app.try(&.bearer) || KemalIdentity.app.bearer
+      # `app.bearer`, never `@app.try(&.bearer) || KemalIdentity.app.bearer`. That form read the
+      # process-global whenever the *injected* application's bearer was nil -- which is a
+      # legitimate configuration, not a missing one -- so an application constructed and passed
+      # in raised `ConfigurationError` on every unsafe request when no global was installed, and
+      # decided this exemption from a different application's bearer when one was.
+      return false if app.bearer.nil?
 
       return false if env.request.headers["Authorization"]?.nil?
 
       # The session cookie as *presented*, not the resolved outcome: a request carrying an
       # expired cookie still carries a cookie, and exempting it would let one expire its way out
       # of CSRF protection.
-      session_cookie = (@app || KemalIdentity.app).cookie
+      session_cookie = app.cookie
       session_cookie.extract(env.request.cookies).nil?
     end
 
@@ -92,7 +97,7 @@ module KemalIdentity::Kemal
     end
 
     private def resolve_config : CSRFConfig
-      config = (@app || KemalIdentity.app).csrf
+      config = app.csrf
 
       if config.nil?
         raise ConfigurationError.new(
@@ -103,6 +108,14 @@ module KemalIdentity::Kemal
       end
 
       @config = config
+    end
+
+    # The application this handler reads, injected or process-global.
+    #
+    # One accessor rather than `@app || KemalIdentity.app` at each site: every read has to make
+    # the same choice, and a site that made a different one is the defect above.
+    private def app : Application
+      @app || KemalIdentity.app
     end
   end
 end
