@@ -52,6 +52,26 @@ asserts the key contains no part of the login. Tenant-scoped, because the same l
 tenants is two accounts. Normalised, so `ADA@EXAMPLE.COM` and `  ada@example.com ` share a
 counter rather than granting an attacker a fresh allowance per spelling.
 
+### The address key is the caller's problem, and has to be
+
+`Passwords::Authenticator` takes `ip:` and does not derive it. Nothing in the core may read a
+request header, and the deciding reason is not layering: how far to trust `X-Forwarded-For` is
+a fact about a deployment's own topology, and a library picking a rule would be trusting a
+value the client appends to.
+
+The failure this leaves in a caller's hands is worth naming, because it is not the one people
+expect. A proxy address passed as `ip:` does not weaken the limit — it *tightens* it onto one
+shared key, so the first attacker to fill the window denies logins to every user of the
+deployment. The address key stops catching password spraying at the same time, since every
+sprayed attempt now looks like one busy client. Both halves of "two keys, not one" collapse.
+
+So the documentation states the rule where the parameter is documented and where the example
+lives (`docs/04-kemal-integration.md`): count from the right of `X-Forwarded-For` by the number
+of proxies you operate, and treat everything left of that as client-supplied. A resolver of our
+own stays out of scope for 1.0 — HTTP-06 in `blueprints/maturity-validation-scenarios.md` is
+where trusted-proxy identity gets designed, and it needs the request attributes that
+`blueprints/0020` decision 7 keeps reachable rather than a guess wired into the password path.
+
 ## The correct password is throttled too
 
 Once the limit is reached, every attempt is denied — including the right one.

@@ -286,6 +286,36 @@ principal available only in the branch where it exists. And the response does no
 `reason`, because `DisabledAccount` and `InvalidCredential` producing different messages is
 an enumeration oracle. `reason` is for the audit log.
 
+### `remote_address` is the client only when nothing sits in front
+
+`ip:` is the source-address half of the login rate limit
+(`blueprints/0010-rate-limiting.md`), so the value has to identify the client. Behind nginx,
+an ALB or a CDN, `request.remote_address` is the proxy — one address key for the whole
+deployment, which turns the limiter from a defence into an availability problem: the first
+attacker to fill the window denies logins to every user, and password spraying from behind the
+same proxy is indistinguishable from ordinary traffic.
+
+There is no resolver in this shard, and deliberately so: which header to read and how far to
+trust it is a fact about an application's own infrastructure, and a library that guessed would
+be trusting a value the client controls. `X-Forwarded-For` is appended to by each hop, so an
+application counts from the **right** by the number of proxies it actually operates and
+ignores everything to the left of that — those entries came from the client. Reading the
+leftmost value, or passing the header through whole, hands an attacker a fresh rate-limit
+allowance per request.
+
+```crystal
+# One proxy in front, so the last entry is the one it added.
+def client_ip(env : HTTP::Server::Context) : String?
+  forwarded = env.request.headers["X-Forwarded-For"]?
+  return env.request.remote_address.try(&.to_s) if forwarded.nil?
+
+  forwarded.split(',').last.strip.presence
+end
+```
+
+The same applies to the address recorded in the audit trail: an event naming the proxy answers
+no question anybody asks after an incident.
+
 ## Interop with kemal-session
 
 The two are complementary and the boundary must stay sharp:

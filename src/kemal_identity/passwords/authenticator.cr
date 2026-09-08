@@ -35,6 +35,18 @@ module KemalIdentity::Passwords
     # Verifies `password` against the account identified by `login`.
     #
     # `ip` keys the source-address half of the rate limit, and is recorded in the audit event.
+    #
+    # It must be the **client's** address. Behind a reverse proxy, `remote_address` is the
+    # proxy, so every request in the deployment shares one address key and the first attacker
+    # to reach the limit denies logins to everybody — the limiter becomes an availability
+    # problem rather than a defence. An application terminating behind one derives this from
+    # its own trusted-proxy configuration, counting from the right of `X-Forwarded-For` by the
+    # number of proxies it actually operates. Never the leftmost value and never the whole
+    # header: a client picks those, so a spoofed one mints a fresh allowance per request.
+    #
+    # `nil` when there is genuinely no address to attribute — a request off a unix socket, an
+    # internal caller. That consumes the login key alone, which is the honest reading rather
+    # than a placeholder every caller would share.
     def authenticate(
       login : String,
       password : String,

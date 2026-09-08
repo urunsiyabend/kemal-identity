@@ -144,6 +144,14 @@ post "/logout" do |env|
 end
 ```
 
+`ip:` keys the source-address half of the login rate limit, so it has to be the client's
+address. `remote_address` is that only when Kemal faces the internet directly. Behind nginx,
+an ALB, or a CDN it is the proxy, and every login in the deployment then shares one address
+key — the first attacker to fill the window locks out every user. Behind a proxy, resolve the
+client address from `X-Forwarded-For` counting from the **right** by the number of proxies you
+operate, and treat the leftmost entries as client-supplied. Passing the whole header, or its
+first value, hands an attacker a fresh allowance per request.
+
 Call `env.auth.require!` inside individual routes, or guard an entire path subtree:
 
 ```crystal
@@ -226,6 +234,8 @@ See the [architecture](docs/01-architecture.md), [security model](docs/02-securi
 
 - `NullRateLimiter` is the default and permits every attempt. Configure a shared limiter in
   multi-process deployments; `FixedWindowRateLimiter` is process-local.
+- Behind a reverse proxy, the `ip:` you pass to `passwords.authenticate` must be the resolved
+  client address, not `request.remote_address` — see the sign-in example above.
 - The default `__Host-kemal_identity` cookie is `Secure`, host-only, HTTP-only, and
   `SameSite=Lax`. To share sessions across subdomains, use a non-`__Host-` name and explicitly
   set a domain.
