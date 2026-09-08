@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.12.2 — 2026-09-08
+
+**Fixes `CSRFHandler` reading the process-global application when one was passed to it.** An
+application that constructs `KemalIdentity::Application` itself and hands it to the handlers —
+rather than calling `KemalIdentity.configure` — got `ConfigurationError` on every unsafe
+request, saying it was not configured, whenever that application accepted no bearer credential.
+Where a process-global *was* also installed, the CSRF exemption was decided from that other
+application's bearer instead. The documented `KemalIdentity.configure` wiring is unaffected:
+there the handler holds no application of its own and reads the global on both the old code and
+the new. Upgrade if you inject an `Application`.
+
+The bearer check was `@app.try(&.bearer) || KemalIdentity.app.bearer`, and that expression
+cannot tell "no application was injected" from "the injected application has no bearer" — both
+are nil, and only the first should reach for the global. A bearer of nil is an ordinary
+configuration: it is what an application accepting nothing but session cookies has.
+
+Every read now goes through one private accessor, so the two neighbouring reads that were
+already correct — the session cookie name and the CSRF configuration — cannot drift from it.
+`spec/unit/csrf_handler_spec.cr` drives the handler with an injected application and no global,
+which is a shape the suite could not previously express: nothing in it calls
+`KemalIdentity.app=`, so a handler that reaches for the global fails those examples.
+
+**Documents where the login rate limit's address key comes from.** No code changed: `ip:` has
+always been the caller's to supply, and the shard cannot resolve it — how far to trust
+`X-Forwarded-For` is a fact about a deployment's own topology, and a library that guessed would
+be trusting a value the client appends to. What was missing is that the README and
+`docs/04-kemal-integration.md` both showed `ip: env.request.remote_address.to_s` with no note
+that this is the proxy behind nginx, an ALB or a CDN.
+
+The failure that leaves is not the one people expect. A proxy address does not weaken the limit:
+it collapses every login in the deployment onto one address key, so the first attacker to fill
+the window denies logins to everybody, and password spraying from behind the same proxy stops
+looking like spraying at all. Both halves of "two keys, not one" go at once
+(`blueprints/0010-rate-limiting.md`). The rule is now stated where the parameter is documented,
+in both examples, and as a production note: count from the right of `X-Forwarded-For` by the
+number of proxies you operate, and treat everything to the left of that as client-supplied.
+
 ## v0.12.1 — 2026-09-03
 
 **Fixes a boot-time failure that v0.12.0 introduced for every Crystal below 1.21.**
