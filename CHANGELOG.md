@@ -1,5 +1,60 @@
 # Changelog
 
+## v0.13.0 — unreleased
+
+**Production hardening, all of it additive.** No signature on the v1.0 freeze list moved, no
+abstract method was added, and an application that changes nothing behaves exactly as it did on
+v0.12.2. Run the new migration only if you adopt a shared limiter.
+
+**`KemalIdentity.validate_production!`**, and `Application#production_gaps` behind it. It names,
+in one `ConfigurationError`, every login or second-factor protection the configuration leaves
+off: an unthrottled login (`NullRateLimiter`, the default), a fail-open login, an in-memory
+limiter in what may be a replicated deployment, MFA with no `mfa_max_consecutive_failures`,
+an explicitly unthrottled recovery path, and a non-`Secure` cookie. Each comes with its fix.
+`accept:` records a gap a deployment has decided to live with. It is opt-in, like
+`Kemal.validate_middleware_order!`: each gap is a configuration that boots today, and running
+the check from `configure` would have turned an upgrade into a boot failure.
+
+**A rate limiter whose counters every process shares.** `Postgres::FixedWindowRateLimiter`
+(across hosts) and `SQLite::FixedWindowRateLimiter` (across processes on one file), over the new
+`auth_rate_limits` table — `migrations/{postgres,sqlite}/20261008090000_create_auth_rate_limits.sql`.
+Counting, deciding and reopening an elapsed window are one
+`INSERT ... ON CONFLICT DO UPDATE ... RETURNING`. Measured, not argued: six compiled worker
+processes released together against one key allow exactly the limit, the in-memory limiter
+under the same harness allows six times it, and a read-then-write version of the PostgreSQL
+limiter allowed 56 of 10. A store that does not answer is `Verdict.unavailable`, the count stops
+at `limit + 1`, and `Sweeper` deletes elapsed windows through the new `SweepableRateLimiter`
+module. `SweepResult#rate_limits` is a new field, defaulting to zero.
+
+**`Permission#max_age`.** Recency is declared on the action as strength already was:
+`Permission.new("payouts.change", max_age: 5.minutes)`. `RBAC#decide` checks it after strength,
+using `Principal#fresh?`, the rule `require_fresh!` applies. A stale principal gets
+`InsufficientAssurance` with the new `Forbidden#max_age`, so no exhaustive `case` over
+`DenialReason` stops compiling. `env.auth.authorize!` carries the window into the
+`StepUpRequirement`, and an API client receives the same RFC 9470 `max_age` that
+`require_fresh!` sends. A bearer token is never fresh, so it cannot reach such a permission.
+Closes AUT-07's remaining gap.
+
+**`ApiTokens::Service#revoke_family(ids, account_id)`.** Revokes several of one account's tokens
+in a single statement and skips ids that are not the account's. Each token revoked is logged
+as its own `api_token.revoked`. `ApiTokens::Repository#revoke_family` is **not** abstract:
+its default raises `NotImplementedError`, so third-party adapters keep compiling, and the
+contract is a separate shared spec,
+`it_behaves_like_an_api_token_repository_with_family_revocation`. A PostgreSQL reader polling
+from a second connection saw the family half-revoked 646 times against a two-statement mutant,
+and never against the real implementation. Closes TOK-08's remaining gap.
+
+**The release gate runs PostgreSQL.** `tools/release/verify.sh` checks that the version agrees
+in `shard.yml`, `VERSION`, this file and the README pin. It then builds every example and runs
+the whole suite against a real database with `KEMAL_IDENTITY_REQUIRE_DATABASE=1`, and fails on
+any pending example. The release workflow runs it with a PostgreSQL service, refuses a checkout
+that is not the tagged commit, and refuses to publish if the tag moved after verification.
+CI's full-suite step sets the same variable.
+
+**The README pinned `~> 0.9.0`** for three minor releases, and the roadmap called a released
+v0.12 "in progress". Both are fixed, and `spec/unit/release_consistency_spec.cr` now fails when
+either drifts again.
+
 ## v0.12.2 — 2026-09-08
 
 **Fixes `CSRFHandler` reading the process-global application when one was passed to it.** An

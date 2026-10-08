@@ -260,10 +260,13 @@ alive.
 Each half is separately auditable: two ids in the trail, and `last_used_at` per token, which is
 what answers "has the fleet picked up the new key" without asking the fleet.
 
-There is deliberately no token *family*. `revoke_all` is account-scoped and atomic; retiring an
-arbitrary set of tokens as one operation is not expressible through the shipped adapters, and an
-application that needs it implements `ApiTokens::Repository` over its own table, where it owns
-the transaction. Measured in `blueprints/0025`, TOK-08.
+Retiring a *set* of tokens together — a rotation being abandoned, or an old key and its
+replacement found in the same leaked file — is `api.revoke_family(ids, account_id)` (v0.13.0).
+It is one statement in both SQL adapters, so a reader never finds the set half revoked, and ids
+that are not the account's are skipped without being reported. `ApiTokens::Repository#revoke_family`
+is not abstract: an adapter written before it existed keeps compiling, and calling the method
+on such an adapter raises `NotImplementedError` rather than looping over `revoke`, which would
+be two statements looking like one. Measured in `blueprints/0025`, TOK-08.
 
 ### Token lifetime policy
 
@@ -301,8 +304,11 @@ The window is the caller's choice (decision D5). Operations that must call it: c
 email, changing password, disabling MFA, generating or revoking API credentials, and any
 destructive account action.
 
-Strength and recency are separate axes and both are asked for separately: `require_fresh!` is
-recency, `require_assurance!` and `Permission#minimum_assurance` are strength. An API token is
+Strength and recency are separate axes and both are asked for separately: `require_fresh!` and
+`Permission#max_age` are recency, `require_assurance!` and `Permission#minimum_assurance` are
+strength. A permission may declare both. `RBAC#decide` checks strength first and recency
+second, and the refusal names the one that failed (`Forbidden#minimum_assurance` or
+`#max_age`), because "produce a second factor" and "sign in again" are different prompts. An API token is
 **never** fresh however recent its authentication is — it sits below `Password`, and an
 automated client cannot re-authenticate interactively, so a destructive account action should
 not be reachable with one in the first place.
@@ -481,11 +487,13 @@ way back is a recovery code (its own bucket, still working) or `remove` plus a f
 cost a second, a machine is at hours within a dozen attempts. It is not a substitute for the
 bound — the delay grows without ever refusing outright.
 
-**Both shipped limiters are per process**, so a replicated deployment multiplies every window by
-the number of processes (measured at 2.2× with six workers, `blueprints/0025` OPS-01). The
-lifetime bound is immune to this because it lives on the row; the window is not. A shared store
-behind `RateLimiter` is the answer, and
-`it_behaves_like_a_rate_limiter_of_any_strategy` is the suite to run against it.
+**The in-memory limiters are per process**, so a replicated deployment multiplies every window
+by the number of processes (measured at 2.2× with six workers, `blueprints/0025` OPS-01). The
+lifetime bound is immune to this because it lives on the row; the window is not. Since v0.13.0
+`Postgres::FixedWindowRateLimiter` (and `SQLite::FixedWindowRateLimiter`, for processes sharing
+one file on one host) keep the window in `auth_rate_limits`. They are measured across six real
+processes to allow exactly the limit. Anything else behind `RateLimiter` should run
+`it_behaves_like_a_rate_limiter_of_any_strategy`, and ideally the same multi-process probe.
 
 ### What a refusal may tell the user
 
@@ -629,7 +637,7 @@ raised and `EventBridge#failures` at zero — an empty trail rather than a faili
 | Generic responses on login and reset | required |
 | Constant-ish timing for unknown login vs wrong password | required |
 | CSRF on cookie-authenticated mutations, including login | required |
-| Rate limiting on the password verification path | required — the contract and a usable `FixedWindowRateLimiter` ship, but `NullRateLimiter` is the **default**, so an application must opt in. Quota is consumed before the lookup and before hashing. See `blueprints/0010-rate-limiting.md`. |
+| Rate limiting on the password verification path | required — the contract, an in-memory `FixedWindowRateLimiter` and shared `Postgres::`/`SQLite::FixedWindowRateLimiter` ship, but `NullRateLimiter` is the **default**, so an application must opt in, and `KemalIdentity.validate_production!` says so at boot when it has not. Quota is consumed before the lookup and before hashing. See `blueprints/0010-rate-limiting.md`. |
 | Session revocation on account disable and password change | required |
 | Explicit rejection of over-length passwords, never truncation | required |
 | `__Host-` prefix and its subdomain consequence documented | required |

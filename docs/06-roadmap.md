@@ -66,25 +66,7 @@ SQLite adapter (which also makes CI cheaper), the sweeper, structured audit even
 | Structured audit events | **done** — one named `Log` source, catalogue documented in the README, and `spec/security/audit_trail_spec.cr` asserts the events `docs/02-security-model.md` requires are actually emitted. Writing that spec is what found session rotation and bulk revocation missing entirely. |
 | SQLite adapter | **done** — all four repositories, 111 contract examples, no server needed. `blueprints/0014-sqlite-adapter.md` |
 | `kemal_identity_argon2` | **done** — separate shard, `urunsiyabend/kemal-identity-argon2`. Runs this project's own `Hasher` contract, required straight out of the dependency rather than copied. |
-| Split the driver dependencies | **not started** — see below |
-
-### Known issue: `pg` and `sqlite3` are hard dependencies
-
-`shard.yml` declares `db`, `pg` and `sqlite3` under `dependencies`, so **every** consumer
-installs both database drivers whether or not it uses either. Building
-`kemal_identity_argon2` — a shard whose only job is to hash passwords — pulls in PostgreSQL and
-SQLite, which is how this was noticed.
-
-Nothing in `src/kemal_identity.cr` requires them. Only `kemal_identity/postgres.cr` and
-`kemal_identity/sqlite.cr` do, and those are opt-in requires.
-
-The fix is to move `pg` and `sqlite3` to `development_dependencies` and document that an
-application using an adapter adds the matching driver to its own `shard.yml` — which it needs
-anyway, since `DB.open("postgres://…")` resolves the driver in the application's own build.
-`db` stays, because the adapters' types reference it.
-
-Deferred rather than done: it changes what consumers resolve, so it belongs in a release where
-that is the headline rather than a side effect.
+| Split the driver dependencies | **done in v0.7** — see that milestone; deferred from here because it changed what consumers resolve |
 
 ## v0.4 — API authentication
 
@@ -318,8 +300,8 @@ observing and one adds a method to a contract:
 | The tenant a session copies is documented as a stale grant | **done** — AUT-06 stays M3. Confining an account to a tenant had no effect on the sessions it already had, for the whole session lifetime, and the security model's revoke-all list did not mention it. Documented with three examples and both levers |
 | The packaged assertions cover an MFA result | **done** — `Testing.should_fail_with` and `should_verify` for `MFA::VerificationResult`. A packaged assertion that covers three of the four result unions is one somebody stops using |
 | The in-memory token double stopped losing scopes | **done** — found writing TOK-08's contract examples. `touch` runs on the authentication path and rebuilt the row without `scopes`, so an attenuated token became **unrestricted** from its second request onward — in tests only, which is the worst place for it to be invisible. Four contract examples now demand that attenuation survive every write |
-| Freshness declarable per permission | **open** — AUT-07's remaining gap. `Permission` carries `minimum_assurance` and no maximum age, so recency is asked for at each call site while strength is declared once. Needs a decision about where it would be enforced, since `RBAC#decide` deliberately does not raise |
-| Atomic revocation of a token *family* | **open** — TOK-08's remaining gap. `revoke_all` is account-scoped; two `revoke` calls are two statements. An application that needs the pair to fall together implements the repository over its own table, where it owns the transaction |
+| Freshness declarable per permission | **done in v0.13.0** — AUT-07's remaining gap. `Permission#max_age`, enforced inside `RBAC#decide` as a denial rather than a raise, so the "where" question answered itself: the same `Forbidden` path strength already took |
+| Atomic revocation of a token *family* | **done in v0.13.0** — TOK-08's remaining gap. `ApiTokens::Repository#revoke_family`, one statement in both SQL adapters, non-abstract so no third-party adapter stops compiling |
 
 ## v0.11.0 — second-factor rate limiting
 
@@ -343,11 +325,12 @@ implementations found three defects and a NIST requirement this shard did not me
 | The limiter contract described one strategy | **done** — `it_behaves_like_a_rate_limiter_of_any_strategy`. The window suite could not be run against a backoff limiter, which is a contract telling the next adapter author to implement the wrong thing — found by writing a second real implementation rather than a fake |
 | What a refusal may tell the user | **done** — `docs/02-security-model.md`. The login step's uniform message does not carry over to a second factor whose account is already known, and `RateLimiterUnavailable` rendered as "wrong code" sends somebody to re-enrol a working authenticator |
 | A worked example for the MFA family | **done in v0.12.0** — `examples/second_factor/app.cr`. Enrolment, `elevate!`, recovery, and the two guards side by side: `/vault` refuses a recovery code, `/account/link` refuses a second factor proved a second ago |
-| The shipped limiters are still per process | **open** — a replicated deployment multiplies every window by the number of processes (2.2× with six workers, OPS-01). The lifetime bound is immune because it lives on the row; the window is not. A shared store behind `RateLimiter` remains the answer |
+| The shipped limiters are still per process | **done in v0.13.0** — `Postgres::FixedWindowRateLimiter` and `SQLite::FixedWindowRateLimiter`, measured across six real processes at exactly the limit |
 
 ## v0.12.0 — what a consumer's integration wrote down
 
-**In progress.** A consumer built a full-suite SaaS application against v0.11.1 and listed what
+**Released on 2026-09-03**, with `v0.12.1` the same day and `v0.12.2` on 2026-09-08 — both fixes
+to this milestone's own additions, recorded in `CHANGELOG.md`. A consumer built a full-suite SaaS application against v0.11.1 and listed what
 the integration cost it. Not a catalogue pass: the list is about places where situations with
 different security meaning share one type or one field, and the two largest items have a v1.0
 deadline because they change contracts on the freeze list.
@@ -364,6 +347,27 @@ deadline because they change contracts on the freeze list.
 | Application context on an OIDC `Pending` | **done** — `Pending#context`, a `Hash(String, String)` carried in the signed flow and handed back on the callback. Everyone does this (Spring's `attributes`, ASP.NET's `AuthenticationProperties.Items`, allauth's `process`); they differ on where it lives and whether the intent is bound to the session, and here the binding is the application's to check. A context that cannot be read refuses the flow rather than arriving empty. Also fixed `#seal` ignoring `MAX_BYTES`, which made an oversized flow a login that silently never completed. `blueprints/0033` |
 | A worked example for the three questions | **done** — `examples/second_factor/app.cr`, the MFA-family example v0.11.0 left open. It is also the only place the three new guards stand next to each other: `require_assurance!` refuses a recovery code, `require_fresh!` passes on a TOTP, and `require_recent_password!` refuses the same session until the password is typed. Every example now calls `validate_middleware_order!` |
 | Middleware order validated at boot | **done** — `KemalIdentity::Kemal.validate_middleware_order!`, reading `Kemal::Config::CUSTOM_HANDLERS` because `Kemal.config.handlers` is empty until `Kemal.run` (and forcing `setup` early would silently drop a later `use`). Django's system checks are the model: report every problem, name the fix, opt in. Not an `install!` — `blueprints/0008` is why the chain belongs to the application. `blueprints/0034` |
+
+## v0.13.0 — production hardening
+
+**Prepared on 2026-10-08, not yet tagged.** Additive throughout: no signature on the freeze list
+moved, no abstract method was added, and an application that changes nothing behaves exactly as
+on v0.12.2. Every item was checked against the code before it was designed for.
+`docs/superpowers/specs/2026-10-08-production-hardening-design.md` is the decision record.
+
+| Deliverable | State |
+|---|---|
+| A boot-time answer to "which protections are off" | **done** — `KemalIdentity.validate_production!` and `Application#production_gaps`. Opt-in, like `validate_middleware_order!`, because every gap it names is a configuration that boots today; `accept:` names a gap a deployment has chosen |
+| A rate limiter that holds across processes | **done** — `Postgres::FixedWindowRateLimiter` and `SQLite::FixedWindowRateLimiter`, one `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` per attempt. Six compiled workers allow exactly the limit; the in-memory control allows six times it; a read-then-write mutant allowed 56 of 10 |
+| A release gate that runs the adapter people deploy | **done** — `tools/release/verify.sh`: version agreement, examples, and the full suite against PostgreSQL with nothing pending. The workflow publishes only the commit it verified, and refuses a tag that moved in between |
+| Permission freshness | **done** — `Permission#max_age`, closing AUT-07's remaining gap |
+| Atomic revocation of a set of tokens | **done** — `revoke_family`, closing TOK-08's remaining gap |
+| README and roadmap agree with the release | **done** — and `spec/unit/release_consistency_spec.cr` keeps them agreeing; the README had pinned `~> 0.9.0` for three minor releases |
+
+Not done here, deliberately: a Redis limiter (the contract admits one, and nothing here needs
+one), a shared exponential-backoff limiter (kinder, not stronger, and the lifetime bound already
+lives on the row), and running `validate_production!` from `configure`, which would stop
+working deployments from booting on upgrade.
 
 ## Storage adapters beyond `crystal-db`
 

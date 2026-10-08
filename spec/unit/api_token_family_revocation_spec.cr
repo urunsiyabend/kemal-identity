@@ -94,7 +94,7 @@ describe "KemalIdentity::ApiTokens::Service#revoke_family" do
     service.revoke_family([first.record.id, second.record.id], "a1")
 
     revoked = backend.entries.select { |entry| entry.message == "api_token.revoked" }
-    revoked.map(&.data[:credential].to_s).sort.should eq([first.record.id, second.record.id].sort)
+    revoked.map(&.data[:credential].to_s).sort!.should eq([first.record.id, second.record.id].sort)
   end
 end
 

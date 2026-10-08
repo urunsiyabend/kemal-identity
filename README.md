@@ -45,7 +45,7 @@ Add the shard to your application's `shard.yml`:
 dependencies:
   kemal_identity:
     github: urunsiyabend/kemal-identity
-    version: ~> 0.9.0
+    version: ~> 0.13.0
 ```
 
 Then install dependencies:
@@ -61,7 +61,7 @@ application:
 dependencies:
   kemal_identity:
     github: urunsiyabend/kemal-identity
-    version: ~> 0.9.0
+    version: ~> 0.13.0
   pg:
     github: will/crystal-pg
 ```
@@ -84,7 +84,10 @@ KemalIdentity.configure(
   accounts: KemalIdentity::Postgres::AccountRepository.new(db),
   sessions: KemalIdentity::Postgres::SessionRepository.new(db),
   csrf: KemalIdentity::CSRFConfig.new(secret: ENV["CSRF_SECRET"]),
-  rate_limiter: KemalIdentity::FixedWindowRateLimiter.new(
+  # Counters in auth_rate_limits, shared by every process. FixedWindowRateLimiter is the
+  # in-memory equivalent, for a deployment that genuinely runs one process.
+  rate_limiter: KemalIdentity::Postgres::FixedWindowRateLimiter.new(
+    db,
     limit: 10,
     window: 5.minutes
   ),
@@ -106,6 +109,9 @@ end
 
 # Every wrong arrangement of those three lines compiles. This says so at boot instead.
 KemalIdentity::Kemal.validate_middleware_order!
+
+# Likewise for a configuration that leaves login or MFA protections off. Opt-in.
+KemalIdentity.validate_production!
 
 Kemal.run
 ```
@@ -232,8 +238,22 @@ See the [architecture](docs/01-architecture.md), [security model](docs/02-securi
 
 ## Production notes
 
-- `NullRateLimiter` is the default and permits every attempt. Configure a shared limiter in
-  multi-process deployments; `FixedWindowRateLimiter` is process-local.
+- Call `KemalIdentity.validate_production!` at boot. It raises one `ConfigurationError` naming
+  every login or MFA protection the configuration leaves off — an unthrottled or fail-open
+  login, a process-local limiter, no bound on guessing a second factor, an unthrottled
+  recovery path, an insecure cookie — with the fix for each. A gap the deployment has decided
+  to live with is accepted by name:
+  `KemalIdentity.validate_production!(accept: [KemalIdentity::ProductionGap::ProcessLocalRateLimiter])`.
+  It is not run for you, so upgrading never stops a working deployment from booting.
+- `NullRateLimiter` is the default and permits every attempt. `FixedWindowRateLimiter` is
+  process-local, so N processes allow N times the limit.
+  `KemalIdentity::Postgres::FixedWindowRateLimiter` shares one counter per key across processes
+  and hosts (`SQLite::FixedWindowRateLimiter` across processes on one host). Both need the
+  `create_auth_rate_limits` migration, and the sweeper reclaims elapsed windows.
+- `Authz::Permission.new("payouts.change", max_age: 5.minutes)` declares recency on the action,
+  as `minimum_assurance` declares strength; a stale principal is refused with step-up.
+- `api.revoke_family(ids, account_id)` revokes several of an account's API tokens in one atomic
+  step, for a rotation abandoned or a set of keys leaked together.
 - Behind a reverse proxy, the `ip:` you pass to `passwords.authenticate` must be the resolved
   client address, not `request.remote_address` — see the sign-in example above.
 - The default `__Host-kemal_identity` cookie is `Secure`, host-only, HTTP-only, and
