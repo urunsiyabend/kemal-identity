@@ -27,8 +27,47 @@ jobs:
       matrix:
         crystal: ["1.21.0", "1.12.0"]
 
+    # The commit that was verified, handed to `publish` so it can refuse a tag that has moved.
+    outputs:
+      sha: ${{ steps.pin.outputs.sha }}
+
+    # The gate runs the PostgreSQL adapter, not only the database-free subset. v0.11.0 was
+    # published with every MFA read raising against PostgreSQL, because the only job with a
+    # database was CI's — which runs after this workflow has already published.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: kemal_identity
+          POSTGRES_PASSWORD: kemal_identity
+          POSTGRES_DB: kemal_identity_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      # What is verified below is this checkout, and what is published is a tag. Say which commit
+      # the two have in common, and stop if the checkout is not the commit the tag names.
+      - name: Pin the tag to the commit being verified
+        id: pin
+        run: |
+          set -euo pipefail
+          git fetch --force origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          head=$(git rev-parse HEAD)
+          tagged=$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{commit}")
+          echo "HEAD=$head $GITHUB_REF_NAME=$tagged"
+          if [ "$head" != "$tagged" ]; then
+            echo "::error::checked out $head but $GITHUB_REF_NAME names $tagged"
+            exit 1
+          fi
+          echo "sha=$head" >> "$GITHUB_OUTPUT"
 
       - uses: crystal-lang/install-crystal@v1
         with:
@@ -36,22 +75,6 @@ jobs:
 
       - name: Install dependencies
         run: shards install
-
-      # A tag saying v0.6.0 on a tree whose shard.yml still says 0.5.0 is a release nobody can
-      # resolve correctly, and it is an easy mistake to make when the bump and the tag are two
-      # commands. Cheap to check, painful to discover afterwards.
-      - name: Check the tag matches the shard version
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          shard=$(grep -E '^version:' shard.yml | awk '{print $2}')
-          constant=$(grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' src/kemal_identity/version.cr | tr -d '"')
-
-          echo "tag=$tag shard.yml=$shard VERSION=$constant"
-
-          if [ "$tag" != "$shard" ] || [ "$tag" != "$constant" ]; then
-            echo "::error::tag $GITHUB_REF_NAME disagrees with shard.yml ($shard) or VERSION ($constant)"
-            exit 1
-          fi
 
       # Formatting runs on the main line only, exactly as it does in CI: `crystal tool format`
       # changes its output between releases, so checking it on the floor tests the compiler
@@ -61,19 +84,13 @@ jobs:
         if: matrix.crystal == '1.21.0'
         run: crystal tool format --check
 
-      # The full matrix already ran on this commit when it landed on main. This is the
-      # database-free subset, re-run against the tag itself so a release is never cut from a
-      # tree that does not build — the tag is what people will actually resolve.
+      # Version agreement (tag, shard.yml, VERSION, CHANGELOG, README pin), the core and every
+      # example building, and the **full** suite against the PostgreSQL service with nothing
+      # pending. One script, so a maintainer runs exactly this before tagging.
       - name: Verify the tagged tree
-        run: |
-          set -e
-          crystal build --no-codegen src/kemal_identity.cr
-          # Globbed, like the CI job: a release cut from a tree where one of the examples no
-          # longer compiles ships an example nobody can run.
-          for app in examples/*/app.cr; do
-            crystal build --no-codegen "$app"
-          done
-          crystal spec spec/unit spec/security spec/integration/sqlite_spec.cr
+        env:
+          DATABASE_URL: postgres://kemal_identity:kemal_identity@localhost:5432/kemal_identity_test
+        run: tools/release/verify.sh "$GITHUB_REF_NAME"
 
   publish:
     name: Publish ${{ github.ref_name }}
@@ -82,6 +99,23 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+
+      # The tag can be moved, or deleted and recreated, between verification and here. Read
+      # where it points *now* on the remote, and publish only if that is the commit verified.
+      - name: The tag still names the verified commit
+        env:
+          VERIFIED: ${{ needs.verify.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          now=$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{commit}")
+          echo "verified=$VERIFIED $GITHUB_REF_NAME=$now"
+          if [ -z "$VERIFIED" ] || [ "$now" != "$VERIFIED" ]; then
+            echo "::error::$GITHUB_REF_NAME now names $now, not the verified $VERIFIED"
+            exit 1
+          fi
 
       # The section between this version's heading and the next one. Written once, in the
       # changelog, and read from there: release notes that are retyped are release notes that

@@ -100,9 +100,12 @@ jobs:
           DATABASE_URL: postgres://kemal_identity:kemal_identity@localhost:5432/kemal_identity_test
         run: shards build migrate && bin/migrate up
 
+      # KEMAL_IDENTITY_REQUIRE_DATABASE: a PostgreSQL service that never came up fails here
+      # instead of turning the adapter's specs into one passing `pending` line.
       - name: Full suite
         env:
           DATABASE_URL: postgres://kemal_identity:kemal_identity@localhost:5432/kemal_identity_test
+          KEMAL_IDENTITY_REQUIRE_DATABASE: "1"
         run: crystal spec
 
       # An example that has drifted from the API is worse than no example, so this failing is

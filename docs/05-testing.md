@@ -38,7 +38,44 @@ crystal spec
 
 `crystal spec` then reports **no pending examples**. That is the check: a run that says
 "PostgreSQL repositories (set DATABASE_URL to run them)" is a run in which a whole adapter was
-not tested.
+not tested. `KEMAL_IDENTITY_REQUIRE_DATABASE=1` makes that a failure instead of a pending line;
+CI's full-suite step and the release gate both set it.
+
+Without the PostgreSQL client tools on the host, a container works just as well:
+
+```bash
+docker run -d --name ki-pg -e POSTGRES_USER=kemal_identity -e POSTGRES_PASSWORD=kemal_identity \
+  -e POSTGRES_DB=kemal_identity_test -p 127.0.0.1:55432:5432 postgres:18
+export DATABASE_URL="postgres://kemal_identity:kemal_identity@127.0.0.1:55432/kemal_identity_test"
+```
+
+### Across processes
+
+`spec/integration/multiprocess_rate_limit_spec.cr` compiles `spec/support/rate_limit_worker.cr`
+and releases six worker processes at once against one key. The PostgreSQL and SQLite limiters
+must allow exactly the limit between them, and the in-memory limiter, as a control, six times
+it. A fiber-level spec cannot stand in for this: `blueprints/0025` (OPS-01) found a limiter that
+passed every contract example while allowing 2.2× its limit across processes. The compile is
+most of the file's cost, roughly ten to thirty seconds.
+
+## The release gate
+
+`tools/release/verify.sh <version>` is what `.github/workflows/release.yml` runs against the
+tagged commit before anything is published, and what to run before tagging:
+
+```bash
+DATABASE_URL=... tools/release/verify.sh 0.13.0
+```
+
+It checks that the version agrees in `shard.yml`, `KemalIdentity::VERSION`, a `CHANGELOG.md`
+section and the README's install pin. It builds the core and every example, migrates, and runs
+the **whole** suite against PostgreSQL with `KEMAL_IDENTITY_REQUIRE_DATABASE=1`, failing on any
+pending example. Until v0.13.0 the gate ran only the database-free subset, which is how
+v0.11.0 reached publication with a PostgreSQL-only defect.
+
+The workflow also pins what it publishes. `verify` refuses a checkout that is not the commit
+the tag names, and hands that commit to `publish`. `publish` re-reads the tag from the remote
+and refuses if the tag has since been moved.
 
 ## Contract specs
 
