@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.13.0 — unreleased
+## v0.13.0 — 2026-10-08
 
 **Production hardening, all of it additive.** No signature on the v1.0 freeze list moved, no
 abstract method was added, and an application that changes nothing behaves exactly as it did on
