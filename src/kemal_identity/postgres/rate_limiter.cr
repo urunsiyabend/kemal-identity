@@ -68,14 +68,14 @@ module KemalIdentity::Postgres
       return Verdict.allow if attempts <= @limit
 
       Verdict.deny(retry_after: started_at + @window - now)
-    rescue error : DB::Error | IO::Error | PQ::PQError
+    rescue error : DB::Error | IO::Error | PQ::PQError | PQ::ConnectionError | PG::Error
       Log.warn &.emit("rate_limiter.store_unavailable", error: error.class.name)
       Verdict.unavailable
     end
 
     def reset(key : String) : Nil
       @db.exec("DELETE FROM auth_rate_limits WHERE key = $1", key)
-    rescue error : DB::Error | IO::Error | PQ::PQError
+    rescue error : DB::Error | IO::Error | PQ::PQError | PQ::ConnectionError | PG::Error
       # Must not raise: a reset that does not happen leaves somebody throttled slightly longer
       # than they earned, which is not worth failing a successful login over.
       Log.warn &.emit("rate_limiter.store_unavailable", error: error.class.name)

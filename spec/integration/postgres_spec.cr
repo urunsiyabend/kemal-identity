@@ -400,6 +400,20 @@ else
       limiter.reset("key")
     end
 
+    # Refused at the handshake rather than at the socket. crystal-db currently reports this as a
+    # `DB::Error`; the adapter also names the driver's own `PQ::ConnectionError` and `PG::Error`,
+    # which are not `DB::Error`s, so a driver that stopped wrapping it could not make this a 500.
+    it "says the store is unavailable when the server refuses the credentials" do
+      uri = URI.parse(DATABASE_URL.to_s)
+      uri.user = "kemal_identity"
+      uri.password = "not-the-password"
+      uri.query = "initial_pool_size=0&retry_attempts=0&checkout_timeout=1"
+      limiter = KemalIdentity::Postgres::FixedWindowRateLimiter.new(DB.open(uri.to_s), limit: 5, window: 1.minute)
+
+      limiter.consume("key").unavailable?.should be_true
+      limiter.reset("key")
+    end
+
     it "stops counting at one past the limit, so a flood cannot overflow the column" do
       reset_schema!
       limiter = KemalIdentity::Postgres::FixedWindowRateLimiter.new(database, limit: 3, window: 1.hour)
