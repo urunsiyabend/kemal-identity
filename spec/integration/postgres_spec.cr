@@ -51,7 +51,14 @@ private def insert(account : KemalIdentity::Accounts::Account) : Nil
     account.password_scheme, account.created_at, account.updated_at)
 end
 
-if DATABASE.nil?
+if DATABASE.nil? && ENV["KEMAL_IDENTITY_REQUIRE_DATABASE"]? == "1"
+  # The release gate sets this. A pending example is a pass to `crystal spec`, so without it a
+  # gate whose database never came up would publish having tested no adapter at all — which is
+  # how v0.11.0 shipped a PostgreSQL-only defect (`docs/06-roadmap.md`).
+  it "runs the PostgreSQL repositories" do
+    fail "KEMAL_IDENTITY_REQUIRE_DATABASE=1 and DATABASE_URL is not set"
+  end
+elsif DATABASE.nil?
   # Reported rather than silently absent: a suite that quietly skips its only test of the real
   # adapter looks exactly like a suite that has one.
   pending "PostgreSQL repositories (set DATABASE_URL to run them)"
