@@ -69,6 +69,12 @@ module KemalIdentity::Authz
         )
       end
 
+      # After strength, so a refusal names the one thing that failed. Never cached: freshness is
+      # a property of this principal at this instant, and `Cache` holds grants, not decisions.
+      if (max_age = declared.max_age) && !principal.fresh?(max_age, @clock.now)
+        return Forbidden.stale_authentication(permission, tenant_id, max_age: max_age)
+      end
+
       # Last, and the order is the security property.
       #
       # The account's grant has already been established, so a scope can only ever *remove*.

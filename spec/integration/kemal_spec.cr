@@ -64,12 +64,18 @@ AUTHORIZER = KemalIdentity::Authz::RBAC.new(
       KemalIdentity::Authz::Permission.new(
         "reports.export", minimum_assurance: KemalIdentity::AssuranceLevel::ApiToken
       ),
+      # Recency declared on the permission rather than at the route (`Permission#max_age`).
+      # At `ApiToken` strength so that recency, not strength, is what refuses a token.
+      KemalIdentity::Authz::Permission.new(
+        "keys.rotate", minimum_assurance: KemalIdentity::AssuranceLevel::ApiToken, max_age: 5.minutes
+      ),
     ]),
     [
       KemalIdentity::Authz::Role.new("reader", ["invoices.read"]),
       KemalIdentity::Authz::Role.new(
         "finance", ["invoices.read", "invoices.refund", "reports.read", "reports.export"]
       ),
+      KemalIdentity::Authz::Role.new("key_admin", ["keys.rotate"]),
     ]
   ),
   store: AUTHZ_STORE,
@@ -422,6 +428,12 @@ end
 get "/invoices/refund" do |env|
   env.auth.authorize!("invoices.refund")
   "refunded"
+end
+
+# No `require_fresh!` here on purpose: the permission declares its own window.
+get "/keys/rotate" do |env|
+  env.auth.authorize!("keys.rotate")
+  "rotated"
 end
 
 # The resource-aware route. `invoice-1` belongs to the signed-in account; `invoice-2` does not.
@@ -2162,5 +2174,37 @@ describe "adopting a session from the system being migrated off" do
 
     response.body.should eq("nobody")
     response.headers["Set-Cookie"]?.should be_nil
+  end
+end
+
+describe "a permission that declares how recent the proof must be" do
+  it "permits a fresh session, and refuses it once the window has passed, naming the window" do
+    AUTHORIZER.grant("a1", "key_admin")
+    token = log_in
+
+    get "/keys/rotate", headers: cookies("kemal_identity=#{token}")
+    response.status_code.should eq(200)
+
+    TEST_CLOCK.advance(10.minutes)
+    get "/keys/rotate", headers: cookies("kemal_identity=#{token}")
+    response.status_code.should eq(403)
+  ensure
+    TEST_CLOCK.travel_to(KemalIdentity::Testing::FIXED_NOW)
+    AUTHORIZER.revoke("a1", "key_admin")
+  end
+
+  # The same RFC 9470 challenge `require_fresh!` sends, because it is the same refusal.
+  it "tells an API client the window it would have to meet" do
+    AUTHORIZER.grant("a1", "key_admin")
+    token = issue_api_token.token.reveal
+
+    get "/keys/rotate", headers: bearer(token)
+
+    response.status_code.should eq(403)
+    challenge_header.should eq(
+      %(Bearer realm="api", error="insufficient_user_authentication", max_age="300")
+    )
+  ensure
+    AUTHORIZER.revoke("a1", "key_admin")
   end
 end

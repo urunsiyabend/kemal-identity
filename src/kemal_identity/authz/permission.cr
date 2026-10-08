@@ -41,11 +41,26 @@ module KemalIdentity::Authz
     # action.
     getter minimum_assurance : AssuranceLevel
 
+    # How recently the caller must have proved who they are, or `nil` for no limit.
+    #
+    # Recency belongs here for the reason strength does: "changing payout details needs a
+    # login from the last five minutes" is a property of the action, and a `require_fresh!` at
+    # each call site is a rule missing from the one somebody forgot (`blueprints/0025`,
+    # AUT-07). Checked by `RBAC#decide` with `Principal#fresh?`, the rule `require_fresh!` uses,
+    # so nothing below `Password` is ever fresh — **a bearer token can never reach a permission
+    # that declares this**, however wide its scopes.
+    getter max_age : Time::Span?
+
     def initialize(
       @name : String,
       @description : String = "",
       @minimum_assurance : AssuranceLevel = AssuranceLevel::Password,
+      @max_age : Time::Span? = nil,
     )
+      if (window = @max_age) && window <= Time::Span.zero
+        raise ConfigurationError.new("permission #{@name.inspect} has a max_age that is not positive")
+      end
+
       if @name.bytesize > MAX_NAME_BYTES
         raise ConfigurationError.new("permission name is longer than #{MAX_NAME_BYTES} bytes")
       end

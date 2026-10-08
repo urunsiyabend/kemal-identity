@@ -346,6 +346,89 @@ describe "authorization" do
     end
   end
 
+  # AUT-07's remaining gap (`blueprints/0025`): strength was declared once on the permission
+  # while recency was asked for at every call site, and the call site somebody forgot is the
+  # one that changes payout details on a session signed in yesterday.
+  describe "an action that needs a recent proof" do
+    fresh_harness = -> do
+      clock = KemalIdentity::Testing::TestClock.new(KemalIdentity::Testing::FIXED_NOW)
+      catalog = KemalIdentity::Authz::RoleCatalog.new(
+        KemalIdentity::Authz::PermissionRegistry.new([
+          KemalIdentity::Authz::Permission.new("payouts.read"),
+          KemalIdentity::Authz::Permission.new("payouts.change", max_age: 5.minutes),
+          KemalIdentity::Authz::Permission.new(
+            "keys.rotate", minimum_assurance: KemalIdentity::AssuranceLevel::ApiToken, max_age: 5.minutes
+          ),
+        ]),
+        [KemalIdentity::Authz::Role.new("treasurer", ["payouts.read", "payouts.change", "keys.rotate"])]
+      )
+      rbac = KemalIdentity::Authz::RBAC.new(
+        catalog: catalog, store: KemalIdentity::Testing::MemoryAuthzRepository.new, clock: clock,
+        random: KemalIdentity::Testing::DeterministicRandom.new(seed: 7)
+      )
+      rbac.grant("a1", "treasurer")
+      {rbac, clock}
+    end
+
+    it "permits a proof inside the window" do
+      rbac, clock = fresh_harness.call
+      principal = KemalIdentity::Testing.principal(subject: "a1", authenticated_at: clock.now - 4.minutes)
+
+      rbac.decide(principal, "payouts.change").permitted?.should be_true
+    end
+
+    it "refuses a proof older than the window, asks for step-up, and names the window" do
+      rbac, clock = fresh_harness.call
+      principal = KemalIdentity::Testing.principal(subject: "a1", authenticated_at: clock.now - 6.minutes)
+
+      decision = rbac.decide(principal, "payouts.change")
+      decision = decision.as(KemalIdentity::Authz::Forbidden)
+      decision.reason.should eq(KemalIdentity::Authz::DenialReason::InsufficientAssurance)
+      decision.step_up?.should be_true
+      decision.max_age.should eq(5.minutes)
+      # Recency failed, not strength: naming a level here would send somebody to enrol a factor.
+      decision.minimum_assurance.should be_nil
+    end
+
+    it "leaves a permission with no window alone, however old the proof" do
+      rbac, clock = fresh_harness.call
+      principal = KemalIdentity::Testing.principal(subject: "a1", authenticated_at: clock.now - 300.days)
+
+      rbac.decide(principal, "payouts.read").permitted?.should be_true
+    end
+
+    # `Principal#fresh?` is the same rule `require_fresh!` applies: below `Password` nothing is
+    # fresh, however recent, because nobody was present to prove anything.
+    it "refuses a bearer token even when it is the right strength, because a token is never fresh" do
+      rbac, clock = fresh_harness.call
+      principal = KemalIdentity::Testing.principal(
+        subject: "a1", assurance: KemalIdentity::AssuranceLevel::ApiToken, authenticated_at: clock.now
+      )
+
+      decision = rbac.decide(principal, "keys.rotate").as(KemalIdentity::Authz::Forbidden)
+      decision.step_up?.should be_true
+      decision.max_age.should eq(5.minutes)
+    end
+
+    it "reports strength before recency, when both fail" do
+      rbac, clock = fresh_harness.call
+      principal = KemalIdentity::Testing.principal(
+        subject: "a1", assurance: KemalIdentity::AssuranceLevel::Remembered,
+        authenticated_at: clock.now - 1.day
+      )
+
+      decision = rbac.decide(principal, "payouts.change").as(KemalIdentity::Authz::Forbidden)
+      decision.minimum_assurance.should eq(KemalIdentity::AssuranceLevel::Password)
+      decision.max_age.should be_nil
+    end
+
+    it "refuses a window that is not positive at declaration" do
+      expect_raises(KemalIdentity::ConfigurationError, /max_age/) do
+        KemalIdentity::Authz::Permission.new("payouts.change", max_age: Time::Span.zero)
+      end
+    end
+  end
+
   describe "a grant taken away mid-session" do
     # The reason `Principal` carries no roles: nothing has to be reissued for a revocation to
     # take effect, and the session that was minted an hour ago reads the current answer.

@@ -202,12 +202,15 @@ module KemalIdentity::Kemal
         # stronger credential would fix asks for one, whatever named it — including an
         # application authorizer's own. See `blueprints/0022`.
         if decision.step_up?
-          # `minimum_assurance` is filled for the built-in `InsufficientAssurance` denial and
-          # nil for an application authorizer's own — that authorizer knows its policy and this
+          # `minimum_assurance` (strength) or `max_age` (recency, from `Permission#max_age`) is
+          # filled for the built-in `InsufficientAssurance` denial, and both are nil for an
+          # application authorizer's own — that authorizer knows its policy and this
           # shard does not, so an empty requirement is the honest answer rather than a guess.
           raise FreshAuthenticationRequiredError.new(
             "stronger authentication required",
-            StepUpRequirement.new(minimum_assurance: decision.minimum_assurance)
+            StepUpRequirement.new(
+              minimum_assurance: decision.minimum_assurance, max_age: decision.max_age
+            )
           )
         end
 

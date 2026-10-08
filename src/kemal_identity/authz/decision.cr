@@ -108,6 +108,14 @@ module KemalIdentity::Authz
     # shard does not.
     getter minimum_assurance : AssuranceLevel?
 
+    # The window the proof had to fall inside, when *recency* is why this was refused.
+    #
+    # Filled from `Permission#max_age` by `RBAC`; `nil` for every other reason. Never set
+    # together with `minimum_assurance`: strength is checked first, and a refusal names the one
+    # thing that failed, since "produce a second factor" and "sign in again" are different
+    # prompts.
+    getter max_age : Time::Span?
+
     private def initialize(
       @permission : String,
       @reason : DenialReason,
@@ -115,6 +123,7 @@ module KemalIdentity::Authz
       @code : String? = nil,
       @tenant_id : String? = nil,
       @minimum_assurance : AssuranceLevel? = nil,
+      @max_age : Time::Span? = nil,
     )
     end
 
@@ -148,6 +157,23 @@ module KemalIdentity::Authz
       new(
         permission, DenialReason::InsufficientAssurance,
         step_up: true, tenant_id: tenant_id, minimum_assurance: minimum_assurance
+      )
+    end
+
+    # The caller is strong enough, but proved it longer ago than the permission allows.
+    #
+    # `InsufficientAssurance` rather than a new reason: a new `DenialReason` member would stop
+    # every exhaustive `case` over the enum compiling, and the fix is the same step-up. What
+    # separates the two is `#max_age` here and `#minimum_assurance` there.
+    def self.stale_authentication(
+      permission : String,
+      tenant_id : String? = nil,
+      *,
+      max_age : Time::Span,
+    ) : self
+      new(
+        permission, DenialReason::InsufficientAssurance,
+        step_up: true, tenant_id: tenant_id, max_age: max_age
       )
     end
 
