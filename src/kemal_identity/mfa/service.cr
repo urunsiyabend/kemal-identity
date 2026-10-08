@@ -61,7 +61,9 @@ module KemalIdentity::MFA
     # path for a disabled factor is. New deployments should set it.
     getter max_consecutive_failures : Int32?
 
-    @recovery_rate_limiter : RateLimiter
+    # The limiter recovery codes are counted against: `rate_limiter` unless one of its own was
+    # passed. Exposed so `Application#production_gaps` can see an unthrottled recovery path.
+    getter recovery_rate_limiter : RateLimiter
 
     def initialize(
       @factors : Repository,
