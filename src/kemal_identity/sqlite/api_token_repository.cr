@@ -58,6 +58,23 @@ module KemalIdentity::SQLite
       result.rows_affected == 1
     end
 
+    # One statement, so the family falls together. SQLite has no array parameter, so the list is
+    # bound as one placeholder per id — still bound, never interpolated.
+    def revoke_family(ids : Array(String), account_id : String, at : Time) : Array(String)
+      unique = ids.uniq
+      return [] of String if unique.empty?
+
+      placeholders = Array.new(unique.size, "?").join(", ")
+      args = [at, account_id] of DB::Any
+      unique.each { |id| args << id }
+
+      @db.query_all(<<-SQL, args: args, as: String)
+        UPDATE auth_api_tokens SET revoked_at = ?
+         WHERE account_id = ? AND id IN (#{placeholders}) AND revoked_at IS NULL
+        RETURNING id
+        SQL
+    end
+
     def expire(id : String, at : Time) : Bool
       # The "never lengthens" rule is in the statement rather than in a read followed by a
       # write, so two callers cannot interleave into a later deadline than either asked for.

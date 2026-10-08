@@ -426,3 +426,85 @@ def it_behaves_like_an_api_token_repository(&build : Array(KemalIdentity::Accoun
     end
   end
 end
+
+# Shared spec for `ApiTokens::Repository#revoke_family`, the one optional method on the contract.
+#
+# Separate from `it_behaves_like_an_api_token_repository` so that adding it to the shard did not
+# fail every third-party adapter that already ran the main suite: `revoke_family` has a default
+# that raises rather than an abstract declaration (`ApiTokens::Repository#revoke_family` says
+# why). An adapter that implements it runs this as well.
+#
+# Same block shape as the main suite: handed the accounts to seed, returns a repository.
+def it_behaves_like_an_api_token_repository_with_family_revocation(&build : Array(KemalIdentity::Accounts::Account) -> KemalIdentity::ApiTokens::Repository)
+  now = KemalIdentity::Testing::FIXED_NOW
+  digest = ->(value : String) { KemalIdentity::Secret.new(value).digest }
+
+  token = ->(id : String, account_id : String) do
+    KemalIdentity::ApiTokens::Token.new(
+      id: id, account_id: account_id, name: "token #{id}",
+      token_digest: digest.call("raw-#{id}"), created_at: now,
+    )
+  end
+
+  revoked_at = ->(repo : KemalIdentity::ApiTokens::Repository, id : String) do
+    repo.find_by_digest(digest.call("raw-#{id}")).or_fail.token.revoked_at
+  end
+
+  accounts = [
+    KemalIdentity::Testing.account(id: "a1", login: "a1@example.com"),
+    KemalIdentity::Testing.account(id: "a2", login: "a2@example.com"),
+  ]
+
+  seeded = -> do
+    repo = build.call(accounts)
+    repo.create(token.call("t1", "a1"))
+    repo.create(token.call("t2", "a1"))
+    repo.create(token.call("t3", "a1"))
+    repo.create(token.call("other", "a2"))
+    repo
+  end
+
+  describe "#revoke_family" do
+    it "revokes every named token at one instant and reports which" do
+      repo = seeded.call
+
+      repo.revoke_family(["t1", "t2"], "a1", now + 1.minute).sort.should eq(["t1", "t2"])
+
+      revoked_at.call(repo, "t1").should eq(now + 1.minute)
+      revoked_at.call(repo, "t2").should eq(now + 1.minute)
+      revoked_at.call(repo, "t3").should be_nil
+    end
+
+    # The owner-scoped `Service#revoke` rule: a token id is not secret, so naming somebody
+    # else's must change nothing — and must not be reported, which would confirm it exists.
+    it "leaves another account's token alone and does not report it" do
+      repo = seeded.call
+
+      repo.revoke_family(["t1", "other"], "a1", now).should eq(["t1"])
+      revoked_at.call(repo, "other").should be_nil
+    end
+
+    it "does not re-stamp or report a token that was already revoked" do
+      repo = seeded.call
+      repo.revoke("t1", now)
+
+      repo.revoke_family(["t1", "t2"], "a1", now + 1.hour).should eq(["t2"])
+      revoked_at.call(repo, "t1").should eq(now)
+    end
+
+    it "ignores ids nobody issued" do
+      seeded.call.revoke_family(["t1", "nope"], "a1", now).should eq(["t1"])
+    end
+
+    it "reports a repeated id once" do
+      seeded.call.revoke_family(["t1", "t1", "t1"], "a1", now).should eq(["t1"])
+    end
+
+    it "does nothing for an empty list" do
+      repo = seeded.call
+
+      repo.revoke_family([] of String, "a1", now).should be_empty
+      revoked_at.call(repo, "t1").should be_nil
+    end
+  end
+end

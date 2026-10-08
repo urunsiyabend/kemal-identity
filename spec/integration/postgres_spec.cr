@@ -102,6 +102,55 @@ else
       accounts.each { |account| insert(account) }
       KemalIdentity::Postgres::ApiTokenRepository.new(database)
     end
+
+    it_behaves_like_an_api_token_repository_with_family_revocation do |accounts|
+      reset_schema!
+      accounts.each { |account| insert(account) }
+      KemalIdentity::Postgres::ApiTokenRepository.new(database)
+    end
+
+    # What "atomic" buys, observed from outside: a reader asking about the whole family in one
+    # statement must never find it half revoked. Two `revoke` calls are two statements, and a
+    # reader landing between them sees exactly that.
+    it "never shows a concurrent reader a half-revoked family" do
+      reset_schema!
+      insert(KemalIdentity::Testing.account(id: "a1", login: "a1@example.com"))
+      repo = KemalIdentity::Postgres::ApiTokenRepository.new(database)
+      split = Atomic(Int32).new(0)
+      now = KemalIdentity::Testing::FIXED_NOW
+
+      200.times do |round|
+        ids = ["r#{round}-a", "r#{round}-b"]
+        ids.each do |id|
+          repo.create(KemalIdentity::ApiTokens::Token.new(
+            id: id, account_id: "a1", name: id,
+            token_digest: KemalIdentity::Secret.new("raw-#{id}").digest, created_at: now,
+          ))
+        end
+
+        # The reader polls for the whole of the revocation rather than a fixed number of times,
+        # so it cannot finish before the write starts and pass by never looking.
+        revoking = Atomic(Bool).new(true)
+        done = Channel(Nil).new
+        spawn do
+          while revoking.get
+            live = database.scalar(
+              "SELECT count(*) FROM auth_api_tokens WHERE id = ANY($1) AND revoked_at IS NULL", ids
+            ).as(Int64)
+            split.add(1) if live == 1
+            Fiber.yield
+          end
+          done.send(nil)
+        end
+
+        Fiber.yield
+        repo.revoke_family(ids, "a1", now).size.should eq(2)
+        revoking.set(false)
+        done.receive
+      end
+
+      split.get.should eq(0)
+    end
   end
 
   describe KemalIdentity::Postgres::MfaRepository do

@@ -67,6 +67,23 @@ module KemalIdentity::Testing
       end
     end
 
+    # Under the one mutex, so no reader sees part of the family revoked.
+    def revoke_family(ids : Array(String), account_id : String, at : Time) : Array(String)
+      @mutex.synchronize do
+        revoked = [] of String
+
+        ids.uniq.each do |id|
+          existing = @tokens[id]?
+          next if existing.nil? || existing.revoked? || existing.account_id != account_id
+
+          @tokens[id] = replace(existing, revoked_at: at)
+          revoked << id
+        end
+
+        revoked
+      end
+    end
+
     def expire(id : String, at : Time) : Bool
       @mutex.synchronize do
         existing = @tokens[id]?

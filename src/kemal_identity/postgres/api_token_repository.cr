@@ -58,6 +58,18 @@ module KemalIdentity::Postgres
       result.rows_affected == 1
     end
 
+    # One statement, so the family falls together: a concurrent reader's snapshot is taken
+    # before the update commits or after it, never between two rows of it.
+    def revoke_family(ids : Array(String), account_id : String, at : Time) : Array(String)
+      return [] of String if ids.empty?
+
+      @db.query_all(<<-SQL, at, account_id, ids.uniq, as: String)
+        UPDATE auth_api_tokens SET revoked_at = $1
+         WHERE account_id = $2 AND id = ANY($3) AND revoked_at IS NULL
+        RETURNING id
+        SQL
+    end
+
     def expire(id : String, at : Time) : Bool
       # The "never lengthens" rule is in the statement rather than in a read followed by a
       # write, so two callers cannot interleave into a later deadline than either asked for.

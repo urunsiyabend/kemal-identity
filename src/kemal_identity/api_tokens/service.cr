@@ -218,6 +218,34 @@ module KemalIdentity::ApiTokens
       revoke(token_id)
     end
 
+    # Ends several of `account_id`'s tokens **together**, returning the ids it ended.
+    #
+    # For a set of credentials that must not outlive each other — a rotation that is being
+    # abandoned, or a deploy key and its replacement both found in a leaked file:
+    #
+    # ```
+    # api.revoke_family([old.id, replacement.id], account.id)
+    # ```
+    #
+    # One atomic repository call rather than a loop over `#revoke`, so nothing authenticates
+    # with one of them after the other has stopped working (`blueprints/0025`, TOK-08). Ids
+    # that are not the account's are skipped silently, like the two-argument `#revoke`.
+    #
+    # Each token ended is logged as its own `api_token.revoked`, the event a single revocation
+    # emits, so the audit trail and the security event sink need nothing new to see it.
+    #
+    # Raises `NotImplementedError` when the repository does not implement
+    # `Repository#revoke_family`; the three shipped adapters all do.
+    def revoke_family(token_ids : Array(String), account_id : String) : Array(String)
+      revoked = @tokens.revoke_family(token_ids, account_id, @clock.now)
+
+      revoked.each do |token_id|
+        Log.info &.emit("api_token.revoked", subject: account_id, credential: token_id)
+      end
+
+      revoked
+    end
+
     # Brings a token's expiry forward, for a rotation that wants a bounded overlap.
     #
     # Issue the replacement, then give the old credential a deadline:

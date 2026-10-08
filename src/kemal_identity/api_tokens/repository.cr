@@ -85,6 +85,38 @@ module KemalIdentity::ApiTokens
     # my API tokens" calls, and the right response to a compromised account.
     abstract def revoke_all_for_account(account_id : String, at : Time) : Int32
 
+    # Revokes, **in one atomic step**, every live token in `ids` that belongs to `account_id`,
+    # returning the ids it revoked. Ids that are unknown, already revoked or somebody else's are
+    # skipped and not reported, for the reason the owner-scoped `Service#revoke` gives: a token
+    # id is not secret, so reporting it would confirm it exists.
+    #
+    # This is what a rotation needs when it is abandoned, or a set of related tokens is
+    # compromised together: two `#revoke` calls are two statements, and anything that reads
+    # between them — or a failure after the first — leaves the family half alive
+    # (`blueprints/0025`, TOK-08). In SQL it is one statement:
+    #
+    # ```sql
+    # UPDATE auth_api_tokens SET revoked_at = $1
+    #  WHERE account_id = $2 AND id = ANY($3) AND revoked_at IS NULL
+    # RETURNING id
+    # ```
+    #
+    # ### Why this is not abstract
+    #
+    # An abstract method added here would stop every third-party adapter compiling, for a
+    # capability most applications never call. And a default that called `#revoke` in a loop
+    # would be the very thing this method exists to replace, while looking like it. So the
+    # default raises, an adapter overrides it when it can do it atomically, and
+    # `it_behaves_like_an_api_token_repository_with_family_revocation` is the contract for one
+    # that does. The three shipped adapters all do.
+    def revoke_family(ids : Array(String), account_id : String, at : Time) : Array(String)
+      raise NotImplementedError.new(
+        "#{self.class} does not implement revoke_family. Override it with a single atomic " \
+        "statement (see ApiTokens::Repository#revoke_family) and run " \
+        "it_behaves_like_an_api_token_repository_with_family_revocation against it."
+      )
+    end
+
     # Every token for an account, newest first, revoked ones included.
     #
     # This is the management screen. It returns revoked tokens too, because "when did I revoke

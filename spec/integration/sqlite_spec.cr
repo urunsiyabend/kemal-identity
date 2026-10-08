@@ -101,6 +101,12 @@ describe KemalIdentity::SQLite::ApiTokenRepository do
     accounts.each { |account| insert(account) }
     KemalIdentity::SQLite::ApiTokenRepository.new(DATABASE)
   end
+
+  it_behaves_like_an_api_token_repository_with_family_revocation do |accounts|
+    reset_schema!
+    accounts.each { |account| insert(account) }
+    KemalIdentity::SQLite::ApiTokenRepository.new(DATABASE)
+  end
 end
 
 describe KemalIdentity::SQLite::MfaRepository do
