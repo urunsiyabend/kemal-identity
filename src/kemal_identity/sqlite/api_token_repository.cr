@@ -58,21 +58,36 @@ module KemalIdentity::SQLite
       result.rows_affected == 1
     end
 
-    # One statement, so the family falls together. SQLite has no array parameter, so the list is
-    # bound as one placeholder per id — still bound, never interpolated.
+    # Builds before 3.32 refuse a statement with more than 999 bound parameters, and this one
+    # spends two on the timestamp and the account.
+    FAMILY_CHUNK = 500
+
+    # One transaction, so the family falls together. SQLite has no array parameter, so ids are
+    # bound one placeholder each — still bound, never interpolated — and a list longer than
+    # `FAMILY_CHUNK` is several statements inside that transaction rather than one statement no
+    # older build would accept. SQLite allows one writer at a time, so no reader sees the
+    # transaction half applied.
     def revoke_family(ids : Array(String), account_id : String, at : Time) : Array(String)
       unique = ids.uniq
       return [] of String if unique.empty?
 
-      placeholders = Array.new(unique.size, "?").join(", ")
-      args = [at, account_id] of DB::Any
-      unique.each { |id| args << id }
+      revoked = [] of String
 
-      @db.query_all(<<-SQL, args: args, as: String)
-        UPDATE auth_api_tokens SET revoked_at = ?
-         WHERE account_id = ? AND id IN (#{placeholders}) AND revoked_at IS NULL
-        RETURNING id
-        SQL
+      @db.transaction do |tx|
+        unique.each_slice(FAMILY_CHUNK) do |chunk|
+          placeholders = Array.new(chunk.size, "?").join(", ")
+          args = [at, account_id] of DB::Any
+          chunk.each { |id| args << id }
+
+          revoked.concat(tx.connection.query_all(<<-SQL, args: args, as: String))
+            UPDATE auth_api_tokens SET revoked_at = ?
+             WHERE account_id = ? AND id IN (#{placeholders}) AND revoked_at IS NULL
+            RETURNING id
+            SQL
+        end
+      end
+
+      revoked
     end
 
     def expire(id : String, at : Time) : Bool

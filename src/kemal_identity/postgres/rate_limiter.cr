@@ -54,37 +54,45 @@ module KemalIdentity::Postgres
       # Every SET expression reads the row as it was before this statement, so both CASEs agree
       # on whether the window had elapsed. The count stops at limit + 1: past that it decides
       # nothing, and a flood against one key must not be able to overflow the column.
-      attempts, started_at = @db.query_one(<<-SQL, key, now, now - @window, @limit + 1, as: {Int32, Time})
-        INSERT INTO auth_rate_limits AS r (key, attempts, window_started_at)
+      #
+      # The row stores when its window *ends*, so a sweep by a limiter with a shorter window
+      # cannot delete it early — the table is shared by every limiter that uses it.
+      attempts, ends_at = @db.query_one(<<-SQL, key, now + @window, now, @limit + 1, as: {Int32, Time})
+        INSERT INTO auth_rate_limits AS r (key, attempts, window_ends_at)
         VALUES ($1, 1, $2)
         ON CONFLICT (key) DO UPDATE SET
-          attempts = CASE WHEN r.window_started_at <= $3 THEN 1
+          attempts = CASE WHEN r.window_ends_at <= $3 THEN 1
                           ELSE LEAST(r.attempts + 1, $4) END,
-          window_started_at = CASE WHEN r.window_started_at <= $3 THEN $2
-                                   ELSE r.window_started_at END
-        RETURNING attempts, window_started_at
+          window_ends_at = CASE WHEN r.window_ends_at <= $3 THEN $2
+                                ELSE r.window_ends_at END
+        RETURNING attempts, window_ends_at
         SQL
 
       return Verdict.allow if attempts <= @limit
 
-      Verdict.deny(retry_after: started_at + @window - now)
-    rescue error : DB::Error | IO::Error | PQ::PQError | PQ::ConnectionError | PG::Error
+      Verdict.deny(retry_after: ends_at - now)
+    rescue error
+      # Every exception, not a list of the driver's: the body is one database call, and the
+      # contract is "never raise" (`blueprints/0023`). A list misses what it does not name —
+      # a TLS failure mid-query is an `OpenSSL::SSL::Error`, which is neither a `DB::Error` nor
+      # an `IO::Error`, and on the login path it would have been a 500.
       Log.warn &.emit("rate_limiter.store_unavailable", error: error.class.name)
       Verdict.unavailable
     end
 
     def reset(key : String) : Nil
       @db.exec("DELETE FROM auth_rate_limits WHERE key = $1", key)
-    rescue error : DB::Error | IO::Error | PQ::PQError | PQ::ConnectionError | PG::Error
+    rescue error
       # Must not raise: a reset that does not happen leaves somebody throttled slightly longer
       # than they earned, which is not worth failing a successful login over.
       Log.warn &.emit("rate_limiter.store_unavailable", error: error.class.name)
     end
 
-    # `<=`, the same boundary `consume` reopens a window on, so the sweeper never deletes a
-    # counter that `consume` would still have honoured.
+    # Every counter whose window has ended — each by its own deadline, whichever limiter wrote
+    # it. `<=`, the boundary `consume` reopens a window on, so nothing `consume` would still
+    # honour is deleted.
     def delete_expired(now : Time) : Int32
-      @db.exec("DELETE FROM auth_rate_limits WHERE window_started_at <= $1", now - @window)
+      @db.exec("DELETE FROM auth_rate_limits WHERE window_ends_at <= $1", now)
         .rows_affected.to_i32
     end
   end

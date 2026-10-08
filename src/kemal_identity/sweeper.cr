@@ -208,7 +208,10 @@ module KemalIdentity
         sweepable << limiter unless sweepable.any?(&.same?(limiter))
       end
 
-      sweepable.sum(&.delete_expired(now))
+      # An explicit initial zero, not `sum(&.delete_expired(now))`: in a program that requires no
+      # adapter nothing includes `SweepableRateLimiter`, the element type is `NoReturn`, and
+      # `Enumerable#sum` without an initial value does not compile there.
+      sweepable.sum(0, &.delete_expired(now))
     end
   end
 end

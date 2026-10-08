@@ -10,15 +10,18 @@
 
 -- `key` arrives already hashed by the caller (blueprints/0007), so the table never holds a
 -- login or an address in the clear.
+-- `window_ends_at` rather than when the window started: limiters with different windows share
+-- this table, and only a row that carries its own deadline can be swept by a limiter that does
+-- not know it. A login window of a minute must not forgive a password-reset window of a day.
 CREATE TABLE auth_rate_limits (
   key               TEXT        PRIMARY KEY,
   attempts          INTEGER     NOT NULL,
-  window_started_at TEXT        NOT NULL
+  window_ends_at    TEXT        NOT NULL
 );
 
 -- For the sweeper, which deletes elapsed windows; an attacker minting keys is otherwise a way
 -- to grow this table without bound.
-CREATE INDEX auth_rate_limits_window_started_at ON auth_rate_limits (window_started_at);
+CREATE INDEX auth_rate_limits_window_ends_at ON auth_rate_limits (window_ends_at);
 
 -- +micrate Down
 DROP TABLE auth_rate_limits;

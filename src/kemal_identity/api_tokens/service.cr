@@ -243,6 +243,15 @@ module KemalIdentity::ApiTokens
         Log.info &.emit("api_token.revoked", subject: account_id, credential: token_id)
       end
 
+      # What the two-argument `#revoke` logs for a token it would not end. One reason for every
+      # case — unknown, already revoked, or somebody else's — since the repository deliberately
+      # does not say which, and the trail must not become the oracle the return value is not.
+      (token_ids.uniq - revoked).each do |token_id|
+        Log.info &.emit(
+          "api_token.revoke_refused", subject: account_id, credential: token_id, reason: "not_revoked"
+        )
+      end
+
       revoked
     end
 

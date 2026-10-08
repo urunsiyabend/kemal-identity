@@ -37,6 +37,8 @@ grep -qF "version: $pin" README.md || fail "README.md does not pin '$pin'"
 # -- It builds, as a consumer and as each example --------------------------------------------
 
 crystal build --no-codegen src/kemal_identity.cr
+# A consumer that requires no adapter. The suite cannot stand in for it: see the file.
+crystal build --no-codegen tools/probes/core_only.cr
 for app in examples/*/app.cr; do
   echo "-- $app"
   crystal build --no-codegen "$app"

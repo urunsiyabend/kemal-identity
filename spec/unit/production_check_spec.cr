@@ -85,6 +85,27 @@ describe "KemalIdentity production check" do
     ).production_gaps.should eq([KemalIdentity::ProductionGap::UnthrottledMfaRecovery])
   end
 
+  it "sees an unthrottled recovery path through a fail-open wrapper" do
+    recovery = KemalIdentity::FailOpenRateLimiter.new(KemalIdentity::NullRateLimiter.new)
+
+    build_app(rate_limiter: ApplicationOwnLimiter.new, mfa: true, mfa_recovery_rate_limiter: recovery)
+      .production_gaps.should eq([KemalIdentity::ProductionGap::UnthrottledMfaRecovery])
+  end
+
+  it "names an in-memory recovery limiter as process-local, even beside a shared login limiter" do
+    build_app(rate_limiter: ApplicationOwnLimiter.new, mfa: true, mfa_recovery_rate_limiter: window)
+      .production_gaps.should eq([KemalIdentity::ProductionGap::ProcessLocalRateLimiter])
+  end
+
+  # Recovery inherits `rate_limiter:` unless given its own, so the default configuration with MFA
+  # leaves both unthrottled — and the fix is the login limiter, not a recovery argument nobody
+  # passed.
+  it "names an inherited unthrottled recovery path, and says where it was inherited from" do
+    gaps = build_app(mfa: true).production_gaps
+    gaps.should eq([KemalIdentity::ProductionGap::UnthrottledLogin, KemalIdentity::ProductionGap::UnthrottledMfaRecovery])
+    KemalIdentity::ProductionGap::UnthrottledMfaRecovery.remedy.should contain("rate_limiter:")
+  end
+
   it "says nothing about MFA when MFA is not configured" do
     build_app(rate_limiter: ApplicationOwnLimiter.new, mfa_max_consecutive_failures: nil)
       .production_gaps.should be_empty

@@ -10,7 +10,7 @@ v0.12.2. Run the new migration only if you adopt a shared limiter.
 in one `ConfigurationError`, every login or second-factor protection the configuration leaves
 off: an unthrottled login (`NullRateLimiter`, the default), a fail-open login, an in-memory
 limiter in what may be a replicated deployment, MFA with no `mfa_max_consecutive_failures`,
-an explicitly unthrottled recovery path, and a non-`Secure` cookie. Each comes with its fix.
+an unthrottled recovery-code path (passed explicitly, or inherited from `rate_limiter:`), and a non-`Secure` cookie. Each comes with its fix.
 `accept:` records a gap a deployment has decided to live with. It is opt-in, like
 `Kemal.validate_middleware_order!`: each gap is a configuration that boots today, and running
 the check from `configure` would have turned an upgrade into a boot failure.
@@ -22,8 +22,9 @@ Counting, deciding and reopening an elapsed window are one
 `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`. Measured, not argued: six compiled worker
 processes released together against one key allow exactly the limit, the in-memory limiter
 under the same harness allows six times it, and a read-then-write version of the PostgreSQL
-limiter allowed 56 of 10. A store that does not answer is `Verdict.unavailable`, the count stops
-at `limit + 1`, and `Sweeper` deletes elapsed windows through the new `SweepableRateLimiter`
+limiter allowed 56 of 10. Each row carries its own `window_ends_at`, so limiters with different windows can share the
+table without a short window's sweep forgiving a long one. A store that does not answer — for
+any reason, TLS failures included — is `Verdict.unavailable`, the count stops at `limit + 1`, and `Sweeper` deletes elapsed windows through the new `SweepableRateLimiter`
 module. `SweepResult#rate_limits` is a new field, defaulting to zero.
 
 **`Permission#max_age`.** Recency is declared on the action as strength already was:

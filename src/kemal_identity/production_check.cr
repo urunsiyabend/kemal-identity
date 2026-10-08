@@ -16,7 +16,8 @@ module KemalIdentity
     # (`blueprints/0023-rate-limiter-store-failure.md`).
     FailOpenLogin
 
-    # `rate_limiter:` is one of the in-memory limiters. Each process counts on its own, so the
+    # `rate_limiter:`, or the MFA recovery limiter, is one of the in-memory limiters (seen through
+    # a `FailOpenRateLimiter`). Each process counts on its own, so the
     # effective limit is the configured one times the number of processes — 2.2× with six
     # workers, measured (`blueprints/0025`, OPS-01). Correct for exactly one process.
     ProcessLocalRateLimiter
@@ -26,8 +27,9 @@ module KemalIdentity
     # (`blueprints/0029-second-factor-rate-limiting.md`).
     UnboundedMfaGuessing
 
-    # MFA is configured and `mfa_recovery_rate_limiter:` is a `NullRateLimiter`, so recovery
-    # codes can be guessed without limit while the TOTP path is throttled.
+    # MFA is configured and recovery codes are counted by a `NullRateLimiter` — one passed as
+    # `mfa_recovery_rate_limiter:`, or the default one inherited from `rate_limiter:` — so they
+    # can be guessed without limit.
     UnthrottledMfaRecovery
 
     # The session cookie, or the remember-me cookie when remember-me is on, is not `Secure`.
@@ -50,7 +52,8 @@ module KemalIdentity
       in UnboundedMfaGuessing
         "pass mfa_max_consecutive_failures: (NIST SP 800-63B allows at most 100)"
       in UnthrottledMfaRecovery
-        "drop mfa_recovery_rate_limiter: to reuse rate_limiter:, or pass a real limiter"
+        "recovery codes inherit rate_limiter: unless mfa_recovery_rate_limiter: is passed; " \
+        "give whichever applies a real limiter"
       in InsecureSessionCookie
         "use the default Secure cookie; secure: false with allow_insecure: true is for " \
         "local HTTP only"
@@ -68,21 +71,34 @@ module KemalIdentity
       gaps = [] of ProductionGap
 
       limiter = @rate_limiter
-      inner = limiter.is_a?(FailOpenRateLimiter) ? limiter.inner : limiter
+      inner = unwrap(limiter)
+      process_local = process_local?(inner)
 
       gaps << ProductionGap::UnthrottledLogin if inner.is_a?(NullRateLimiter)
       gaps << ProductionGap::FailOpenLogin if limiter.is_a?(FailOpenRateLimiter)
-      gaps << ProductionGap::ProcessLocalRateLimiter if process_local?(inner)
 
       if mfa = @mfa
         gaps << ProductionGap::UnboundedMfaGuessing if mfa.max_consecutive_failures.nil?
-        gaps << ProductionGap::UnthrottledMfaRecovery if mfa.recovery_rate_limiter.is_a?(NullRateLimiter)
+
+        # The recovery limiter is `rate_limiter` unless one of its own was passed, so this also
+        # reports the default configuration, where both are a `NullRateLimiter`.
+        recovery = unwrap(mfa.recovery_rate_limiter)
+        gaps << ProductionGap::UnthrottledMfaRecovery if recovery.is_a?(NullRateLimiter)
+        process_local ||= process_local?(recovery)
       end
+
+      gaps << ProductionGap::ProcessLocalRateLimiter if process_local
 
       insecure = !@cookie.secure? || (!@remember.nil? && !@remember_cookie.secure?)
       gaps << ProductionGap::InsecureSessionCookie if insecure
 
       gaps
+    end
+
+    # What a `FailOpenRateLimiter` counts with: the wrapper changes what an outage means, not
+    # where the counters live or whether there are any.
+    private def unwrap(limiter : RateLimiter) : RateLimiter
+      limiter.is_a?(FailOpenRateLimiter) ? limiter.inner : limiter
     end
 
     private def process_local?(limiter : RateLimiter) : Bool

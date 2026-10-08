@@ -11,8 +11,13 @@ module KemalIdentity::Authz
   #    and it is the one check that must not depend on a database row being correct.
   # 3. **Does any role the principal actually holds grant it?** Global roles always count.
   #    Tenant roles count only for a member.
-  # 4. **Have they proved who they are strongly enough?** Last, so that a denial for weak
-  #    assurance is distinguishable in the trail from a denial for having no grant at all.
+  # 4. **Have they proved who they are strongly enough?** After the grant, so that a denial for
+  #    weak assurance is distinguishable in the trail from a denial for having no grant at all.
+  # 5. **Recently enough?** Only for a permission that declares `Permission#max_age`, and after
+  #    strength, so a refusal names the one thing that failed — a second factor and a fresh
+  #    sign-in are different prompts.
+  # 6. **Does the credential's scope allow it?** Last, so a token's attenuation can only ever
+  #    narrow what the account was already granted.
   #
   # ### Tenant roles are inert without a membership
   #

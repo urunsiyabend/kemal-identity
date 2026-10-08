@@ -55,8 +55,12 @@ private def run_workers(adapter : String, url : String, key : String) : Tuple(In
 
   File.touch(start_file)
 
-  processes.reduce({0, 0}) do |(allowed, unavailable), (process, output)|
-    process.wait.success?.should be_true
+  # Every worker is waited for before anything is asserted, so a failing one leaves no others
+  # running behind it.
+  statuses = processes.map { |process, _| process.wait }
+  statuses.all?(&.success?).should be_true
+
+  processes.reduce({0, 0}) do |(allowed, unavailable), (_, output)|
     counts = output.to_s.split.map(&.to_i)
     {allowed + counts[0], unavailable + counts[1]}
   end

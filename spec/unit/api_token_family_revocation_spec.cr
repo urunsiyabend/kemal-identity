@@ -98,6 +98,24 @@ describe "KemalIdentity::ApiTokens::Service#revoke_family" do
   end
 end
 
+describe "KemalIdentity::ApiTokens::Service#revoke_family audit trail" do
+  # The two-argument `revoke` logs `api_token.revoke_refused`; naming a token that was not
+  # ended is the same event whether one id was named or several.
+  it "records each id it did not revoke, without saying why" do
+    service, accounts = family_service
+    mine = service.issue(accounts.find_by_id("a1").or_fail, "mine")
+    theirs = service.issue(accounts.find_by_id("a2").or_fail, "theirs")
+
+    backend = Log::MemoryBackend.new
+    Log.builder.bind("kemal_identity.*", :trace, backend)
+    service.revoke_family([mine.record.id, theirs.record.id, "nope"], "a1")
+
+    refused = backend.entries.select { |entry| entry.message == "api_token.revoke_refused" }
+    refused.map(&.data[:credential].to_s).sort!.should eq([theirs.record.id, "nope"].sort)
+    refused.map(&.data[:reason].to_s).uniq!.should eq(["not_revoked"])
+  end
+end
+
 describe "KemalIdentity::ApiTokens::Repository#revoke_family by default" do
   # Loud rather than two statements dressed up as one.
   it "raises for an adapter that has not implemented it" do

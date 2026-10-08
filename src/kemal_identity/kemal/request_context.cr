@@ -187,6 +187,11 @@ module KemalIdentity::Kemal
           permission: permission,
           tenant: tenant,
           reason: decision.reason.to_s,
+          # Which half of `InsufficientAssurance` it was: strength or recency. The reason alone
+          # cannot say, and an incident review asking "was this somebody without a factor, or
+          # somebody signed in yesterday" needs to.
+          minimum_assurance: decision.minimum_assurance.try(&.to_s),
+          max_age: decision.max_age.try(&.total_seconds.to_i),
           # An application authorizer's own reason, when it gave one. Audit only — the response
           # is identical either way.
           code: decision.code,

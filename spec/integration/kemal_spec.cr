@@ -2186,8 +2186,15 @@ describe "a permission that declares how recent the proof must be" do
     response.status_code.should eq(200)
 
     TEST_CLOCK.advance(10.minutes)
+    backend = Log::MemoryBackend.new
+    Log.builder.bind("kemal_identity.*", :trace, backend)
     get "/keys/rotate", headers: cookies("kemal_identity=#{token}")
     response.status_code.should eq(403)
+
+    # The trail says it was recency, not strength.
+    denied = backend.entries.find { |entry| entry.message == "authz.denied" }.or_fail
+    denied.data[:max_age].should eq(300)
+    denied.data[:minimum_assurance].raw.should be_nil
   ensure
     TEST_CLOCK.travel_to(KemalIdentity::Testing::FIXED_NOW)
     AUTHORIZER.revoke("a1", "key_admin")

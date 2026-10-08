@@ -86,6 +86,9 @@ jobs:
         run: |
           crystal build --no-codegen src/kemal_identity/testing.cr
           crystal build --no-codegen src/kemal_identity/testing/contracts.cr
+          # A consumer with no adapter, calling what such a consumer calls. The suite requires
+          # both adapters, which changes how the core type-checks; see the file.
+          crystal build --no-codegen tools/probes/core_only.cr
 
       # Every example under spec/unit and spec/security must pass with no DATABASE_URL.
       # Skipping a security regression because a database is missing defeats the point of

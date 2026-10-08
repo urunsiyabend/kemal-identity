@@ -130,10 +130,11 @@ else
 
         # The reader polls for the whole of the revocation rather than a fixed number of times,
         # so it cannot finish before the write starts and pass by never looking.
-        revoking = Atomic(Bool).new(true)
+        # `Atomic(Int32)`, not `Atomic(Bool)`: Crystal below 1.13 refuses a Bool atomic.
+        revoking = Atomic(Int32).new(1)
         done = Channel(Nil).new
         spawn do
-          while revoking.get
+          while revoking.get == 1
             live = database.scalar(
               "SELECT count(*) FROM auth_api_tokens WHERE id = ANY($1) AND revoked_at IS NULL", ids
             ).as(Int64)
@@ -145,7 +146,7 @@ else
 
         Fiber.yield
         repo.revoke_family(ids, "a1", now).size.should eq(2)
-        revoking.set(false)
+        revoking.set(0)
         done.receive
       end
 
@@ -421,6 +422,21 @@ else
       50.times { limiter.consume("flood") }
 
       database.scalar("SELECT attempts FROM auth_rate_limits WHERE key = 'flood'").as(Int32).should eq(4)
+    end
+
+    # One table, many limiters: a password-reset limit of a day and a login limit of a minute
+    # share `auth_rate_limits`. Sweeping with the short window must not forgive the long one.
+    it "never sweeps a counter whose own window has not elapsed, whatever window the sweeper has" do
+      reset_schema!
+      clock = KemalIdentity::Testing::TestClock.new
+      daily = KemalIdentity::Postgres::FixedWindowRateLimiter.new(database, limit: 3, window: 1.day, clock: clock)
+      minutely = KemalIdentity::Postgres::FixedWindowRateLimiter.new(database, limit: 3, window: 1.minute, clock: clock)
+
+      4.times { daily.consume("reset:ada") }
+      clock.advance(2.minutes)
+
+      minutely.delete_expired(clock.now).should eq(0)
+      daily.consume("reset:ada").allowed?.should be_false
     end
 
     it "deletes only windows that have elapsed" do

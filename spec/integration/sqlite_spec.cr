@@ -318,6 +318,21 @@ describe KemalIdentity::SQLite::FixedWindowRateLimiter do
     DATABASE.scalar("SELECT attempts FROM auth_rate_limits WHERE key = 'flood'").as(Int64).should eq(4)
   end
 
+  # One table, many limiters: a password-reset limit of a day and a login limit of a minute
+  # share `auth_rate_limits`. Sweeping with the short window must not forgive the long one.
+  it "never sweeps a counter whose own window has not elapsed, whatever window the sweeper has" do
+    reset_schema!
+    clock = KemalIdentity::Testing::TestClock.new
+    daily = KemalIdentity::SQLite::FixedWindowRateLimiter.new(DATABASE, limit: 3, window: 1.day, clock: clock)
+    minutely = KemalIdentity::SQLite::FixedWindowRateLimiter.new(DATABASE, limit: 3, window: 1.minute, clock: clock)
+
+    4.times { daily.consume("reset:ada") }
+    clock.advance(2.minutes)
+
+    minutely.delete_expired(clock.now).should eq(0)
+    daily.consume("reset:ada").allowed?.should be_false
+  end
+
   it "deletes only windows that have elapsed" do
     reset_schema!
     clock = KemalIdentity::Testing::TestClock.new
@@ -330,6 +345,29 @@ describe KemalIdentity::SQLite::FixedWindowRateLimiter do
     limiter.delete_expired(clock.now).should eq(1)
     limiter.delete_expired(clock.now).should eq(0)
     limiter.consume("current").allowed?.should be_true
+  end
+end
+
+# SQLite has no array parameter, so a list is one placeholder per id, and builds before 3.32
+# cap a statement at 999 of them. Past that the adapter splits the list, inside one
+# transaction so the family still falls together.
+describe "KemalIdentity::SQLite::ApiTokenRepository#revoke_family with a long list" do
+  it "revokes more ids than one statement may bind" do
+    reset_schema!
+    seed_accounts!
+    repo = KemalIdentity::SQLite::ApiTokenRepository.new(DATABASE)
+    now = KemalIdentity::Testing::FIXED_NOW
+    ids = (1..1200).map { |i| "bulk-#{i}" }
+
+    ids.each do |id|
+      repo.create(KemalIdentity::ApiTokens::Token.new(
+        id: id, account_id: "a1", name: id,
+        token_digest: KemalIdentity::Secret.new("raw-#{id}").digest, created_at: now,
+      ))
+    end
+
+    repo.revoke_family(ids, "a1", now).size.should eq(1200)
+    DATABASE.scalar("SELECT count(*) FROM auth_api_tokens WHERE revoked_at IS NULL").as(Int64).should eq(0)
   end
 end
 

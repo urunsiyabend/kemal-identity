@@ -137,3 +137,25 @@ TDD per unit. Each new behaviour has a failing spec first.
   limit exactly. The in-memory limiter is run the same way as a control and must exceed it,
   which shows the probe can detect the failure.
 - The release script runs locally end to end against the container.
+
+## Revisions after independent review
+
+An independent review of `55bfedc..cb38fc2` found the following. Each was reproduced before it
+was fixed.
+
+- **The row stores `window_ends_at`, not `window_started_at`.** Limiters with different windows
+  share `auth_rate_limits`. Sweeping by the sweeping limiter's own window deleted live counters
+  of longer windows: a 1-minute limiter's sweep forgave a 1-day limiter's lockout, reproduced
+  in both adapters. Each row now carries its own deadline. The migration was unpublished, so it
+  was changed in place.
+- **The SQL limiters rescue every exception.** A TLS failure mid-query (`OpenSSL::SSL::Error`)
+  is neither a `DB::Error` nor an `IO::Error`, and would have been a 500 on the login path.
+- **`Sweeper#sweep` compiles without an adapter.** `Enumerable#sum` over a `NoReturn` element
+  type failed in core-only programs. `tools/probes/core_only.cr` is now compiled by CI and the
+  release script.
+- **The specs compile on Crystal 1.12.** `Atomic(Bool)` arrived after 1.12; it is now
+  `Atomic(Int32)`.
+- `production_gaps` sees through a fail-open wrapper on the recovery limiter, and reports an
+  in-memory recovery limiter. `authz.denied` logs `minimum_assurance` and `max_age`. A family
+  revocation logs `api_token.revoke_refused` for each id it skipped. The SQLite adapter splits
+  long id lists inside one transaction.
