@@ -82,6 +82,11 @@ module KemalIdentity
 
         # The recovery limiter is `rate_limiter` unless one of its own was passed, so this also
         # reports the default configuration, where both are a `NullRateLimiter`.
+        #
+        # A `FailOpenRateLimiter` around a real recovery limiter is deliberately **not** reported:
+        # `blueprints/0023` makes fail-open a per-endpoint choice, a recovery code is a
+        # 43-character CSPRNG value rather than six digits, and the factor's lifetime bound still
+        # applies. Fail-open on the *login* path is reported, because there it unmeters bcrypt.
         recovery = unwrap(mfa.recovery_rate_limiter)
         gaps << ProductionGap::UnthrottledMfaRecovery if recovery.is_a?(NullRateLimiter)
         process_local ||= process_local?(recovery)

@@ -79,9 +79,9 @@ module KemalIdentity::SQLite
       Verdict.deny(retry_after: ends_at - now)
     rescue error
       # Every exception, not a list of the driver's: the body is one database call, and the
-      # contract is "never raise" (`blueprints/0023`). A list misses what it does not name —
-      # a TLS failure mid-query is an `OpenSSL::SSL::Error`, which is neither a `DB::Error` nor
-      # an `IO::Error`, and on the login path it would have been a 500.
+      # contract is "never raise" (`blueprints/0023`). A list misses what it does not name: a
+      # locked or read-only file, a full disk and a missing table arrive as different classes
+      # depending on where SQLite noticed, and on the login path any of them would be a 500.
       Log.warn &.emit("rate_limiter.store_unavailable", error: error.class.name)
       Verdict.unavailable
     end

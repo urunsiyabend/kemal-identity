@@ -36,8 +36,9 @@ using `Principal#fresh?`, the rule `require_fresh!` applies. A stale principal g
 `require_fresh!` sends. A bearer token is never fresh, so it cannot reach such a permission.
 Closes AUT-07's remaining gap.
 
-**`ApiTokens::Service#revoke_family(ids, account_id)`.** Revokes several of one account's tokens
-in a single statement and skips ids that are not the account's. Each token revoked is logged
+**`ApiTokens::Service#revoke_family(ids, account_id)`.** Revokes up to 100 of one
+account's tokens in a single statement and skips ids that are not the account's; skipped ids
+are logged as `api_token.revoke_refused`. Each token revoked is logged
 as its own `api_token.revoked`. `ApiTokens::Repository#revoke_family` is **not** abstract:
 its default raises `NotImplementedError`, so third-party adapters keep compiling, and the
 contract is a separate shared spec,

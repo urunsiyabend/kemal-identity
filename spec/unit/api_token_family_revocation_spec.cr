@@ -116,6 +116,15 @@ describe "KemalIdentity::ApiTokens::Service#revoke_family audit trail" do
   end
 end
 
+describe "KemalIdentity::ApiTokens::Service#revoke_family bounds" do
+  it "refuses a list longer than a family, before touching storage" do
+    service, _ = family_service
+    ids = (1..KemalIdentity::ApiTokens::Service::MAX_FAMILY_SIZE + 1).map { |i| "t#{i}" }
+
+    expect_raises(ArgumentError, /revoke_all/) { service.revoke_family(ids, "a1") }
+  end
+end
+
 describe "KemalIdentity::ApiTokens::Repository#revoke_family by default" do
   # Loud rather than two statements dressed up as one.
   it "raises for an adapter that has not implemented it" do

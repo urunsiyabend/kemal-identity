@@ -32,6 +32,9 @@ module KemalIdentity::ApiTokens
 
     getter prefix : String
 
+    # The most ids `#revoke_family` accepts at once.
+    MAX_FAMILY_SIZE = 100
+
     # `lifetime_policy` is the deployment's rule about how long a token may live, and is
     # **nil by default**: an application that wants non-expiring deploy keys is not wrong, so
     # nothing is imposed. See `LifetimePolicy`, and note that it is checked at issuance only.
@@ -237,6 +240,13 @@ module KemalIdentity::ApiTokens
     # Raises `NotImplementedError` when the repository does not implement
     # `Repository#revoke_family`; the three shipped adapters all do.
     def revoke_family(token_ids : Array(String), account_id : String) : Array(String)
+      # A family is a handful of related credentials. The bound keeps a route that forwards a
+      # client's list from writing an unbounded number of refusal lines into the audit trail;
+      # ending every token an account has is `#revoke_all`.
+      if token_ids.size > MAX_FAMILY_SIZE
+        raise ArgumentError.new("at most #{MAX_FAMILY_SIZE} tokens per family; use revoke_all for every token")
+      end
+
       revoked = @tokens.revoke_family(token_ids, account_id, @clock.now)
 
       revoked.each do |token_id|
