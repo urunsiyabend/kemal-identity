@@ -29,7 +29,7 @@ private def reset_schema! : Nil
   database.exec(
     "TRUNCATE auth_sessions, auth_action_tokens, auth_remember_tokens, auth_api_tokens, " \
     "auth_mfa_factors, auth_mfa_recovery_codes, auth_external_identities, " \
-    "auth_role_assignments, auth_tenant_memberships, auth_accounts"
+    "auth_role_assignments, auth_tenant_memberships, auth_rate_limits, auth_accounts"
   )
 rescue error : PQ::PQError
   raise Spec::AssertionFailed.new(
@@ -313,6 +313,59 @@ else
 
       Array.new(16) { results.receive }.count(true).should eq(1)
       repo.memberships_for("a1").size.should eq(1)
+    end
+  end
+
+  describe KemalIdentity::Postgres::FixedWindowRateLimiter do
+    it_behaves_like_a_rate_limiter_of_any_strategy do
+      reset_schema!
+      clock = KemalIdentity::Testing::TestClock.new
+      {KemalIdentity::Postgres::FixedWindowRateLimiter.new(database, limit: 5, window: 1.minute, clock: clock).as(KemalIdentity::RateLimiter), clock}
+    end
+
+    it_behaves_like_a_rate_limiter(limit: 5, window: 1.minute) do
+      reset_schema!
+      clock = KemalIdentity::Testing::TestClock.new
+      {KemalIdentity::Postgres::FixedWindowRateLimiter.new(database, limit: 5, window: 1.minute, clock: clock).as(KemalIdentity::RateLimiter), clock}
+    end
+
+    it "says the store is unavailable rather than raising, and resets without raising" do
+      # Nothing listens on port 1. `initial_pool_size=0` so that opening succeeds and the refusal
+      # arrives where it would in production: on the first query after the server went away.
+      unreachable = DB.open(
+        "postgres://kemal_identity@127.0.0.1:1/kemal_identity_test" \
+        "?initial_pool_size=0&retry_attempts=0&checkout_timeout=1"
+      )
+      limiter = KemalIdentity::Postgres::FixedWindowRateLimiter.new(unreachable, limit: 5, window: 1.minute)
+
+      verdict = limiter.consume("key")
+      verdict.unavailable?.should be_true
+      verdict.allowed?.should be_false
+      limiter.reset("key")
+    end
+
+    it "stops counting at one past the limit, so a flood cannot overflow the column" do
+      reset_schema!
+      limiter = KemalIdentity::Postgres::FixedWindowRateLimiter.new(database, limit: 3, window: 1.hour)
+
+      50.times { limiter.consume("flood") }
+
+      database.scalar("SELECT attempts FROM auth_rate_limits WHERE key = 'flood'").as(Int32).should eq(4)
+    end
+
+    it "deletes only windows that have elapsed" do
+      reset_schema!
+      clock = KemalIdentity::Testing::TestClock.new
+      limiter = KemalIdentity::Postgres::FixedWindowRateLimiter.new(database, limit: 3, window: 1.minute, clock: clock)
+
+      limiter.consume("old")
+      clock.advance(1.minute)
+      limiter.consume("current")
+
+      limiter.delete_expired(clock.now).should eq(1)
+      limiter.delete_expired(clock.now).should eq(0)
+      limiter.consume("current").allowed?.should be_true
+      database.scalar("SELECT count(*) FROM auth_rate_limits").as(Int64).should eq(1)
     end
   end
 end

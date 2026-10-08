@@ -9,6 +9,7 @@ require "./postgres/api_token_repository"
 require "./postgres/mfa_repository"
 require "./postgres/link_repository"
 require "./postgres/authz_repository"
+require "./postgres/rate_limiter"
 
 # The PostgreSQL adapters.
 #

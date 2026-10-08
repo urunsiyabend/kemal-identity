@@ -9,6 +9,7 @@ require "./sqlite/api_token_repository"
 require "./sqlite/mfa_repository"
 require "./sqlite/link_repository"
 require "./sqlite/authz_repository"
+require "./sqlite/rate_limiter"
 
 # The SQLite adapters.
 #

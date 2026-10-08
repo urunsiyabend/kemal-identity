@@ -103,6 +103,18 @@ module KemalIdentity
     abstract def reset(key : String) : Nil
   end
 
+  # A limiter whose counters live in storage that outlasts them.
+  #
+  # An attacker can mint a key per guessed login, so a table of counters grows without bound
+  # unless something deletes the windows that have elapsed. `Sweeper` calls this on the
+  # application's limiters that include it; the in-memory ones bound themselves and do not.
+  module SweepableRateLimiter
+    # Deletes every counter whose window has elapsed by `now`, returning how many.
+    #
+    # Disk reclamation only: an elapsed window is reopened on its next `consume` regardless.
+    abstract def delete_expired(now : Time) : Int32
+  end
+
   # Turns "the store did not answer" into "carry on", for one call site.
   #
   # ### Why this is a wrapper and not a setting

@@ -8,6 +8,9 @@ module KemalIdentity
     getter api_tokens : Int32
     getter jwt_revocations : Int32
 
+    # Elapsed rate-limit windows, from a limiter that keeps them in storage.
+    getter rate_limits : Int32
+
     def initialize(
       @expired_sessions : Int32 = 0,
       @revoked_sessions : Int32 = 0,
@@ -15,12 +18,13 @@ module KemalIdentity
       @remember_tokens : Int32 = 0,
       @api_tokens : Int32 = 0,
       @jwt_revocations : Int32 = 0,
+      @rate_limits : Int32 = 0,
     )
     end
 
     def total : Int32
       @expired_sessions + @revoked_sessions + @action_tokens + @remember_tokens +
-        @api_tokens + @jwt_revocations
+        @api_tokens + @jwt_revocations + @rate_limits
     end
 
     def empty? : Bool
@@ -106,6 +110,7 @@ module KemalIdentity
         remember_tokens: sweep_remember_tokens(now),
         api_tokens: sweep_api_tokens(now),
         jwt_revocations: sweep_jwt_revocations(now),
+        rate_limits: sweep_rate_limits(now),
       )
 
       unless result.empty?
@@ -116,7 +121,8 @@ module KemalIdentity
           action_tokens: result.action_tokens,
           remember_tokens: result.remember_tokens,
           api_tokens: result.api_tokens,
-          jwt_revocations: result.jwt_revocations
+          jwt_revocations: result.jwt_revocations,
+          rate_limits: result.rate_limits
         )
       end
 
@@ -186,6 +192,23 @@ module KemalIdentity
     private def sweep_jwt_revocations(now : Time) : Int32
       store = @app.jwt.try(&.revocations)
       store.nil? ? 0 : store.delete_expired(now)
+    end
+
+    # The login limiter, and the recovery-code limiter when it is a different one. Unwrapped
+    # from `FailOpenRateLimiter`, which changes what an outage means and not where the counters
+    # live; and counted once when both names lead to the same limiter.
+    private def sweep_rate_limits(now : Time) : Int32
+      limiters = [@app.rate_limiter, @app.mfa.try(&.recovery_rate_limiter)].compact.map do |limiter|
+        limiter.is_a?(FailOpenRateLimiter) ? limiter.inner : limiter
+      end
+
+      sweepable = [] of SweepableRateLimiter
+      limiters.each do |limiter|
+        next unless limiter.is_a?(SweepableRateLimiter)
+        sweepable << limiter unless sweepable.any?(&.same?(limiter))
+      end
+
+      sweepable.sum(&.delete_expired(now))
     end
   end
 end

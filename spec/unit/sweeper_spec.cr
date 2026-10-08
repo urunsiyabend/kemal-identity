@@ -325,3 +325,56 @@ class FailingSweepRepository < KemalIdentity::Sessions::Repository
     raise KemalIdentity::InfrastructureError.new("session store unavailable")
   end
 end
+
+# A limiter whose counters outlast the process, as the SQL ones do, recording what it was asked.
+private class SweepRecordingLimiter < KemalIdentity::RateLimiter
+  include KemalIdentity::SweepableRateLimiter
+
+  getter swept_at = [] of Time
+
+  def consume(key : String) : KemalIdentity::Verdict
+    KemalIdentity::Verdict.allow
+  end
+
+  def reset(key : String) : Nil
+  end
+
+  def delete_expired(now : Time) : Int32
+    @swept_at << now
+    3
+  end
+end
+
+private def app_with_limiter(limiter : KemalIdentity::RateLimiter) : KemalIdentity::Application
+  accounts = KemalIdentity::Testing::MemoryAccountRepository.new
+  KemalIdentity::Application.new(
+    accounts: accounts,
+    sessions: KemalIdentity::Testing::MemorySessionRepository.new(accounts),
+    hasher: KemalIdentity::Testing::FastTestHasher.new,
+    clock: KemalIdentity::Testing::TestClock.new,
+    rate_limiter: limiter,
+  )
+end
+
+describe "KemalIdentity::Sweeper and rate-limit counters" do
+  it "sweeps a limiter whose counters live in storage" do
+    limiter = SweepRecordingLimiter.new
+    result = KemalIdentity::Sweeper.new(app_with_limiter(limiter)).sweep
+
+    result.rate_limits.should eq(3)
+    result.total.should eq(3)
+    limiter.swept_at.should eq([KemalIdentity::Testing::FIXED_NOW])
+  end
+
+  it "sweeps through a fail-open wrapper, and only once" do
+    limiter = SweepRecordingLimiter.new
+    KemalIdentity::Sweeper.new(app_with_limiter(KemalIdentity::FailOpenRateLimiter.new(limiter))).sweep
+
+    limiter.swept_at.size.should eq(1)
+  end
+
+  it "leaves an in-memory limiter alone, which bounds itself" do
+    limiter = KemalIdentity::FixedWindowRateLimiter.new(limit: 1, window: 1.minute)
+    KemalIdentity::Sweeper.new(app_with_limiter(limiter)).sweep.rate_limits.should eq(0)
+  end
+end

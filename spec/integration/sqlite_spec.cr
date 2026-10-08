@@ -62,7 +62,7 @@ end
 private def reset_schema! : Nil
   %w[auth_sessions auth_action_tokens auth_remember_tokens auth_api_tokens
     auth_mfa_factors auth_mfa_recovery_codes auth_external_identities
-    auth_role_assignments auth_tenant_memberships
+    auth_role_assignments auth_tenant_memberships auth_rate_limits
     auth_accounts].each do |table|
     DATABASE.exec("DELETE FROM #{table}")
   end
@@ -276,4 +276,67 @@ private def session_record(
     idle_expires_at: now + 30.minutes,
     absolute_expires_at: now + 12.hours,
   )
+end
+
+describe KemalIdentity::SQLite::FixedWindowRateLimiter do
+  it_behaves_like_a_rate_limiter_of_any_strategy do
+    reset_schema!
+    clock = KemalIdentity::Testing::TestClock.new
+    {KemalIdentity::SQLite::FixedWindowRateLimiter.new(DATABASE, limit: 5, window: 1.minute, clock: clock).as(KemalIdentity::RateLimiter), clock}
+  end
+
+  it_behaves_like_a_rate_limiter(limit: 5, window: 1.minute) do
+    reset_schema!
+    clock = KemalIdentity::Testing::TestClock.new
+    {KemalIdentity::SQLite::FixedWindowRateLimiter.new(DATABASE, limit: 5, window: 1.minute, clock: clock).as(KemalIdentity::RateLimiter), clock}
+  end
+
+  it "says the store is unavailable when the table is missing" do
+    path = File.join(Dir.tempdir, "kemal_identity_unmigrated_#{Process.pid}.db")
+    empty = DB.open("sqlite3://#{path}")
+    limiter = KemalIdentity::SQLite::FixedWindowRateLimiter.new(empty, limit: 5, window: 1.minute)
+
+    limiter.consume("key").unavailable?.should be_true
+    limiter.reset("key")
+  ensure
+    empty.try(&.close)
+    path.try { |file| File.delete?(file) }
+  end
+
+  it "stops counting at one past the limit, so a flood cannot overflow the column" do
+    reset_schema!
+    limiter = KemalIdentity::SQLite::FixedWindowRateLimiter.new(DATABASE, limit: 3, window: 1.hour)
+
+    50.times { limiter.consume("flood") }
+
+    DATABASE.scalar("SELECT attempts FROM auth_rate_limits WHERE key = 'flood'").as(Int64).should eq(4)
+  end
+
+  it "deletes only windows that have elapsed" do
+    reset_schema!
+    clock = KemalIdentity::Testing::TestClock.new
+    limiter = KemalIdentity::SQLite::FixedWindowRateLimiter.new(DATABASE, limit: 3, window: 1.minute, clock: clock)
+
+    limiter.consume("old")
+    clock.advance(1.minute)
+    limiter.consume("current")
+
+    limiter.delete_expired(clock.now).should eq(1)
+    limiter.delete_expired(clock.now).should eq(0)
+    limiter.consume("current").allowed?.should be_true
+  end
+end
+
+describe "KemalIdentity production check with a shared limiter" do
+  it "does not call a limiter over shared storage process-local" do
+    accounts = KemalIdentity::Testing::MemoryAccountRepository.new
+    app = KemalIdentity::Application.new(
+      accounts: accounts,
+      sessions: KemalIdentity::Testing::MemorySessionRepository.new(accounts),
+      hasher: KemalIdentity::Testing::FastTestHasher.new,
+      rate_limiter: KemalIdentity::SQLite::FixedWindowRateLimiter.new(DATABASE, limit: 5, window: 1.minute),
+    )
+
+    app.production_gaps.should be_empty
+  end
 end
